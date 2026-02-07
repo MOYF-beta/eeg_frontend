@@ -72,6 +72,8 @@ vue + electron + Vuetify
 1. 安装依赖：在 [frontend](frontend) 目录执行 `npm install`
 2. 启动：执行 `npm run dev`
 
+cd /home/zch/Documents/eeg_frontend/frontend && npm run dev -- --host 0.0.0.0 --port 5173
+
 ### 运行后端
 
 1. 安装依赖：在 [backend](backend) 目录安装 [requirements.txt](backend/requirements.txt)
