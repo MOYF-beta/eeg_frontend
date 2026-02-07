@@ -1,6 +1,7 @@
 import asyncio
 import json
 import math
+import random
 import time
 from channels.generic.websocket import AsyncWebsocketConsumer
 
@@ -17,7 +18,12 @@ class EegStreamConsumer(AsyncWebsocketConsumer):
     async def stream_data(self):
         t = 0.0
         while self.running:
-            channels = [math.sin(t + i * 0.3) + math.cos(t * 0.5 + i) * 0.2 for i in range(8)]
+            channels = [
+                math.sin(t + i * 0.3)
+                + math.cos(t * 0.5 + i) * 0.2
+                + random.uniform(-0.15, 0.15)
+                for i in range(8)
+            ]
             payload = {
                 't': time.time(),
                 'channels': channels,

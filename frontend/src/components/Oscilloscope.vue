@@ -166,6 +166,9 @@ const drawWaveform = () => {
   if (!ctx) return;
   const width = canvas.clientWidth || 600;
   const height = rowHeight * channelCount;
+  const leftPad = 46;
+  const rightPad = 10;
+  const plotWidth = width - leftPad - rightPad;
 
   ctx.clearRect(0, 0, width, height);
   ctx.fillStyle = '#ffffff';
@@ -176,7 +179,7 @@ const drawWaveform = () => {
   for (let i = 0; i <= channelCount; i += 1) {
     const y = i * rowHeight;
     ctx.beginPath();
-    ctx.moveTo(0, y);
+    ctx.moveTo(leftPad, y);
     ctx.lineTo(width, y);
     ctx.stroke();
   }
@@ -191,6 +194,17 @@ const drawWaveform = () => {
     const midY = rowTop + rowHeight / 2;
     const scale = channelScales.value[idx] || 1;
 
+    ctx.strokeStyle = '#cfd8dc';
+    ctx.lineWidth = 1;
+    const tickCount = 4;
+    for (let tIdx = 0; tIdx <= tickCount; tIdx += 1) {
+      const x = leftPad + (tIdx / tickCount) * plotWidth;
+      ctx.beginPath();
+      ctx.moveTo(x, rowTop + 8);
+      ctx.lineTo(x, rowTop + rowHeight - 8);
+      ctx.stroke();
+    }
+
     ctx.strokeStyle = '#1976d2';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -199,11 +213,11 @@ const drawWaveform = () => {
     ch.forEach((p) => {
       let x = 0;
       if (mode.value === 'scroll') {
-        x = ((p.t - (now - timeWindow)) / timeWindow) * width;
-        if (x < 0 || x > width) return;
+        x = leftPad + ((p.t - (now - timeWindow)) / timeWindow) * plotWidth;
+        if (x < leftPad || x > leftPad + plotWidth) return;
       } else {
         const offset = (p.t - sweepStart) % timeWindow;
-        x = (offset / timeWindow) * width;
+        x = leftPad + (offset / timeWindow) * plotWidth;
       }
       const y = midY - p.v * baseScale * scale;
       if (prevX >= 0 && x < prevX) {
@@ -222,11 +236,28 @@ const drawWaveform = () => {
     ctx.strokeStyle = '#bdbdbd';
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
-    ctx.moveTo(0, midY);
+    ctx.moveTo(leftPad, midY);
     ctx.lineTo(width, midY);
     ctx.stroke();
     ctx.setLineDash([]);
+
+    ctx.fillStyle = '#607d8b';
+    ctx.font = '12px sans-serif';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${(1 / scale).toFixed(1)}x`, leftPad - 6, rowTop + 14);
   });
+
+  ctx.fillStyle = '#546e7a';
+  ctx.font = '12px sans-serif';
+  ctx.textAlign = 'center';
+  const tickCount = 4;
+  for (let tIdx = 0; tIdx <= tickCount; tIdx += 1) {
+    const x = leftPad + (tIdx / tickCount) * plotWidth;
+    const label = (timeWindow * (tIdx / tickCount)).toFixed(1);
+    ctx.fillText(label, x, height - 6);
+  }
+  ctx.textAlign = 'left';
+  ctx.fillText('s', leftPad + plotWidth + 4, height - 6);
 };
 </script>
 
