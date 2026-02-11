@@ -31,7 +31,7 @@ export type GraphPayload = {
 };
 
 const protocol = window.location.protocol;
-const host = window.location.hostname || 'localhost';
+const host = 'localhost';
 const baseUrl = `${protocol}//${host}:8000/api`;
 
 export async function fetchGraph(): Promise<GraphPayload> {

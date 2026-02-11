@@ -100,7 +100,7 @@ const statusColor = computed(() => {
 
 onMounted(() => {
   const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const host = window.location.hostname || 'localhost';
+  const host = 'localhost';
   const url = `${protocol}://${host}:8000/ws/stream/`;
   ws = createEegSocket(
     url,
