@@ -1,6 +1,6 @@
 <template>
   <v-card class="mb-4" variant="tonal">
-      <v-card-title class="d-flex align-center justify-space-between">
+    <v-card-title class="d-flex align-center justify-space-between">
       计算图编辑器
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
@@ -12,6 +12,7 @@
     <v-divider />
     <v-card-text>
       <div class="graph-layout">
+        <!-- 左侧节点库 -->
         <div class="palette">
           <div class="palette-title">节点库</div>
           <div class="palette-group">
@@ -22,6 +23,9 @@
               class="palette-item"
               @mousedown="startDrag($event, item.value)"
             >
+              <span class="item-icon" :style="{ background: item.color + '20', color: item.color }">
+                {{ item.icon }}
+              </span>
               {{ item.title }}
             </div>
           </div>
@@ -33,6 +37,9 @@
               class="palette-item"
               @mousedown="startDrag($event, item.value)"
             >
+              <span class="item-icon" :style="{ background: item.color + '20', color: item.color }">
+                {{ item.icon }}
+              </span>
               {{ item.title }}
             </div>
           </div>
@@ -44,73 +51,42 @@
               class="palette-item"
               @mousedown="startDrag($event, item.value)"
             >
+              <span class="item-icon" :style="{ background: item.color + '20', color: item.color }">
+                {{ item.icon }}
+              </span>
               {{ item.title }}
             </div>
           </div>
         </div>
 
+        <!-- 中间画布 -->
         <div class="graph-wrap">
           <div ref="container" class="graph"></div>
-          <div
-            v-if="editing"
-            class="node-editor"
-            :style="{ left: `${editorLeft}px`, top: `${editorTop}px`, width: `${editorWidth}px` }"
-          >
-            <div class="node-editor-title">编辑节点</div>
-            <v-text-field
-              v-model="editingName"
-              label="名称"
-              density="compact"
-              variant="outlined"
-              hide-details
-            />
-            <v-textarea
-              v-model="editingParams"
-              label="参数 (JSON)"
-              density="compact"
-              variant="outlined"
-              rows="4"
-              hide-details
-            />
-            <div class="node-editor-actions">
-              <v-btn size="small" variant="tonal" @click="cancelEdit">取消</v-btn>
-              <v-btn size="small" color="primary" @click="commitEdit">应用</v-btn>
-            </div>
+          <div class="graph-hint" v-if="!hasNodes">
+            <v-icon size="48" color="grey-lighten-2">mdi-graph-outline</v-icon>
+            <div class="hint-text">从左侧拖拽节点到此处</div>
+            <div class="hint-sub">双击节点编辑属性，拖拽连接端口创建连线</div>
           </div>
-        </div>
-        <div class="side-panel">
-          <div class="panel-title">节点参数</div>
-          <div v-if="activeNode" class="panel-body">
-            <v-text-field
-              v-model="activeNodeName"
-              label="名称"
-              density="compact"
-              variant="outlined"
-              hide-details
-            />
-            <v-textarea
-              v-model="activeNodeParams"
-              label="参数 (JSON)"
-              density="compact"
-              variant="outlined"
-              rows="6"
-              hide-details
-            />
-            <v-btn size="small" variant="tonal" @click="applyNodeParams" :disabled="frozen">
-              应用
-            </v-btn>
-          </div>
-          <div v-else class="panel-empty">选择一个节点以编辑参数或双击节点</div>
         </div>
       </div>
     </v-card-text>
+
+    <!-- 节点编辑对话框 -->
+    <NodeEditDialog
+      v-model="editDialog.show"
+      :node-data="editDialog.nodeData"
+      @save="onNodeEditSave"
+    />
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue';
-import { Graph } from '@antv/x6';
+import { onMounted, onUnmounted, ref, watch, h, render } from 'vue';
+import { Graph, Node } from '@antv/x6';
 import { Dnd } from '@antv/x6-plugin-dnd';
+import { register } from '@antv/x6-vue-shape';
+import NodeCard from './nodes/NodeCard.vue';
+import NodeEditDialog from './nodes/NodeEditDialog.vue';
 import {
   fetchGraph,
   runGraph,
@@ -125,40 +101,45 @@ const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const dndRef = ref<Dnd | null>(null);
 const frozen = ref(false);
-const activeNode = ref<GraphNode | null>(null);
-const activeNodeName = ref('');
-const activeNodeParams = ref('{}');
+const hasNodes = ref(false);
 const debug = ref(false);
-const editing = ref(false);
-const editingNodeId = ref<string | null>(null);
-const editingName = ref('');
-const editingParams = ref('{}');
-const editorLeft = ref(0);
-const editorTop = ref(0);
-const editorWidth = ref(220);
 
-const typeItems: Array<{ title: string; value: GraphNodeType }> = [
-  { title: '数据源', value: 'SOURCE' },
-  { title: '回放', value: 'REPLAY' },
-  { title: '滤波器', value: 'FILTER' },
-  { title: '求和器', value: 'SUM' },
-  { title: '通道分离器', value: 'SPLIT' },
-  { title: '通道合并器', value: 'MERGE' },
-  { title: '示波器', value: 'OSC' },
-  { title: '频谱显示器', value: 'SPECTRUM' },
-  { title: '保存节点', value: 'SAVE' },
+const editDialog = ref({
+  show: false,
+  nodeId: null as string | null,
+  nodeData: null as GraphNode | null,
+});
+
+// 注册自定义 Vue 节点
+register({
+  shape: 'eeg-node',
+  width: 180,
+  height: 70,
+  component: NodeCard,
+});
+
+const typeItems = [
+  { title: '数据源', value: 'SOURCE' as GraphNodeType, icon: 'SRC', color: '#1976D2' },
+  { title: '回放', value: 'REPLAY' as GraphNodeType, icon: 'RPL', color: '#1976D2' },
+  { title: '滤波器', value: 'FILTER' as GraphNodeType, icon: 'FIL', color: '#388E3C' },
+  { title: '求和器', value: 'SUM' as GraphNodeType, icon: 'SUM', color: '#7B1FA2' },
+  { title: '分离器', value: 'SPLIT' as GraphNodeType, icon: 'SPT', color: '#FBC02D' },
+  { title: '合并器', value: 'MERGE' as GraphNodeType, icon: 'MRG', color: '#F57C00' },
+  { title: '示波器', value: 'OSC' as GraphNodeType, icon: 'OSC', color: '#00796B' },
+  { title: '频谱', value: 'SPECTRUM' as GraphNodeType, icon: 'FFT', color: '#303F9F' },
+  { title: '保存', value: 'SAVE' as GraphNodeType, icon: 'SAV', color: '#C2185B' },
 ];
 
 const typeColors: Record<GraphNodeType, string> = {
-  SOURCE: '#E3F2FD',
-  REPLAY: '#E3F2FD',
-  FILTER: '#E8F5E9',
-  SUM: '#F3E5F5',
-  SPLIT: '#FFFDE7',
-  MERGE: '#FFF3E0',
-  OSC: '#E0F2F1',
-  SPECTRUM: '#E8EAF6',
-  SAVE: '#FCE4EC',
+  SOURCE: '#1976D2',
+  REPLAY: '#1976D2',
+  FILTER: '#388E3C',
+  SUM: '#7B1FA2',
+  SPLIT: '#FBC02D',
+  MERGE: '#F57C00',
+  OSC: '#00796B',
+  SPECTRUM: '#303F9F',
+  SAVE: '#C2185B',
 };
 
 const getPortsByType = (type: GraphNodeType, nodeId: string) => {
@@ -179,26 +160,23 @@ const portGroups = {
     position: 'left',
     attrs: {
       circle: {
-        r: 5,
+        r: 6,
         magnet: true,
         stroke: '#90A4AE',
-        strokeWidth: 1,
+        strokeWidth: 2,
         fill: '#ffffff',
         style: { visibility: 'hidden' },
       },
     },
   },
   out: {
-    position: {
-      name: 'right',
-      args: { dx: -8 },
-    },
+    position: { name: 'right', args: { dx: -6 } },
     attrs: {
       circle: {
-        r: 5,
+        r: 6,
         magnet: true,
         stroke: '#90A4AE',
-        strokeWidth: 1,
+        strokeWidth: 2,
         fill: '#ffffff',
         style: { visibility: 'hidden' },
       },
@@ -206,51 +184,39 @@ const portGroups = {
   },
 };
 
-const buildPayload = (): GraphPayload => {
-  const graph = graphRef.value;
-  if (!graph) return { nodes: [], edges: [], frozen: frozen.value };
-  const nodes: GraphNode[] = graph.getNodes().map((node) => {
-    const data = (node.getData() || {}) as GraphNode;
-    const { x, y } = node.position();
-    return {
-      id: node.id,
-      type: data.type,
-      name: data.name,
-      x,
-      y,
-      params: data.params || {},
-    };
-  });
-  const edges = graph.getEdges().map((edge) => ({
-    id: edge.id,
-    source: edge.getSourceCellId() || '',
-    target: edge.getTargetCellId() || '',
-  }));
-  return { nodes, edges, frozen: frozen.value };
-};
-
-const syncSelection = (node: GraphNode | null) => {
-  activeNode.value = node;
-  activeNodeName.value = node?.name || '';
-  activeNodeParams.value = JSON.stringify(node?.params || {}, null, 2);
-};
-
 const createNode = (type: GraphNodeType) => {
   const id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-  const name = typeItems.find((i) => i.value === type)?.title || type;
+  const item = typeItems.find((i) => i.value === type);
   return {
     id,
-    shape: 'rect',
-    width: 160,
-    height: 48,
-    label: name,
-    attrs: {
-      body: { fill: typeColors[type], stroke: '#90A4AE', rx: 6, ry: 6 },
-      label: { fontSize: 12, fill: '#37474f' },
-    },
+    shape: 'eeg-node',
+    width: 180,
+    height: 70,
     ports: { groups: portGroups, items: getPortsByType(type, id) },
-    data: { id, type, name, params: {} },
+    data: {
+      id,
+      type,
+      name: item?.title || type,
+      params: getDefaultParams(type),
+    },
   };
+};
+
+const getDefaultParams = (type: GraphNodeType): Record<string, any> => {
+  switch (type) {
+    case 'FILTER':
+      return { type: '低通', cutoff: 30, order: 4 };
+    case 'SOURCE':
+      return { device: '模拟设备', sampleRate: 1000 };
+    case 'REPLAY':
+      return { file: '', loop: false };
+    case 'SAVE':
+      return { filename: 'data.csv', format: 'CSV' };
+    case 'SPLIT':
+      return { groups: '1-4,5-8' };
+    default:
+      return {};
+  }
 };
 
 const startDrag = (event: MouseEvent, type: GraphNodeType) => {
@@ -262,73 +228,38 @@ const startDrag = (event: MouseEvent, type: GraphNodeType) => {
   dnd.start(node, event);
 };
 
-const applyNodeParams = () => {
+const openNodeEditor = (node: Node) => {
+  if (frozen.value) return;
+  const data = node.getData() as GraphNode;
+  editDialog.value.nodeId = node.id;
+  editDialog.value.nodeData = data;
+  editDialog.value.show = true;
+};
+
+const onNodeEditSave = ({ name, params }: { name: string; params: Record<string, any> }) => {
   const graph = graphRef.value;
-  if (!graph || !activeNode.value) return;
-  let params = {};
-  try {
-    params = JSON.parse(activeNodeParams.value || '{}');
-  } catch {
-    return;
-  }
-  const node = graph.getCellById(activeNode.value.id);
+  if (!graph || !editDialog.value.nodeId) return;
+  const node = graph.getCellById(editDialog.value.nodeId);
   if (node && node.isNode()) {
-    node.setData({
-      ...activeNode.value,
-      name: activeNodeName.value,
-      params,
-    });
-    node.attr('label/text', activeNodeName.value);
-    syncSelection({
-      ...activeNode.value,
-      name: activeNodeName.value,
-      params,
-    });
+    const data = node.getData() as GraphNode;
+    node.setData({ ...data, name, params });
   }
 };
 
-const openEditor = (nodeId: string) => {
+const buildPayload = (): GraphPayload => {
   const graph = graphRef.value;
-  if (!graph) return;
-  const node = graph.getCellById(nodeId);
-  if (!node || !node.isNode()) return;
-  const data = (node.getData() || {}) as GraphNode;
-  editingNodeId.value = nodeId;
-  editingName.value = data.name || '';
-  editingParams.value = JSON.stringify(data.params || {}, null, 2);
-  const view = graph.findViewByCell(node);
-  const viewRect = view?.container?.getBoundingClientRect();
-  const containerRect = graph.container.getBoundingClientRect();
-  if (viewRect) {
-    editorLeft.value = viewRect.left - containerRect.left;
-    editorTop.value = viewRect.top - containerRect.top + 60;
-    editorWidth.value = Math.max(viewRect.width, 220);
-  }
-  editing.value = true;
-};
-
-const commitEdit = () => {
-  const graph = graphRef.value;
-  if (!graph || !editingNodeId.value) return;
-  let params = {};
-  try {
-    params = JSON.parse(editingParams.value || '{}');
-  } catch {
-    return;
-  }
-  const node = graph.getCellById(editingNodeId.value);
-  if (node && node.isNode()) {
-    const data = (node.getData() || {}) as GraphNode;
-    const updated = { ...data, name: editingName.value, params };
-    node.setData(updated);
-    node.attr('label/text', editingName.value);
-    syncSelection(updated);
-  }
-  editing.value = false;
-};
-
-const cancelEdit = () => {
-  editing.value = false;
+  if (!graph) return { nodes: [], edges: [], frozen: frozen.value };
+  const nodes: GraphNode[] = graph.getNodes().map((node) => {
+    const data = node.getData() as GraphNode;
+    const { x, y } = node.position();
+    return { ...data, x, y };
+  });
+  const edges = graph.getEdges().map((edge) => ({
+    id: edge.id,
+    source: edge.getSourceCellId() || '',
+    target: edge.getTargetCellId() || '',
+  }));
+  return { nodes, edges, frozen: frozen.value };
 };
 
 const save = async () => {
@@ -340,20 +271,8 @@ const run = async () => {
 };
 
 const setGraphInteracting = (graph: Graph, enabled: boolean) => {
-  // prefer built-in API if available
-  // @ts-ignore
-  if (typeof (graph as any).setInteracting === 'function') {
-    // @ts-ignore
-    (graph as any).setInteracting(enabled);
-    return;
-  }
-  // fallback: toggle pointer events on container to prevent user interaction
-  try {
-    if (graph.container && graph.container instanceof HTMLElement) {
-      graph.container.style.pointerEvents = enabled ? '' : 'none';
-    }
-  } catch (_) {
-    // ignore
+  if (graph.container && graph.container instanceof HTMLElement) {
+    graph.container.style.pointerEvents = enabled ? '' : 'none';
   }
 };
 
@@ -362,33 +281,32 @@ const applyFrozen = async () => {
   if (!graph) return;
   await setGraphFrozen(frozen.value);
   setGraphInteracting(graph, !frozen.value);
+  if (frozen.value) editDialog.value.show = false;
 };
 
 onMounted(async () => {
   if (!container.value) return;
   const graph = new Graph({
     container: container.value,
-    grid: true,
-    background: { color: '#f5f5f5' },
+    grid: { size: 10, visible: true, type: 'dot' },
+    background: { color: '#fafafa' },
     panning: { enabled: true, eventTypes: ['leftMouseDown'] },
     mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'] },
     connecting: {
-      snap: { radius: 16 },
+      snap: { radius: 20 },
       allowBlank: false,
       allowLoop: false,
       highlight: true,
       createEdge() {
         return graph.createEdge({
-          attrs: { line: { stroke: '#90A4AE', strokeWidth: 1.5 } },
+          attrs: {
+            line: { stroke: typeColors.FILTER, strokeWidth: 2, targetMarker: 'block' },
+          },
         });
       },
       validateConnection({ sourceMagnet, targetMagnet }) {
-        if (!sourceMagnet || sourceMagnet.getAttribute('port-group') === 'in') {
-          return false;
-        }
-        if (!targetMagnet || targetMagnet.getAttribute('port-group') !== 'in') {
-          return false;
-        }
+        if (!sourceMagnet || sourceMagnet.getAttribute('port-group') === 'in') return false;
+        if (!targetMagnet || targetMagnet.getAttribute('port-group') !== 'in') return false;
         return true;
       },
     },
@@ -396,20 +314,15 @@ onMounted(async () => {
   graphRef.value = graph;
   dndRef.value = new Dnd({ target: graph, scaled: false, animation: true });
 
-  graph.on('node:click', ({ node }) => {
-    const data = (node.getData() || {}) as GraphNode;
-    syncSelection(data);
-  });
-
-  graph.on('node:dblclick', ({ node }) => {
-    if (!frozen.value) openEditor(node.id);
-  });
-
+  // 双击编辑
+  graph.on('node:dblclick', ({ node }) => openNodeEditor(node));
+  
+  // 点击空白处关闭编辑
   graph.on('blank:click', () => {
-    syncSelection(null);
-    editing.value = false;
+    editDialog.value.show = false;
   });
 
+  // 鼠标悬停显示端口
   graph.on('node:mouseenter', ({ node }) => {
     node.getPorts().forEach((port) => {
       node.setPortProp(port.id, 'attrs/circle/style/visibility', 'visible');
@@ -421,21 +334,25 @@ onMounted(async () => {
     });
   });
 
+  // 边 hover 效果
+  graph.on('edge:mouseenter', ({ edge }) => {
+    edge.addTools({ name: 'button-remove', args: { distance: -40 } });
+  });
+  graph.on('edge:mouseleave', ({ edge }) => {
+    edge.removeTools();
+  });
+
+  // 加载数据
   const payload = await fetchGraph().catch(() => ({ nodes: [], edges: [], frozen: false }));
   frozen.value = payload.frozen;
   payload.nodes.forEach((node) => {
     graph.addNode({
       id: node.id,
-      shape: 'rect',
+      shape: 'eeg-node',
       x: node.x,
       y: node.y,
-      width: 160,
-      height: 48,
-      label: node.name,
-      attrs: {
-        body: { fill: typeColors[node.type], stroke: '#90A4AE', rx: 6, ry: 6 },
-        label: { fontSize: 12, fill: '#37474f' },
-      },
+      width: 180,
+      height: 70,
       ports: { groups: portGroups, items: getPortsByType(node.type, node.id) },
       data: node,
     });
@@ -445,37 +362,31 @@ onMounted(async () => {
       id: edge.id,
       source: { cell: edge.source, port: `${edge.source}-out` },
       target: { cell: edge.target, port: `${edge.target}-in` },
-      attrs: { line: { stroke: '#90A4AE', strokeWidth: 1.5 } },
+      attrs: { line: { stroke: typeColors.FILTER, strokeWidth: 2, targetMarker: 'block' } },
     });
   });
 
+  hasNodes.value = graph.getNodes().length > 0;
+  graph.on('node:added', () => { hasNodes.value = graph.getNodes().length > 0; });
+  graph.on('node:removed', () => { hasNodes.value = graph.getNodes().length > 0; });
+
   setGraphInteracting(graph, !frozen.value);
-  if (frozen.value) editing.value = false;
 });
 
 onUnmounted(() => {
   graphRef.value?.dispose();
 });
 
-watch(frozen, () => {
-  applyFrozen();
-});
+watch(frozen, () => applyFrozen());
 
 watch(debug, async (val) => {
   if (val) {
-    const payload = buildPayload();
     try {
-      // send debug payload to backend which prints to terminal
-      // import lazily to avoid cyclic issues
-      const mod = await import('../services/graph');
-      await mod.debugGraph(payload);
-      // reset switch after sending
+      const { debugGraph } = await import('../services/graph');
+      await debugGraph(buildPayload());
       debug.value = false;
     } catch (err) {
-      // keep switch off on error
       debug.value = false;
-      // optionally log to browser console
-      // eslint-disable-next-line no-console
       console.error('debug send failed', err);
     }
   }
@@ -485,92 +396,106 @@ watch(debug, async (val) => {
 <style scoped>
 .graph-layout {
   display: grid;
-  grid-template-columns: 200px 1fr 260px;
+  grid-template-columns: 220px 1fr;
   gap: 16px;
-  align-items: stretch;
 }
+
 .palette {
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   background: #fff;
-  padding: 10px;
-  display: grid;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
   max-height: 520px;
   overflow: auto;
 }
+
 .palette-title {
   font-weight: 600;
   color: #37474f;
+  font-size: 14px;
 }
+
 .palette-group {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 6px;
 }
+
 .group-title {
-  font-size: 12px;
-  color: #78909c;
+  font-size: 11px;
+  color: #90a4ae;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
 }
+
 .palette-item {
   padding: 8px 10px;
-  border: 1px solid #cfd8dc;
+  border: 1px solid #e0e0e0;
   border-radius: 6px;
   background: #fafafa;
   cursor: grab;
   font-size: 13px;
   color: #37474f;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s;
 }
+
+.palette-item:hover {
+  background: #f5f5f5;
+  border-color: #bdbdbd;
+}
+
 .palette-item:active {
   cursor: grabbing;
 }
+
+.item-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-weight: 600;
+}
+
 .graph-wrap {
   position: relative;
-}
-.graph {
-  width: 100%;
   height: 520px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
+  overflow: hidden;
 }
-.node-editor {
+
+.graph {
+  width: 100%;
+  height: 100%;
+}
+
+.graph-hint {
   position: absolute;
-  z-index: 10;
-  background: #fff;
-  border: 1px solid #cfd8dc;
-  border-radius: 8px;
-  padding: 10px;
-  display: grid;
-  gap: 8px;
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.08);
-}
-.node-editor-title {
-  font-weight: 600;
-  color: #37474f;
-  font-size: 13px;
-}
-.node-editor-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-}
-.side-panel {
-  border: 1px solid #e0e0e0;
-  border-radius: 8px;
-  padding: 12px;
-  background: #fafafa;
-  display: grid;
-  gap: 12px;
-}
-.panel-title {
-  font-weight: 600;
-  color: #455a64;
-}
-.panel-body {
-  display: grid;
-  gap: 8px;
-}
-.panel-empty {
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
   color: #90a4ae;
-  font-size: 13px;
+  pointer-events: none;
+}
+
+.hint-text {
+  font-size: 16px;
+  margin-top: 8px;
+  color: #607d8b;
+}
+
+.hint-sub {
+  font-size: 12px;
+  margin-top: 4px;
 }
 </style>
