@@ -1,22 +1,34 @@
 <template>
   <v-app>
     <v-app-bar color="primary" prominent>
-      <v-app-bar-title>EEG 基础前端</v-app-bar-title>
+      <v-app-bar-title>EEG 脑电系统</v-app-bar-title>
+      <v-spacer></v-spacer>
+      <v-btn
+        v-for="item in navItems"
+        :key="item.path"
+        :to="item.path"
+        :active="$route.path === item.path"
+        variant="text"
+        class="mx-1"
+      >
+        {{ item.title }}
+      </v-btn>
     </v-app-bar>
     <v-main>
-      <v-container class="py-6">
-        <DeviceList />
-        <Oscilloscope />
-        <FrequencyView />
-        <GraphEditor />
-      </v-container>
+      <router-view />
     </v-main>
   </v-app>
 </template>
 
 <script setup lang="ts">
-import DeviceList from './components/DeviceList.vue';
-import Oscilloscope from './components/Oscilloscope.vue';
-import FrequencyView from './components/FrequencyView.vue';
-import GraphEditor from './components/GraphEditor.vue';
+import { useRoute } from 'vue-router';
+
+const $route = useRoute();
+
+const navItems = [
+  { title: '设备', path: '/devices' },
+  { title: '示波器', path: '/oscilloscope' },
+  { title: '计算图', path: '/cpgraph' },
+  { title: '测试', path: '/test' },
+];
 </script>
