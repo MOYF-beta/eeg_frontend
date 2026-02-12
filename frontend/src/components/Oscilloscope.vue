@@ -57,6 +57,15 @@
           <v-icon left size="small">{{ statusIcon }}</v-icon>
           {{ statusText }}
         </v-chip>
+
+        <!-- 删除卡片按钮 -->
+        <v-btn
+          size="small"
+          color="grey"
+          variant="text"
+          icon="mdi-close"
+          @click="$emit('remove')"
+        />
       </div>
     </v-card-title>
 
@@ -151,6 +160,14 @@ import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
 
+const props = defineProps<{
+  initialNodeId?: string;
+}>();
+
+const emit = defineEmits<{
+  (e: 'remove'): void;
+}>();
+
 // 配置
 const channelCount = 8;
 const rowHeight = 90;
@@ -171,7 +188,7 @@ const samples: Array<Array<{ t: number; v: number }>> = Array.from(
 let sampleStartIndex = 0; // 环形缓冲区起始索引
 
 // 数据源
-const selectedNodeId = ref<string | null>(null);
+const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
 const packetCount = ref(0);

@@ -28,6 +28,7 @@ const $route = useRoute();
 const navItems = [
   { title: '设备', path: '/devices' },
   { title: '示波器', path: '/oscilloscope' },
+  { title: '可视化', path: '/visualization' },
   { title: '计算图', path: '/cpgraph' },
   { title: '测试', path: '/test' },
 ];
