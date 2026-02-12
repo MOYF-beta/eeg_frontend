@@ -1,0 +1,76 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e8]: EEG 脑电系统
+      - link "设备" [ref=e9] [cursor=pointer]:
+        - /url: /devices
+        - generic [ref=e10]: 设备
+      - link "示波器" [ref=e11] [cursor=pointer]:
+        - /url: /oscilloscope
+        - generic [ref=e12]: 示波器
+      - link "计算图" [active] [ref=e13] [cursor=pointer]:
+        - /url: /cpgraph
+        - generic [ref=e14]: 计算图
+      - link "测试" [ref=e15] [cursor=pointer]:
+        - /url: /test
+        - generic [ref=e16]: 测试
+  - main [ref=e17]:
+    - generic [ref=e18]:
+      - heading "计算图" [level=1] [ref=e19]
+      - generic [ref=e20]:
+        - generic [ref=e21]:
+          - text: 计算图编辑器
+          - generic [ref=e22]:
+            - generic [ref=e25]:
+              - checkbox "冻结" [ref=e29] [cursor=pointer]
+              - generic [ref=e30] [cursor=pointer]: 冻结
+            - button "保存" [ref=e31] [cursor=pointer]:
+              - generic [ref=e32]: 保存
+            - button "运行" [disabled]:
+              - generic: 运行
+            - button "加载Mock" [ref=e33] [cursor=pointer]:
+              - generic [ref=e34]: 加载Mock
+            - button "清空" [ref=e35] [cursor=pointer]:
+              - generic [ref=e36]: 清空
+        - separator [ref=e37]
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - generic [ref=e41]: 节点库
+            - generic [ref=e42]:
+              - generic [ref=e43]: 数据来源
+              - generic [ref=e44]:
+                - generic [ref=e45]: SRC
+                - generic [ref=e46]: 数据源
+              - generic [ref=e47]:
+                - generic [ref=e48]: RPL
+                - generic [ref=e49]: 回放
+            - generic [ref=e50]:
+              - generic [ref=e51]: 处理节点
+              - generic [ref=e52]:
+                - generic [ref=e53]: FIL
+                - generic [ref=e54]: 滤波器
+              - generic [ref=e55]:
+                - generic [ref=e56]: SUM
+                - generic [ref=e57]: 求和器
+              - generic [ref=e58]:
+                - generic [ref=e59]: SPT
+                - generic [ref=e60]: 分离器
+              - generic [ref=e61]:
+                - generic [ref=e62]: MRG
+                - generic [ref=e63]: 合并器
+            - generic [ref=e64]:
+              - generic [ref=e65]: 显示与保存
+              - generic [ref=e66]:
+                - generic [ref=e67]: OSC
+                - generic [ref=e68]: 示波器
+              - generic [ref=e69]:
+                - generic [ref=e70]: FFT
+                - generic [ref=e71]: 频谱
+              - generic [ref=e72]:
+                - generic [ref=e73]: SAV
+                - generic [ref=e74]: 保存
+          - img [ref=e78]
+```
