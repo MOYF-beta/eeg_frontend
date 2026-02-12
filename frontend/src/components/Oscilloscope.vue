@@ -64,6 +64,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { createEegSocket, type EegPacket } from '../services/ws';
+import { graphRuntime } from '../services/runtime';
 
 const channelCount = 8;
 const rowHeight = 90;
@@ -116,6 +117,22 @@ onMounted(() => {
     (s) => (status.value = s),
   );
 
+  // 订阅计算图runtime数据
+  const unsubscribe = graphRuntime.subscribe((packet: EegPacket) => {
+    const t = typeof packet.t === 'number' ? packet.t : Date.now() / 1000;
+    lastPacketTime.value = t;
+    if (sweepStart === 0) sweepStart = t;
+    packet.channels.slice(0, channelCount).forEach((v, idx) => {
+      samples[idx].push({ t, v });
+    });
+    pruneSamples(t);
+    // 更新状态为在线
+    status.value = 'open';
+  });
+
+  // 保存取消订阅函数
+  (window as unknown as { __oscUnsubscribe?: () => void }).__oscUnsubscribe = unsubscribe;
+
   resizeObserver = new ResizeObserver(() => resizeCanvas());
   if (canvasRef.value) {
     resizeObserver.observe(canvasRef.value);
@@ -126,6 +143,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   ws?.close();
+  // 取消runtime订阅
+  const unsubscribe = (window as unknown as { __oscUnsubscribe?: () => void }).__oscUnsubscribe;
+  if (unsubscribe) unsubscribe();
   if (resizeObserver && canvasRef.value) resizeObserver.unobserve(canvasRef.value);
   if (animationId) cancelAnimationFrame(animationId);
 });
