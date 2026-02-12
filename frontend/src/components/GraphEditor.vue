@@ -333,8 +333,9 @@ function saveNodeEdit() {
   data.params = { ...editDialog.value.params };
   node.setData(data);
 
-  // 更新节点显示
-  node.attr('label/text', editDialog.value.nodeName);
+  // 更新节点标签显示
+  const labelText = generateNodeLabel(data.type, data.name, data.params);
+  node.attr('label/text', labelText);
 
   editDialog.value.open = false;
 }
@@ -405,7 +406,7 @@ function createPorts(type: GraphNodeType) {
 }
 
 // 添加节点 - 使用 rect 形状配合 attrs
-function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
+function addNode(type: GraphNodeType, x: number, y: number, name?: string, params?: Record<string, unknown>) {
   const graph = graphRef.value;
   if (!graph) return null;
 
@@ -418,6 +419,12 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
   paramConfig.forEach((field) => {
     defaultParams[field.key] = field.default;
   });
+
+  // 合并传入的参数
+  const nodeParams = { ...defaultParams, ...params };
+
+  // 生成带属性的标签文本
+  const labelText = generateNodeLabel(type, name || config.name, nodeParams);
 
   const node = graph.addNode({
     id: nodeId,
@@ -435,18 +442,55 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
         ry: 8,
       },
       label: {
-        text: name || config.name,
+        text: labelText,
         fill: '#333',
-        fontSize: 14,
+        fontSize: 12,
         fontWeight: 500,
+        refY: 0.5,
+        textVerticalAnchor: 'middle',
       },
     },
     ports: createPorts(type),
-    data: { type, name: name || config.name, params: defaultParams },
+    data: { type, name: name || config.name, params: nodeParams },
   });
 
   hasNodes.value = true;
   return node;
+}
+
+// 生成节点标签（显示名称+关键属性）
+function generateNodeLabel(type: GraphNodeType, name: string, params: Record<string, unknown>): string {
+  const keyParam = getKeyParamDisplay(type, params);
+  if (keyParam) {
+    return `${name}\n${keyParam}`;
+  }
+  return name;
+}
+
+// 获取节点关键属性显示文本
+function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>): string {
+  switch (type) {
+    case 'FILTER':
+      const filterType = params['type'] || 'lowpass';
+      const cutoff = params['cutoff'] || 50;
+      return `${filterType} ${cutoff}Hz`;
+    case 'OSC':
+      const timeWindow = params['timeWindow'] || 5;
+      const mode = params['mode'] || 'scroll';
+      return `${timeWindow}s ${mode}`;
+    case 'SOURCE':
+      const sampleRate = params['sampleRate'] || 1000;
+      const channels = params['channels'] || 8;
+      return `${sampleRate}Hz ${channels}ch`;
+    case 'SPECTRUM':
+      const fftSize = params['fftSize'] || '1024';
+      return `FFT ${fftSize}`;
+    case 'SAVE':
+      const format = params['format'] || 'edf';
+      return `.${format}`;
+    default:
+      return '';
+  }
 }
 
 // 拖拽开始
@@ -465,32 +509,8 @@ async function loadFromBackend() {
     frozen.value = payload.frozen;
 
     payload.nodes.forEach((node: GraphNode) => {
-      const config = nodeTypes[node.type];
-      graph.addNode({
-        id: node.id,
-        shape: 'rect',
-        x: node.x,
-        y: node.y,
-        width: 180,
-        height: 70,
-        attrs: {
-          body: {
-            fill: '#fff',
-            stroke: config.color,
-            strokeWidth: 2,
-            rx: 8,
-            ry: 8,
-          },
-          label: {
-            text: node.name,
-            fill: '#333',
-            fontSize: 14,
-            fontWeight: 500,
-          },
-        },
-        ports: createPorts(node.type),
-        data: node,
-      });
+      // 使用新的 addNode 函数，传入参数以显示属性
+      addNode(node.type, node.x, node.y, node.name, node.params);
     });
 
     payload.edges.forEach((edge) => {
