@@ -11,7 +11,7 @@
       - link "示波器" [ref=e11] [cursor=pointer]:
         - /url: /oscilloscope
         - generic [ref=e12]: 示波器
-      - link "计算图" [active] [ref=e13] [cursor=pointer]:
+      - link "计算图" [ref=e13] [cursor=pointer]:
         - /url: /cpgraph
         - generic [ref=e14]: 计算图
       - link "测试" [ref=e15] [cursor=pointer]:
@@ -31,7 +31,7 @@
               - generic [ref=e32]: 保存
             - button "运行" [disabled]:
               - generic: 运行
-            - button "加载Mock" [ref=e33] [cursor=pointer]:
+            - button "加载Mock" [active] [ref=e33] [cursor=pointer]:
               - generic [ref=e34]: 加载Mock
             - button "清空" [ref=e35] [cursor=pointer]:
               - generic [ref=e36]: 清空
@@ -72,5 +72,10 @@
               - generic [ref=e72]:
                 - generic [ref=e73]: SAV
                 - generic [ref=e74]: 保存
-          - img [ref=e78]
+          - img [ref=e78]:
+            - generic [ref=e80]:
+              - generic [ref=e83]: 脑电数据源1000Hz 8ch
+              - generic [ref=e87]: 低通滤波器lowpass 50Hz
+              - generic [ref=e92]: 通道分离
+              - generic [ref=e97]: 波形显示器5s scroll
 ```
