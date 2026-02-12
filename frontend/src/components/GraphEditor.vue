@@ -172,7 +172,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick } from 'vue';
+import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
 import { Graph } from '@antv/x6';
 import { Snapline } from '@antv/x6-plugin-snapline';
 import {
@@ -185,6 +185,8 @@ import {
   type GraphPayload,
 } from '../services/graph';
 import { graphRuntime, type EegPacket } from '../services/runtime';
+import { sessionStore } from '../services/sessionStore';
+import { eegWebSocket } from '../services/websocket';
 
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
@@ -566,8 +568,49 @@ function setGraphInteracting(graph: Graph, enabled: boolean) {
 async function applyFrozen() {
   const graph = graphRef.value;
   if (!graph) return;
-  await setGraphFrozen(frozen.value);
-  setGraphInteracting(graph, !frozen.value);
+
+  if (frozen.value) {
+    // 先保存当前计算图到 SessionStore
+    const payload = buildPayload();
+    sessionStore.setGraph(payload);
+
+    // 验证是否可以冻结
+    const validation = sessionStore.validateFreeze();
+    if (!validation.valid) {
+      // 验证失败，提示错误并取消冻结
+      alert(`无法冻结计算图:\n${validation.errors.join('\n')}`);
+      frozen.value = false;
+      return;
+    }
+
+    // 验证通过，提交到后端
+    try {
+      await setGraphFrozen(true);
+      setGraphInteracting(graph, false);
+      
+      // 启动 WebSocket 连接
+      eegWebSocket.connect();
+      
+      console.log('计算图已冻结，WebSocket连接已建立');
+    } catch (err) {
+      console.error('Failed to freeze graph:', err);
+      alert('冻结计算图失败，请检查后端连接');
+      frozen.value = false;
+    }
+  } else {
+    // 解冻
+    try {
+      await setGraphFrozen(false);
+      setGraphInteracting(graph, true);
+      
+      // 断开 WebSocket 连接
+      eegWebSocket.disconnect();
+      
+      console.log('计算图已解冻');
+    } catch (err) {
+      console.error('Failed to unfreeze graph:', err);
+    }
+  }
 }
 
 function buildPayload(): GraphPayload {
@@ -594,24 +637,21 @@ async function save() {
 }
 
 async function run() {
-  const graph = graphRef.value;
-  if (!graph) return;
-  
-  // 收集所有OSC节点ID
-  const oscNodes = graph.getNodes().filter((node) => {
-    const data = node.getData() as GraphNode;
-    return data.type === 'OSC';
-  });
-  const oscNodeIds = oscNodes.map((n) => n.id);
-  
-  // 启动runtime
-  graphRuntime.start(oscNodeIds);
+  // 启动 runtime（会验证冻结状态并连接 WebSocket）
+  const success = await graphRuntime.start();
+  if (!success) {
+    alert(`启动失败: ${graphRuntime.state.error}`);
+    return;
+  }
   
   // 调用后端API
   await runGraph();
   
-  // 模拟数据流（实际应该从WebSocket接收）
-  startMockDataStream();
+  // 如果没有WebSocket连接，使用模拟数据流（测试模式）
+  if (!eegWebSocket.isConnected()) {
+    console.log('WebSocket未连接，使用模拟数据流');
+    startMockDataStream();
+  }
 }
 
 // 模拟数据流（用于测试）
@@ -814,7 +854,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   stopMockDataStream();
-  graphRuntime.stop();
+  graphRuntime.dispose();
   graphRef.value?.dispose();
 });
 </script>
