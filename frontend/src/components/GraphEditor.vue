@@ -193,6 +193,14 @@ const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
 const hasNodes = ref(false);
 
+// 监听冻结状态变化
+watch(frozen, (newVal, oldVal) => {
+  if (newVal !== oldVal) {
+    console.log(`[GraphEditor] Frozen state changed: ${oldVal} -> ${newVal}`);
+    applyFrozen();
+  }
+});
+
 // 节点编辑对话框状态
 const editDialog = ref({
   open: false,
@@ -567,17 +575,28 @@ function setGraphInteracting(graph: Graph, enabled: boolean) {
 
 async function applyFrozen() {
   const graph = graphRef.value;
-  if (!graph) return;
+  if (!graph) {
+    console.warn('[GraphEditor] applyFrozen: graph ref is null');
+    return;
+  }
+
+  console.log(`[GraphEditor] applyFrozen called, frozen: ${frozen.value}`);
 
   if (frozen.value) {
+    console.log('[GraphEditor] Freezing graph...');
+    
     // 先保存当前计算图到 SessionStore
     const payload = buildPayload();
+    console.log('[GraphEditor] Built payload for freeze:', payload);
     sessionStore.setGraph(payload);
 
     // 验证是否可以冻结
     const validation = sessionStore.validateFreeze();
+    console.log('[GraphEditor] Freeze validation result:', validation);
+    
     if (!validation.valid) {
       // 验证失败，提示错误并取消冻结
+      console.error('[GraphEditor] Freeze validation failed:', validation.errors);
       alert(`无法冻结计算图:\n${validation.errors.join('\n')}`);
       frozen.value = false;
       return;
@@ -585,20 +604,23 @@ async function applyFrozen() {
 
     // 验证通过，提交到后端
     try {
+      console.log('[GraphEditor] Calling setGraphFrozen(true)...');
       await setGraphFrozen(true);
       setGraphInteracting(graph, false);
       
       // 启动 WebSocket 连接
+      console.log('[GraphEditor] Connecting WebSocket...');
       eegWebSocket.connect();
       
-      console.log('计算图已冻结，WebSocket连接已建立');
+      console.log('[GraphEditor] 计算图已冻结，WebSocket连接已建立');
     } catch (err) {
-      console.error('Failed to freeze graph:', err);
+      console.error('[GraphEditor] Failed to freeze graph:', err);
       alert('冻结计算图失败，请检查后端连接');
       frozen.value = false;
     }
   } else {
     // 解冻
+    console.log('[GraphEditor] Unfreezing graph...');
     try {
       await setGraphFrozen(false);
       setGraphInteracting(graph, true);
@@ -606,9 +628,9 @@ async function applyFrozen() {
       // 断开 WebSocket 连接
       eegWebSocket.disconnect();
       
-      console.log('计算图已解冻');
+      console.log('[GraphEditor] 计算图已解冻');
     } catch (err) {
-      console.error('Failed to unfreeze graph:', err);
+      console.error('[GraphEditor] Failed to unfreeze graph:', err);
     }
   }
 }
@@ -633,22 +655,43 @@ function buildPayload(): GraphPayload {
 }
 
 async function save() {
-  await saveGraph(buildPayload());
+  console.log('[GraphEditor] Save button clicked, frozen:', frozen.value);
+  try {
+    const payload = buildPayload();
+    console.log('[GraphEditor] Saving graph with payload:', payload);
+    await saveGraph(payload);
+    console.log('[GraphEditor] Graph saved successfully');
+  } catch (err) {
+    console.error('[GraphEditor] Failed to save graph:', err);
+    alert('保存失败: ' + (err as Error).message);
+  }
 }
 
 async function run() {
+  console.log('[GraphEditor] Run button clicked, frozen:', frozen.value);
+  
   // 启动 runtime（会验证冻结状态并连接 WebSocket）
   const success = await graphRuntime.start();
   if (!success) {
+    console.error('[GraphEditor] Failed to start runtime:', graphRuntime.state.error);
     alert(`启动失败: ${graphRuntime.state.error}`);
     return;
   }
   
+  console.log('[GraphEditor] Runtime started, calling runGraph API');
   // 调用后端API
-  await runGraph();
+  try {
+    await runGraph();
+    console.log('[GraphEditor] Graph run API called successfully');
+  } catch (err) {
+    console.error('[GraphEditor] Failed to run graph:', err);
+    alert('运行失败: ' + (err as Error).message);
+    return;
+  }
   
   // 如果没有WebSocket连接，使用模拟数据流（测试模式）
   if (!eegWebSocket.isConnected()) {
+    console.log('[GraphEditor] WebSocket not connected, using mock data stream');
     console.log('WebSocket未连接，使用模拟数据流');
     startMockDataStream();
   }
