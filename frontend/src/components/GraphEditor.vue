@@ -616,6 +616,12 @@ async function run() {
 
 // 模拟数据流（用于测试）
 let dataInterval: number | null = null;
+
+// 方波生成函数
+function squareWave(t: number, freq: number): number {
+  return Math.sign(Math.sin(2 * Math.PI * freq * t));
+}
+
 function startMockDataStream() {
   if (dataInterval) clearInterval(dataInterval);
 
@@ -629,13 +635,13 @@ function startMockDataStream() {
     const t = Date.now() / 1000;
     const elapsed = t - startTime;
 
-    // 生成包含明显高频噪声的8通道脑电数据
+    // 生成方波测试数据 - 用于验证计算图处理流程
     const channels = Array.from({ length: 8 }, (_, i) => {
-      // 低频信号 (5-10 Hz) - 基础脑电波
-      const lowFreq = 5 + i * 0.5;
-      const lowFreqSignal = Math.sin(2 * Math.PI * lowFreq * elapsed) * 30;
+      // 基础方波 (5-10 Hz) - 易于观察处理效果
+      const freq = 5 + i * 0.5;
+      const squareSignal = squareWave(elapsed, freq) * 30;
 
-      // 高频噪声 (50-150 Hz) - 模拟高频干扰
+      // 高频干扰 (50-150 Hz)
       const highFreq1 = 50 + i * 10;
       const highFreq2 = 120 + i * 5;
       const highFreqNoise = Math.sin(2 * Math.PI * highFreq1 * elapsed) * 20 +
@@ -644,8 +650,8 @@ function startMockDataStream() {
       // 随机噪声
       const randomNoise = (Math.random() - 0.5) * 10;
 
-      // 组合信号：低频 + 高频噪声 + 随机噪声
-      return lowFreqSignal + highFreqNoise + randomNoise;
+      // 组合信号：方波 + 高频噪声 + 随机噪声
+      return squareSignal + highFreqNoise + randomNoise;
     });
 
     graphRuntime.emitPacket({ t, channels });
