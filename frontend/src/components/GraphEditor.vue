@@ -129,38 +129,41 @@ const outputNodes = [
   { type: 'SAVE' as GraphNodeType, name: '保存', icon: 'SAV', color: '#C2185B', bg: '#FCE4EC' },
 ];
 
-// 创建节点 HTML
+// 创建节点 HTML - 使用 X6 HTML 节点需要的特殊结构
 function createNodeHtml(type: GraphNodeType, name: string) {
   const config = nodeTypes[type];
   return `
-    <div style="
-      width: 180px;
-      height: 70px;
-      background: white;
-      border: 2px solid ${config.color};
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      padding: 12px;
-      gap: 12px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    ">
+    <div class="x6-node" style="width: 100%; height: 100%;">
       <div style="
-        width: 36px;
-        height: 36px;
-        background: ${config.bg};
-        color: ${config.color};
-        border-radius: 6px;
+        width: 180px;
+        height: 70px;
+        background: white;
+        border: 2px solid ${config.color};
+        border-radius: 8px;
         display: flex;
         align-items: center;
-        justify-content: center;
-        font-size: 12px;
-        font-weight: 600;
-        flex-shrink: 0;
-      ">${config.icon}</div>
-      <div style="flex: 1; min-width: 0;">
-        <div style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
-        <div style="font-size: 11px; color: #999; margin-top: 2px;">${type}</div>
+        padding: 12px;
+        gap: 12px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        box-sizing: border-box;
+      ">
+        <div style="
+          width: 36px;
+          height: 36px;
+          background: ${config.bg};
+          color: ${config.color};
+          border-radius: 6px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 12px;
+          font-weight: 600;
+          flex-shrink: 0;
+        ">${config.icon}</div>
+        <div style="flex: 1; min-width: 0; overflow: hidden;">
+          <div style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+          <div style="font-size: 11px; color: #999; margin-top: 2px;">${type}</div>
+        </div>
       </div>
     </div>
   `;
@@ -191,7 +194,7 @@ function createPorts(type: GraphNodeType) {
   };
 }
 
-// 添加节点
+// 添加节点 - 使用 rect 形状配合 attrs
 function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
   const graph = graphRef.value;
   if (!graph) return null;
@@ -201,12 +204,26 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
   
   const node = graph.addNode({
     id: nodeId,
-    shape: 'html',
+    shape: 'rect',
     x,
     y,
     width: 180,
     height: 70,
-    html: createNodeHtml(type, name || config.name),
+    attrs: {
+      body: {
+        fill: '#fff',
+        stroke: config.color,
+        strokeWidth: 2,
+        rx: 8,
+        ry: 8,
+      },
+      label: {
+        text: name || config.name,
+        fill: '#333',
+        fontSize: 14,
+        fontWeight: 500,
+      },
+    },
     ports: createPorts(type),
     data: { type, name: name || config.name },
   });
@@ -231,14 +248,29 @@ async function loadFromBackend() {
     frozen.value = payload.frozen;
     
     payload.nodes.forEach((node: GraphNode) => {
+      const config = nodeTypes[node.type];
       graph.addNode({
         id: node.id,
-        shape: 'html',
+        shape: 'rect',
         x: node.x,
         y: node.y,
         width: 180,
         height: 70,
-        html: createNodeHtml(node.type, node.name),
+        attrs: {
+          body: {
+            fill: '#fff',
+            stroke: config.color,
+            strokeWidth: 2,
+            rx: 8,
+            ry: 8,
+          },
+          label: {
+            text: node.name,
+            fill: '#333',
+            fontSize: 14,
+            fontWeight: 500,
+          },
+        },
         ports: createPorts(node.type),
         data: node,
       });
