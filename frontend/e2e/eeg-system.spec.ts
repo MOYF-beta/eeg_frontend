@@ -33,7 +33,7 @@ test.describe('计算图编辑器', () => {
     await page.waitForTimeout(1500);
     
     // 验证节点显示
-    await expect(page.locator('text=模拟设备_1')).toBeVisible();
+    await expect(page.locator('text=脑电数据源')).toBeVisible();
     await expect(page.locator('text=低通滤波器')).toBeVisible();
     
     await page.screenshot({ path: 'e2e/screenshots/graph-mock-loaded.png' });
@@ -216,7 +216,7 @@ test.describe('设备列表', () => {
     await page.waitForTimeout(500);
     
     // 选择SOURCE节点
-    await page.click('text=模拟设备_1');
+    await page.click('text=脑电数据源');
     await page.waitForTimeout(1000);
     
     // 验证绑定成功
@@ -244,7 +244,7 @@ test.describe('端到端数据流', () => {
     await page.waitForTimeout(1000);
     await page.click('.v-select').first();
     await page.waitForTimeout(500);
-    await page.click('text=模拟设备_1');
+    await page.click('text=脑电数据源');
     await page.waitForTimeout(1000);
     
     // 3. 示波器页面 - 绑定并查看波形
