@@ -5,6 +5,7 @@
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
         <v-btn size="small" variant="tonal" @click="save">保存</v-btn>
+        <v-btn size="small" color="secondary" @click="loadMockData">加载Mock</v-btn>
         <v-btn size="small" color="primary" @click="run" :disabled="!frozen">运行</v-btn>
         <v-switch v-model="debug" density="compact" hide-details label="调试" />
       </div>
@@ -264,6 +265,56 @@ const buildPayload = (): GraphPayload => {
 
 const save = async () => {
   await saveGraph(buildPayload());
+};
+
+const loadMockData = () => {
+  const mockData = {
+    nodes: [
+      { id: 'node-source-001', type: 'SOURCE', name: '脑电数据源', x: 50, y: 100, params: { device: '模拟设备', sampleRate: 1000 } },
+      { id: 'node-filter-001', type: 'FILTER', name: '低通滤波器', x: 300, y: 100, params: { type: '低通', cutoff: 30, order: 4 } },
+      { id: 'node-split-001', type: 'SPLIT', name: '通道分离', x: 550, y: 100, params: { groups: '1-4,5-8' } },
+      { id: 'node-osc-001', type: 'OSC', name: '波形显示器', x: 800, y: 100, params: { windowSize: 5, channels: '全部通道' } },
+      { id: 'node-save-001', type: 'SAVE', name: '数据保存', x: 800, y: 250, params: { filename: 'output.csv', format: 'CSV' } },
+    ],
+    edges: [
+      { id: 'edge-001', source: 'node-source-001', target: 'node-filter-001' },
+      { id: 'edge-002', source: 'node-filter-001', target: 'node-split-001' },
+      { id: 'edge-003', source: 'node-split-001', target: 'node-osc-001' },
+    ],
+    frozen: false
+  };
+  
+  const graph = graphRef.value;
+  if (!graph) return;
+  
+  // 清除现有节点
+  graph.clearCells();
+  
+  // 添加节点
+  mockData.nodes.forEach((node) => {
+    graph.addNode({
+      id: node.id,
+      shape: 'eeg-node',
+      x: node.x,
+      y: node.y,
+      width: 180,
+      height: 70,
+      ports: { groups: portGroups, items: getPortsByType(node.type, node.id) },
+      data: node,
+    });
+  });
+  
+  // 添加边
+  mockData.edges.forEach((edge) => {
+    graph.addEdge({
+      id: edge.id,
+      source: { cell: edge.source, port: `${edge.source}-out` },
+      target: { cell: edge.target, port: `${edge.target}-in` },
+      attrs: { line: { stroke: typeColors.FILTER, strokeWidth: 2, targetMarker: 'block' } },
+    });
+  });
+  
+  hasNodes.value = true;
 };
 
 const run = async () => {
