@@ -568,23 +568,38 @@ async function run() {
 let dataInterval: number | null = null;
 function startMockDataStream() {
   if (dataInterval) clearInterval(dataInterval);
-  
+
   const startTime = Date.now() / 1000;
   dataInterval = window.setInterval(() => {
     if (!graphRuntime.state.isRunning) {
       if (dataInterval) clearInterval(dataInterval);
       return;
     }
-    
+
     const t = Date.now() / 1000;
-    // 生成模拟的8通道脑电数据
+    const elapsed = t - startTime;
+
+    // 生成包含明显高频噪声的8通道脑电数据
     const channels = Array.from({ length: 8 }, (_, i) => {
-      const freq = 10 + i * 2;
-      return Math.sin(2 * Math.PI * freq * (t - startTime)) * 50 + Math.random() * 10;
+      // 低频信号 (5-10 Hz) - 基础脑电波
+      const lowFreq = 5 + i * 0.5;
+      const lowFreqSignal = Math.sin(2 * Math.PI * lowFreq * elapsed) * 30;
+
+      // 高频噪声 (50-150 Hz) - 模拟高频干扰
+      const highFreq1 = 50 + i * 10;
+      const highFreq2 = 120 + i * 5;
+      const highFreqNoise = Math.sin(2 * Math.PI * highFreq1 * elapsed) * 20 +
+                            Math.sin(2 * Math.PI * highFreq2 * elapsed) * 15;
+
+      // 随机噪声
+      const randomNoise = (Math.random() - 0.5) * 10;
+
+      // 组合信号：低频 + 高频噪声 + 随机噪声
+      return lowFreqSignal + highFreqNoise + randomNoise;
     });
-    
+
     graphRuntime.emitPacket({ t, channels });
-  }, 50); // 20Hz
+  }, 10); // 100Hz 采样率，才能显示高频信号
 }
 
 function stopMockDataStream() {
