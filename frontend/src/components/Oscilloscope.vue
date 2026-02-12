@@ -160,10 +160,15 @@ const canvasRef = ref<HTMLCanvasElement | null>(null);
 const mode = ref<'scan' | 'scroll'>('scroll');
 const timeWindowSec = ref(5);
 const channelScales = ref<number[]>(Array.from({ length: channelCount }, () => 1));
+
+// 性能优化：使用固定大小的环形缓冲区，只保留窗口大小的数据
+// 假设采样率1000Hz，窗口5秒，最多5000个点
+const MAX_SAMPLES = 10000; // 最大缓存点数（10秒@1000Hz）
 const samples: Array<Array<{ t: number; v: number }>> = Array.from(
   { length: channelCount },
   () => [],
 );
+let sampleStartIndex = 0; // 环形缓冲区起始索引
 
 // 数据源
 const selectedNodeId = ref<string | null>(null);
@@ -297,6 +302,7 @@ function unbindNode() {
 
   // 清空历史数据
   samples.forEach(ch => ch.length = 0);
+  sampleStartIndex = 0;
   packetCount.value = 0;
   lastPacketTime.value = null;
 }
@@ -316,7 +322,7 @@ async function loadGraphNodes() {
   }
 }
 
-// WebSocket 数据处理
+// WebSocket 数据处理 - 优化版本
 function handleDataPacket(packet: EegDataPacket) {
   // 只处理选中的节点数据
   if (packet.nodeId !== selectedNodeId.value) return;
@@ -325,18 +331,42 @@ function handleDataPacket(packet: EegDataPacket) {
   lastPacketTime.value = t;
   packetCount.value++;
 
+  // 添加新数据点
   packet.channels.slice(0, channelCount).forEach((v, idx) => {
     samples[idx].push({ t, v });
   });
 
+  // 只保留窗口大小的数据，丢弃旧数据
   pruneSamples(t);
 }
 
 function pruneSamples(now: number) {
   const cutoff = now - timeWindowSec.value;
-  samples.forEach((ch) => {
-    while (ch.length && ch[0].t < cutoff) ch.shift();
-  });
+  
+  // 只检查第一个通道，假设所有通道数据同步
+  const ch = samples[0];
+  if (ch.length === 0) return;
+
+  // 找到第一个在窗口内的数据点索引
+  let startIdx = 0;
+  while (startIdx < ch.length && ch[startIdx].t < cutoff) {
+    startIdx++;
+  }
+
+  // 如果有过期的数据，一次性批量删除（比逐个shift高效）
+  if (startIdx > 0) {
+    for (let i = 0; i < channelCount; i++) {
+      samples[i].splice(0, startIdx);
+    }
+  }
+
+  // 如果数据量超过最大值，保留最新的MAX_SAMPLES个点
+  if (ch.length > MAX_SAMPLES) {
+    const excess = ch.length - MAX_SAMPLES;
+    for (let i = 0; i < channelCount; i++) {
+      samples[i].splice(0, excess);
+    }
+  }
 }
 
 // 绘图
