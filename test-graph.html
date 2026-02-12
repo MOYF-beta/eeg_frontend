@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>EEG 计算图测试</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    
+    .header {
+      background: #1976D2;
+      color: white;
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      gap: 24px;
+    }
+    .header h1 { font-size: 18px; font-weight: 500; }
+    .nav { display: flex; gap: 8px; margin-left: auto; }
+    .nav a {
+      color: white;
+      text-decoration: none;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 14px;
+      opacity: 0.8;
+    }
+    .nav a:hover, .nav a.active { opacity: 1; background: rgba(255,255,255,0.1); }
+    
+    .container {
+      display: flex;
+      height: calc(100vh - 52px);
+    }
+    
+    /* Stencil 样式 */
+    #stencil {
+      width: 240px;
+      height: 100%;
+      border-right: 1px solid #e0e0e0;
+      background: #fff;
+      overflow-y: auto;
+    }
+    .stencil-title {
+      padding: 16px;
+      font-weight: 600;
+      font-size: 14px;
+      color: #333;
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .stencil-group {
+      border-bottom: 1px solid #e0e0e0;
+    }
+    .group-title {
+      padding: 12px 16px;
+      font-size: 12px;
+      color: #666;
+      background: #fafafa;
+      font-weight: 500;
+    }
+    .node-item {
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      cursor: grab;
+      transition: background 0.2s;
+      border-bottom: 1px solid #f0f0f0;
+    }
+    .node-item:hover { background: #f5f5f5; }
+    .node-item:active { cursor: grabbing; }
+    .node-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: 600;
+      flex-shrink: 0;
+    }
+    .node-info { flex: 1; }
+    .node-name { font-size: 14px; color: #333; font-weight: 500; }
+    .node-desc { font-size: 12px; color: #999; margin-top: 2px; }
+    
+    /* 画布样式 */
+    #graph-container {
+      flex: 1;
+      height: 100%;
+      background: #fafafa;
+      position: relative;
+    }
+    
+    /* 工具栏 */
+    .toolbar {
+      position: absolute;
+      top: 16px;
+      right: 16px;
+      display: flex;
+      gap: 8px;
+      z-index: 10;
+    }
+    .btn {
+      padding: 8px 16px;
+      border: none;
+      border-radius: 4px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary { background: #1976D2; color: white; }
+    .btn-primary:hover { background: #1565C0; }
+    .btn-secondary { background: white; color: #333; border: 1px solid #ddd; }
+    .btn-secondary:hover { background: #f5f5f5; }
+    
+    /* 提示 */
+    .hint {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      color: #999;
+      pointer-events: none;
+    }
+    .hint-icon { font-size: 48px; margin-bottom: 16px; }
+    .hint-text { font-size: 16px; color: #666; }
+    .hint-sub { font-size: 13px; margin-top: 8px; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/@antv/x6@2.18.1/dist/index.umd.min.js"></script>
+</head>
+<body>
+  <div class="header">
+    <h1>EEG 脑电系统</h1>
+    <div class="nav">
+      <a href="#">设备</a>
+      <a href="#">示波器</a>
+      <a href="#" class="active">计算图</a>
+      <a href="#">测试</a>
+    </div>
+  </div>
+  
+  <div class="container">
+    <div id="stencil">
+      <div class="stencil-title">节点库</div>
+      
+      <div class="stencil-group">
+        <div class="group-title">数据来源</div>
+        <div class="node-item" draggable="true" data-type="SOURCE">
+          <div class="node-icon" style="background: #E3F2FD; color: #1976D2;">SRC</div>
+          <div class="node-info">
+            <div class="node-name">数据源</div>
+            <div class="node-desc">实时脑电数据采集</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="REPLAY">
+          <div class="node-icon" style="background: #E3F2FD; color: #1976D2;">RPL</div>
+          <div class="node-info">
+            <div class="node-name">回放</div>
+            <div class="node-desc">历史数据文件回放</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="stencil-group">
+        <div class="group-title">处理节点</div>
+        <div class="node-item" draggable="true" data-type="FILTER">
+          <div class="node-icon" style="background: #E8F5E9; color: #388E3C;">FIL</div>
+          <div class="node-info">
+            <div class="node-name">滤波器</div>
+            <div class="node-desc">低通/高通/带通滤波</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="SUM">
+          <div class="node-icon" style="background: #F3E5F5; color: #7B1FA2;">SUM</div>
+          <div class="node-info">
+            <div class="node-name">求和器</div>
+            <div class="node-desc">多通道信号叠加</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="SPLIT">
+          <div class="node-icon" style="background: #FFF8E1; color: #F9A825;">SPT</div>
+          <div class="node-info">
+            <div class="node-name">分离器</div>
+            <div class="node-desc">通道分组分离</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="MERGE">
+          <div class="node-icon" style="background: #FFF3E0; color: #EF6C00;">MRG</div>
+          <div class="node-info">
+            <div class="node-name">合并器</div>
+            <div class="node-desc">多通道合并</div>
+          </div>
+        </div>
+      </div>
+      
+      <div class="stencil-group">
+        <div class="group-title">显示与保存</div>
+        <div class="node-item" draggable="true" data-type="OSC">
+          <div class="node-icon" style="background: #E0F2F1; color: #00796B;">OSC</div>
+          <div class="node-info">
+            <div class="node-name">示波器</div>
+            <div class="node-desc">实时波形显示</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="SPECTRUM">
+          <div class="node-icon" style="background: #E8EAF6; color: #3F51B5;">FFT</div>
+          <div class="node-info">
+            <div class="node-name">频谱</div>
+            <div class="node-desc">频域分析显示</div>
+          </div>
+        </div>
+        <div class="node-item" draggable="true" data-type="SAVE">
+          <div class="node-icon" style="background: #FCE4EC; color: #C2185B;">SAV</div>
+          <div class="node-info">
+            <div class="node-name">保存</div>
+            <div class="node-desc">数据保存到文件</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    
+    <div id="graph-container">
+      <div class="toolbar">
+        <button class="btn btn-secondary" onclick="loadMock()">加载Mock</button>
+        <button class="btn btn-secondary" onclick="clearGraph()">清空</button>
+        <button class="btn btn-primary" onclick="saveGraph()">保存</button>
+      </div>
+      <div class="hint" id="hint">
+        <div class="hint-icon">📊</div>
+        <div class="hint-text">从左侧拖拽节点到此处</div>
+        <div class="hint-sub">连接节点创建数据处理流程</div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { Graph, Node, Edge } = X6;
+    
+    // 创建画布
+    const graph = new Graph({
+      container: document.getElementById('graph-container'),
+      grid: { size: 10, visible: true, type: 'dot' },
+      background: { color: '#fafafa' },
+      panning: { enabled: true, eventTypes: ['leftMouseDown'] },
+      mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'] },
+      connecting: {
+        snap: { radius: 20 },
+        allowBlank: false,
+        allowLoop: false,
+        allowEdge: false,
+        highlight: true,
+        createEdge() {
+          return graph.createEdge({
+            attrs: {
+              line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' },
+            },
+          });
+        },
+        validateConnection({ sourceMagnet, targetMagnet }) {
+          if (!sourceMagnet || sourceMagnet.getAttribute('port-group') === 'in') return false;
+          if (!targetMagnet || targetMagnet.getAttribute('port-group') !== 'in') return false;
+          return true;
+        },
+      },
+      highlighting: {
+        magnetAdsorbed: {
+          name: 'stroke',
+          args: { attrs: { fill: '#5F95FF', stroke: '#5F95FF' } },
+        },
+      },
+    });
+    
+    // 节点类型配置
+    const nodeTypes = {
+      SOURCE: { name: '数据源', color: '#1976D2', bg: '#E3F2FD', icon: 'SRC', hasInput: false, hasOutput: true },
+      REPLAY: { name: '回放', color: '#1976D2', bg: '#E3F2FD', icon: 'RPL', hasInput: false, hasOutput: true },
+      FILTER: { name: '滤波器', color: '#388E3C', bg: '#E8F5E9', icon: 'FIL', hasInput: true, hasOutput: true },
+      SUM: { name: '求和器', color: '#7B1FA2', bg: '#F3E5F5', icon: 'SUM', hasInput: true, hasOutput: true },
+      SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
+      MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
+      OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
+      SPECTRUM: { name: '频谱', color: '#3F51B5', bg: '#E8EAF6', icon: 'FFT', hasInput: true, hasOutput: false },
+      SAVE: { name: '保存', color: '#C2185B', bg: '#FCE4EC', icon: 'SAV', hasInput: true, hasOutput: false },
+    };
+    
+    // 创建节点 HTML
+    function createNodeHtml(type, name) {
+      const config = nodeTypes[type];
+      return `
+        <div style="
+          width: 180px;
+          height: 70px;
+          background: white;
+          border: 2px solid ${config.color};
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          padding: 12px;
+          gap: 12px;
+          box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        ">
+          <div style="
+            width: 36px;
+            height: 36px;
+            background: ${config.bg};
+            color: ${config.color};
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+            flex-shrink: 0;
+          ">${config.icon}</div>
+          <div style="flex: 1; min-width: 0;">
+            <div style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+            <div style="font-size: 11px; color: #999; margin-top: 2px;">${type}</div>
+          </div>
+        </div>
+      `;
+    }
+    
+    // 创建端口
+    function createPorts(type) {
+      const config = nodeTypes[type];
+      const items = [];
+      if (config.hasInput) {
+        items.push({ id: 'in', group: 'in' });
+      }
+      if (config.hasOutput) {
+        items.push({ id: 'out', group: 'out' });
+      }
+      return {
+        groups: {
+          in: {
+            position: 'left',
+            attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
+          },
+          out: {
+            position: { name: 'right', args: { dx: -6 } },
+            attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
+          },
+        },
+        items,
+      };
+    }
+    
+    // 添加节点
+    function addNode(type, x, y, name) {
+      const config = nodeTypes[type];
+      const nodeId = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      
+      const node = graph.addNode({
+        id: nodeId,
+        shape: 'html',
+        x,
+        y,
+        width: 180,
+        height: 70,
+        html: createNodeHtml(type, name || config.name),
+        ports: createPorts(type),
+        data: { type, name: name || config.name },
+      });
+      
+      updateHint();
+      return node;
+    }
+    
+    // 拖拽处理
+    let draggedType = null;
+    document.querySelectorAll('.node-item').forEach(item => {
+      item.addEventListener('dragstart', (e) => {
+        draggedType = item.dataset.type;
+        e.dataTransfer.effectAllowed = 'copy';
+      });
+    });
+    
+    const container = document.getElementById('graph-container');
+    container.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+    });
+    
+    container.addEventListener('drop', (e) => {
+      e.preventDefault();
+      if (!draggedType) return;
+      
+      const rect = container.getBoundingClientRect();
+      const x = e.clientX - rect.left - 90; // 居中
+      const y = e.clientY - rect.top - 35;
+      
+      addNode(draggedType, x, y);
+      draggedType = null;
+    });
+    
+    // 节点悬停显示端口
+    graph.on('node:mouseenter', ({ node }) => {
+      node.getPorts().forEach(port => {
+        node.setPortProp(port.id, 'attrs/circle/style/visibility', 'visible');
+      });
+    });
+    
+    graph.on('node:mouseleave', ({ node }) => {
+      node.getPorts().forEach(port => {
+        const edges = graph.getConnectedEdges(node);
+        const isConnected = edges.some(e => 
+          e.getSourcePortId() === port.id || e.getTargetPortId() === port.id
+        );
+        node.setPortProp(port.id, 'attrs/circle/style/visibility', isConnected ? 'visible' : 'hidden');
+        node.setPortProp(port.id, 'attrs/circle/fill', isConnected ? '#5F95FF' : '#fff');
+      });
+    });
+    
+    // 边悬停显示删除按钮
+    graph.on('edge:mouseenter', ({ edge }) => {
+      edge.addTools({ name: 'button-remove', args: { distance: -40 } });
+    });
+    
+    graph.on('edge:mouseleave', ({ edge }) => {
+      edge.removeTools();
+    });
+    
+    // 连接成功高亮
+    graph.on('edge:connected', ({ currentCell, currentPort }) => {
+      if (currentCell && currentPort) {
+        currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#5F95FF');
+        currentCell.setPortProp(currentPort, 'attrs/circle/stroke', '#5F95FF');
+        currentCell.setPortProp(currentPort, 'attrs/circle/style/visibility', 'visible');
+      }
+    });
+    
+    // 更新提示
+    function updateHint() {
+      const hint = document.getElementById('hint');
+      if (graph.getNodes().length > 0) {
+        hint.style.display = 'none';
+      } else {
+        hint.style.display = 'block';
+      }
+    }
+    
+    // 加载 Mock 数据
+    function loadMock() {
+      graph.clearCells();
+      
+      const nodes = [
+        { type: 'SOURCE', x: 50, y: 100, name: '脑电数据源' },
+        { type: 'FILTER', x: 300, y: 100, name: '低通滤波器' },
+        { type: 'SPLIT', x: 550, y: 100, name: '通道分离' },
+        { type: 'OSC', x: 800, y: 100, name: '波形显示器' },
+      ];
+      
+      const nodeIds = [];
+      nodes.forEach(n => {
+        const node = addNode(n.type, n.x, n.y, n.name);
+        nodeIds.push(node.id);
+      });
+      
+      // 创建边
+      for (let i = 0; i < nodeIds.length - 1; i++) {
+        graph.addEdge({
+          source: { cell: nodeIds[i], port: 'out' },
+          target: { cell: nodeIds[i + 1], port: 'in' },
+          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+        });
+      }
+    }
+    
+    // 清空
+    function clearGraph() {
+      graph.clearCells();
+      updateHint();
+    }
+    
+    // 保存
+    function saveGraph() {
+      const data = {
+        nodes: graph.getNodes().map(node => {
+          const pos = node.position();
+          return { ...node.data, x: pos.x, y: pos.y };
+        }),
+        edges: graph.getEdges().map(edge => ({
+          source: edge.getSourceCellId(),
+          target: edge.getTargetCellId(),
+        })),
+      };
+      console.log('Graph data:', data);
+      alert('已保存到控制台');
+    }
+  </script>
+</body>
+</html>

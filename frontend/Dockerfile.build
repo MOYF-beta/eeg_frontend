@@ -1,0 +1,13 @@
+# 构建阶段
+FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm config set registry https://registry.npmmirror.com && npm install
+COPY . .
+RUN npm run build
+
+# 输出阶段
+FROM alpine:latest
+WORKDIR /output
+COPY --from=builder /app/dist ./dist
+CMD ["cp", "-r", "/output/dist", "/host/dist"]

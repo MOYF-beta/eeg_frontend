@@ -12,24 +12,77 @@
     </v-card-title>
     <v-divider />
     <v-card-text>
-      <div class="graph-layout">
-        <!-- 左侧 Stencil 节点库 -->
-        <div ref="stencilContainer" class="stencil-container"></div>
+      <div class="graph-wrapper">
+        <!-- 左侧节点库 -->
+        <div class="palette">
+          <div class="palette-title">节点库</div>
+          
+          <div class="palette-group">
+            <div class="group-title">数据来源</div>
+            <div 
+              v-for="node in sourceNodes" 
+              :key="node.type"
+              class="palette-item"
+              draggable="true"
+              @dragstart="onDragStart($event, node.type)"
+            >
+              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
+                {{ node.icon }}
+              </span>
+              <span class="item-name">{{ node.name }}</span>
+            </div>
+          </div>
+          
+          <div class="palette-group">
+            <div class="group-title">处理节点</div>
+            <div 
+              v-for="node in processNodes" 
+              :key="node.type"
+              class="palette-item"
+              draggable="true"
+              @dragstart="onDragStart($event, node.type)"
+            >
+              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
+                {{ node.icon }}
+              </span>
+              <span class="item-name">{{ node.name }}</span>
+            </div>
+          </div>
+          
+          <div class="palette-group">
+            <div class="group-title">显示与保存</div>
+            <div 
+              v-for="node in outputNodes" 
+              :key="node.type"
+              class="palette-item"
+              draggable="true"
+              @dragstart="onDragStart($event, node.type)"
+            >
+              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
+                {{ node.icon }}
+              </span>
+              <span class="item-name">{{ node.name }}</span>
+            </div>
+          </div>
+        </div>
         
         <!-- 右侧画布 -->
-        <div ref="container" class="graph-container"></div>
+        <div ref="container" class="graph-container">
+          <div v-if="!hasNodes" class="graph-hint">
+            <v-icon size="48" color="grey-lighten-2">mdi-graph-outline</v-icon>
+            <div class="hint-text">从左侧拖拽节点到此处</div>
+            <div class="hint-sub">连接节点创建数据处理流程</div>
+          </div>
+        </div>
       </div>
     </v-card-text>
   </v-card>
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, watch } from 'vue';
-import { Graph, Node, Edge } from '@antv/x6';
-import { Stencil } from '@antv/x6-plugin-stencil';
+import { onMounted, onUnmounted, ref, nextTick } from 'vue';
+import { Graph } from '@antv/x6';
 import { Snapline } from '@antv/x6-plugin-snapline';
-import { register } from '@antv/x6-vue-shape';
-import NodeCard from './nodes/NodeCard.vue';
 import {
   fetchGraph,
   runGraph,
@@ -41,128 +94,184 @@ import {
 } from '../services/graph';
 
 const container = ref<HTMLDivElement | null>(null);
-const stencilContainer = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
-const stencilRef = ref<Stencil | null>(null);
 const frozen = ref(false);
-
-// 注册自定义 Vue 节点
-register({
-  shape: 'eeg-node',
-  width: 180,
-  height: 70,
-  component: NodeCard,
-});
+const hasNodes = ref(false);
 
 // 节点类型配置
-const typeItems = [
-  { title: '数据源', value: 'SOURCE' as GraphNodeType, icon: 'SRC', color: '#1976D2', group: 'source' },
-  { title: '回放', value: 'REPLAY' as GraphNodeType, icon: 'RPL', color: '#1976D2', group: 'source' },
-  { title: '滤波器', value: 'FILTER' as GraphNodeType, icon: 'FIL', color: '#388E3C', group: 'process' },
-  { title: '求和器', value: 'SUM' as GraphNodeType, icon: 'SUM', color: '#7B1FA2', group: 'process' },
-  { title: '分离器', value: 'SPLIT' as GraphNodeType, icon: 'SPT', color: '#FBC02D', group: 'process' },
-  { title: '合并器', value: 'MERGE' as GraphNodeType, icon: 'MRG', color: '#F57C00', group: 'process' },
-  { title: '示波器', value: 'OSC' as GraphNodeType, icon: 'OSC', color: '#00796B', group: 'output' },
-  { title: '频谱', value: 'SPECTRUM' as GraphNodeType, icon: 'FFT', color: '#303F9F', group: 'output' },
-  { title: '保存', value: 'SAVE' as GraphNodeType, icon: 'SAV', color: '#C2185B', group: 'output' },
-];
-
-const typeColors: Record<GraphNodeType, string> = {
-  SOURCE: '#1976D2',
-  REPLAY: '#1976D2',
-  FILTER: '#388E3C',
-  SUM: '#7B1FA2',
-  SPLIT: '#FBC02D',
-  MERGE: '#F57C00',
-  OSC: '#00796B',
-  SPECTRUM: '#303F9F',
-  SAVE: '#C2185B',
+const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string; icon: string; hasInput: boolean; hasOutput: boolean }> = {
+  SOURCE: { name: '数据源', color: '#1976D2', bg: '#E3F2FD', icon: 'SRC', hasInput: false, hasOutput: true },
+  REPLAY: { name: '回放', color: '#1976D2', bg: '#E3F2FD', icon: 'RPL', hasInput: false, hasOutput: true },
+  FILTER: { name: '滤波器', color: '#388E3C', bg: '#E8F5E9', icon: 'FIL', hasInput: true, hasOutput: true },
+  SUM: { name: '求和器', color: '#7B1FA2', bg: '#F3E5F5', icon: 'SUM', hasInput: true, hasOutput: true },
+  SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
+  MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
+  OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
+  SPECTRUM: { name: '频谱', color: '#3F51B5', bg: '#E8EAF6', icon: 'FFT', hasInput: true, hasOutput: false },
+  SAVE: { name: '保存', color: '#C2185B', bg: '#FCE4EC', icon: 'SAV', hasInput: true, hasOutput: false },
 };
 
-// 创建端口配置
-const createPorts = (nodeId: string, type: GraphNodeType) => {
+const sourceNodes = [
+  { type: 'SOURCE' as GraphNodeType, name: '数据源', icon: 'SRC', color: '#1976D2', bg: '#E3F2FD' },
+  { type: 'REPLAY' as GraphNodeType, name: '回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD' },
+];
+
+const processNodes = [
+  { type: 'FILTER' as GraphNodeType, name: '滤波器', icon: 'FIL', color: '#388E3C', bg: '#E8F5E9' },
+  { type: 'SUM' as GraphNodeType, name: '求和器', icon: 'SUM', color: '#7B1FA2', bg: '#F3E5F5' },
+  { type: 'SPLIT' as GraphNodeType, name: '分离器', icon: 'SPT', color: '#F9A825', bg: '#FFF8E1' },
+  { type: 'MERGE' as GraphNodeType, name: '合并器', icon: 'MRG', color: '#EF6C00', bg: '#FFF3E0' },
+];
+
+const outputNodes = [
+  { type: 'OSC' as GraphNodeType, name: '示波器', icon: 'OSC', color: '#00796B', bg: '#E0F2F1' },
+  { type: 'SPECTRUM' as GraphNodeType, name: '频谱', icon: 'FFT', color: '#3F51B5', bg: '#E8EAF6' },
+  { type: 'SAVE' as GraphNodeType, name: '保存', icon: 'SAV', color: '#C2185B', bg: '#FCE4EC' },
+];
+
+// 创建节点 HTML
+function createNodeHtml(type: GraphNodeType, name: string) {
+  const config = nodeTypes[type];
+  return `
+    <div style="
+      width: 180px;
+      height: 70px;
+      background: white;
+      border: 2px solid ${config.color};
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      padding: 12px;
+      gap: 12px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    ">
+      <div style="
+        width: 36px;
+        height: 36px;
+        background: ${config.bg};
+        color: ${config.color};
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 12px;
+        font-weight: 600;
+        flex-shrink: 0;
+      ">${config.icon}</div>
+      <div style="flex: 1; min-width: 0;">
+        <div style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+        <div style="font-size: 11px; color: #999; margin-top: 2px;">${type}</div>
+      </div>
+    </div>
+  `;
+}
+
+// 创建端口
+function createPorts(type: GraphNodeType) {
+  const config = nodeTypes[type];
   const items = [];
-  
-  // 输入端口（除了数据源）
-  if (type !== 'SOURCE' && type !== 'REPLAY') {
-    items.push({ id: `${nodeId}-in`, group: 'in' });
+  if (config.hasInput) {
+    items.push({ id: 'in', group: 'in' });
   }
-  
-  // 输出端口（除了输出节点）
-  if (type !== 'OSC' && type !== 'SPECTRUM' && type !== 'SAVE') {
-    items.push({ id: `${nodeId}-out`, group: 'out' });
+  if (config.hasOutput) {
+    items.push({ id: 'out', group: 'out' });
   }
-  
   return {
     groups: {
       in: {
         position: 'left',
-        attrs: {
-          circle: {
-            r: 6,
-            magnet: true,
-            stroke: '#90A4AE',
-            strokeWidth: 2,
-            fill: '#ffffff',
-            style: { visibility: 'hidden' },
-          },
-        },
+        attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
       },
       out: {
         position: { name: 'right', args: { dx: -6 } },
-        attrs: {
-          circle: {
-            r: 6,
-            magnet: true,
-            stroke: '#90A4AE',
-            strokeWidth: 2,
-            fill: '#ffffff',
-            style: { visibility: 'hidden' },
-          },
-        },
+        attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
       },
     },
     items,
   };
-};
+}
 
-// 创建节点模板
-const createNodeTemplate = (type: GraphNodeType) => {
-  const item = typeItems.find((i) => i.value === type)!;
-  const id = `template-${type}`;
+// 添加节点
+function addNode(type: GraphNodeType, x: number, y: number, name?: string) {
+  const graph = graphRef.value;
+  if (!graph) return null;
   
-  return {
-    shape: 'eeg-node',
+  const config = nodeTypes[type];
+  const nodeId = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  
+  const node = graph.addNode({
+    id: nodeId,
+    shape: 'html',
+    x,
+    y,
     width: 180,
     height: 70,
-    ports: createPorts(id, type),
-    data: {
-      id,
-      type,
-      name: item.title,
-      params: getDefaultParams(type),
-    },
-  };
-};
+    html: createNodeHtml(type, name || config.name),
+    ports: createPorts(type),
+    data: { type, name: name || config.name },
+  });
+  
+  hasNodes.value = true;
+  return node;
+}
 
-const getDefaultParams = (type: GraphNodeType): Record<string, any> => {
-  switch (type) {
-    case 'FILTER':
-      return { type: '低通', cutoff: 30, order: 4 };
-    case 'SOURCE':
-      return { device: '模拟设备', sampleRate: 1000 };
-    case 'REPLAY':
-      return { file: '', loop: false };
-    case 'SAVE':
-      return { filename: 'data.csv', format: 'CSV' };
-    case 'SPLIT':
-      return { groups: '1-4,5-8' };
-    default:
-      return {};
+// 拖拽开始
+function onDragStart(e: DragEvent, type: GraphNodeType) {
+  e.dataTransfer?.setData('node-type', type);
+  e.dataTransfer!.effectAllowed = 'copy';
+}
+
+// 从后端加载数据
+async function loadFromBackend() {
+  const graph = graphRef.value;
+  if (!graph) return;
+  
+  try {
+    const payload = await fetchGraph();
+    frozen.value = payload.frozen;
+    
+    payload.nodes.forEach((node: GraphNode) => {
+      graph.addNode({
+        id: node.id,
+        shape: 'html',
+        x: node.x,
+        y: node.y,
+        width: 180,
+        height: 70,
+        html: createNodeHtml(node.type, node.name),
+        ports: createPorts(node.type),
+        data: node,
+      });
+    });
+    
+    payload.edges.forEach((edge) => {
+      graph.addEdge({
+        id: edge.id,
+        source: { cell: edge.source, port: `${edge.source}-out` },
+        target: { cell: edge.target, port: `${edge.target}-in` },
+        attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+      });
+    });
+    
+    hasNodes.value = graph.getNodes().length > 0;
+    setGraphInteracting(graph, !frozen.value);
+  } catch (err) {
+    console.error('Failed to load graph:', err);
   }
-};
+}
 
-const buildPayload = (): GraphPayload => {
+function setGraphInteracting(graph: Graph, enabled: boolean) {
+  graph.toggleClipboard(enabled);
+}
+
+async function applyFrozen() {
+  const graph = graphRef.value;
+  if (!graph) return;
+  await setGraphFrozen(frozen.value);
+  setGraphInteracting(graph, !frozen.value);
+}
+
+function buildPayload(): GraphPayload {
   const graph = graphRef.value;
   if (!graph) return { nodes: [], edges: [], frozen: frozen.value };
   
@@ -179,90 +288,56 @@ const buildPayload = (): GraphPayload => {
   }));
   
   return { nodes, edges, frozen: frozen.value };
-};
+}
 
-const save = async () => {
+async function save() {
   await saveGraph(buildPayload());
-};
+}
 
-const run = async () => {
+async function run() {
   await runGraph();
-};
+}
 
-const clear = () => {
+function clear() {
   const graph = graphRef.value;
   if (!graph) return;
   graph.clearCells();
-};
+  hasNodes.value = false;
+}
 
-const loadMockData = async () => {
-  const mockData = {
-    nodes: [
-      { id: 'node-source-001', type: 'SOURCE', name: '脑电数据源', x: 50, y: 100, params: { device: '模拟设备', sampleRate: 1000 } },
-      { id: 'node-filter-001', type: 'FILTER', name: '低通滤波器', x: 300, y: 100, params: { type: '低通', cutoff: 30, order: 4 } },
-      { id: 'node-split-001', type: 'SPLIT', name: '通道分离', x: 550, y: 100, params: { groups: '1-4,5-8' } },
-      { id: 'node-osc-001', type: 'OSC', name: '波形显示器', x: 800, y: 100, params: { windowSize: 5, channels: '全部通道' } },
-    ],
-    edges: [
-      { id: 'edge-001', source: 'node-source-001', target: 'node-filter-001' },
-      { id: 'edge-002', source: 'node-filter-001', target: 'node-split-001' },
-      { id: 'edge-003', source: 'node-split-001', target: 'node-osc-001' },
-    ],
-    frozen: false
-  };
-
+async function loadMockData() {
   const graph = graphRef.value;
   if (!graph) return;
 
-  // 清除现有节点
   graph.clearCells();
-
-  // 添加节点
-  mockData.nodes.forEach((node) => {
-    graph.addNode({
-      id: node.id,
-      shape: 'eeg-node',
-      x: node.x,
-      y: node.y,
-      width: 180,
-      height: 70,
-      ports: createPorts(node.id, node.type),
-      data: node,
-    });
-  });
-
-  // 添加边
-  mockData.edges.forEach((edge) => {
-    const sourceNode = graph.getCellById(edge.source) as Node;
-    const targetNode = graph.getCellById(edge.target) as Node;
-    if (!sourceNode || !targetNode) return;
-
-    graph.addEdge({
-      id: edge.id,
-      source: { cell: edge.source, port: `${edge.source}-out` },
-      target: { cell: edge.target, port: `${edge.target}-in` },
-      attrs: { line: { stroke: typeColors.FILTER, strokeWidth: 2, targetMarker: 'block' } },
-    });
+  
+  const nodes = [
+    { type: 'SOURCE' as GraphNodeType, x: 50, y: 100, name: '脑电数据源' },
+    { type: 'FILTER' as GraphNodeType, x: 300, y: 100, name: '低通滤波器' },
+    { type: 'SPLIT' as GraphNodeType, x: 550, y: 100, name: '通道分离' },
+    { type: 'OSC' as GraphNodeType, x: 800, y: 100, name: '波形显示器' },
+  ];
+  
+  const nodeIds: string[] = [];
+  nodes.forEach((n) => {
+    const node = addNode(n.type, n.x, n.y, n.name);
+    if (node) nodeIds.push(node.id);
   });
   
-  // 保存到后端
-  await saveGraph(mockData);
-};
-
-const setGraphInteracting = (graph: Graph, enabled: boolean) => {
-  graph.toggleClipboard(enabled);
-  graph.toggleKeyboard(enabled);
-};
-
-const applyFrozen = async () => {
-  const graph = graphRef.value;
-  if (!graph) return;
-  await setGraphFrozen(frozen.value);
-  setGraphInteracting(graph, !frozen.value);
-};
+  // 创建边
+  for (let i = 0; i < nodeIds.length - 1; i++) {
+    graph.addEdge({
+      source: { cell: nodeIds[i], port: 'out' },
+      target: { cell: nodeIds[i + 1], port: 'in' },
+      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+    });
+  }
+  
+  await saveGraph(buildPayload());
+}
 
 onMounted(async () => {
-  if (!container.value || !stencilContainer.value) return;
+  if (!container.value) return;
 
   // 创建画布
   const graph = new Graph({
@@ -279,9 +354,7 @@ onMounted(async () => {
       highlight: true,
       createEdge() {
         return graph.createEdge({
-          attrs: {
-            line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' },
-          },
+          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
         });
       },
       validateConnection({ sourceMagnet, targetMagnet }) {
@@ -293,70 +366,49 @@ onMounted(async () => {
     highlighting: {
       magnetAdsorbed: {
         name: 'stroke',
-        args: {
-          attrs: {
-            fill: '#5F95FF',
-            stroke: '#5F95FF',
-          },
-        },
+        args: { attrs: { fill: '#5F95FF', stroke: '#5F95FF' } },
       },
     },
   });
 
   graphRef.value = graph;
-
+  
   // 添加对齐线
   graph.use(new Snapline({ enabled: true }));
 
-  // 创建 Stencil
-  const stencil = new Stencil({
-    title: '节点库',
-    target: graph,
-    stencilGraphWidth: 220,
-    stencilGraphHeight: 600,
-    collapsable: true,
-    groups: [
-      { title: '数据来源', name: 'source' },
-      { title: '处理节点', name: 'process' },
-      { title: '显示与保存', name: 'output' },
-    ],
-    layoutOptions: {
-      columns: 1,
-      columnWidth: 200,
-      rowHeight: 80,
-      dx: 10,
-      dy: 10,
-    },
+  // 拖拽放置处理
+  container.value.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.dataTransfer!.dropEffect = 'copy';
   });
 
-  stencilRef.value = stencil;
-  stencilContainer.value.appendChild(stencil.container);
-
-  // 加载节点模板到 Stencil
-  const sourceNodes = typeItems.filter((i) => i.group === 'source').map((i) => createNodeTemplate(i.value));
-  const processNodes = typeItems.filter((i) => i.group === 'process').map((i) => createNodeTemplate(i.value));
-  const outputNodes = typeItems.filter((i) => i.group === 'output').map((i) => createNodeTemplate(i.value));
-
-  stencil.load(sourceNodes, 'source');
-  stencil.load(processNodes, 'process');
-  stencil.load(outputNodes, 'output');
+  container.value.addEventListener('drop', (e) => {
+    e.preventDefault();
+    const type = e.dataTransfer?.getData('node-type') as GraphNodeType;
+    if (!type || !container.value) return;
+    
+    const rect = container.value.getBoundingClientRect();
+    const x = e.clientX - rect.left - 90;
+    const y = e.clientY - rect.top - 35;
+    
+    addNode(type, x, y);
+  });
 
   // 节点悬停显示端口
   graph.on('node:mouseenter', ({ node }) => {
     node.getPorts().forEach((port) => {
-      node.setPortProp(port.id, 'attrs/circle/style/visibility', 'visible');
+      node.setPortProp(port.id!, 'attrs/circle/style/visibility', 'visible');
     });
   });
 
   graph.on('node:mouseleave', ({ node }) => {
     node.getPorts().forEach((port) => {
       const edges = graph.getConnectedEdges(node);
-      const isConnected = edges.some(
-        (e) => e.getSourcePortId() === port.id || e.getTargetPortId() === port.id
+      const isConnected = edges.some((e) => 
+        e.getSourcePortId() === port.id || e.getTargetPortId() === port.id
       );
-      node.setPortProp(port.id, 'attrs/circle/style/visibility', isConnected ? 'visible' : 'hidden');
-      node.setPortProp(port.id, 'attrs/circle/fill', isConnected ? '#5F95FF' : '#ffffff');
-      node.setPortProp(port.id, 'attrs/circle/stroke', isConnected ? '#5F95FF' : '#90A4AE');
+      node.setPortProp(port.id!, 'attrs/circle/style/visibility', isConnected ? 'visible' : 'hidden');
+      node.setPortProp(port.id!, 'attrs/circle/fill', isConnected ? '#5F95FF' : '#fff');
     });
   });
 
@@ -369,7 +421,7 @@ onMounted(async () => {
     edge.removeTools();
   });
 
-  // 连接成功后高亮端口
+  // 连接成功高亮
   graph.on('edge:connected', ({ currentCell, currentPort }) => {
     if (currentCell && currentPort) {
       currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#5F95FF');
@@ -378,56 +430,18 @@ onMounted(async () => {
     }
   });
 
-  // 双击编辑
-  graph.on('node:dblclick', ({ node }) => {
-    if (frozen.value) return;
-    // TODO: 打开编辑对话框
-    console.log('Edit node:', node.getData());
-  });
-
   // 加载数据
-  try {
-    const payload = await fetchGraph();
-    frozen.value = payload.frozen;
-    
-    payload.nodes.forEach((node) => {
-      graph.addNode({
-        id: node.id,
-        shape: 'eeg-node',
-        x: node.x,
-        y: node.y,
-        width: 180,
-        height: 70,
-        ports: createPorts(node.id, node.type),
-        data: node,
-      });
-    });
-    
-    payload.edges.forEach((edge) => {
-      graph.addEdge({
-        id: edge.id,
-        source: { cell: edge.source, port: `${edge.source}-out` },
-        target: { cell: edge.target, port: `${edge.target}-in` },
-        attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-      });
-    });
-    
-    setGraphInteracting(graph, !frozen.value);
-  } catch (err) {
-    console.error('Failed to load graph:', err);
-  }
+  await nextTick();
+  await loadFromBackend();
 });
 
 onUnmounted(() => {
   graphRef.value?.dispose();
-  stencilRef.value?.dispose();
 });
-
-watch(frozen, () => applyFrozen());
 </script>
 
 <style scoped>
-.graph-layout {
+.graph-wrapper {
   display: flex;
   height: 600px;
   border: 1px solid #e0e0e0;
@@ -435,31 +449,94 @@ watch(frozen, () => applyFrozen());
   overflow: hidden;
 }
 
-.stencil-container {
-  width: 240px;
+.palette {
+  width: 220px;
   height: 100%;
   border-right: 1px solid #e0e0e0;
   background: #fff;
+  overflow-y: auto;
+}
+
+.palette-title {
+  padding: 16px;
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.palette-group {
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.group-title {
+  padding: 12px 16px;
+  font-size: 12px;
+  color: #666;
+  background: #fafafa;
+  font-weight: 500;
+}
+
+.palette-item {
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: grab;
+  transition: background 0.2s;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.palette-item:hover {
+  background: #f5f5f5;
+}
+
+.palette-item:active {
+  cursor: grabbing;
+}
+
+.item-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.item-name {
+  font-size: 14px;
+  color: #333;
 }
 
 .graph-container {
   flex: 1;
   height: 100%;
   background: #fafafa;
+  position: relative;
 }
 
-/* Stencil 样式覆盖 */
-:deep(.x6-widget-stencil) {
-  background-color: #fff;
+.graph-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  color: #90a4ae;
+  pointer-events: none;
 }
 
-:deep(.x6-widget-stencil-title) {
-  background-color: #f5f5f5;
-  font-weight: 600;
+.hint-text {
+  font-size: 16px;
+  margin-top: 8px;
+  color: #607d8b;
 }
 
-:deep(.x6-widget-stencil-group-title) {
-  background-color: #fafafa !important;
-  font-weight: 500;
+.hint-sub {
+  font-size: 13px;
+  margin-top: 4px;
 }
 </style>
