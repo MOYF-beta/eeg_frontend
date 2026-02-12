@@ -1,11 +1,68 @@
 <template>
   <v-card class="mb-4" variant="tonal">
     <v-card-title class="d-flex align-center justify-space-between">
-      波形可视化（基础版）
-      <v-chip size="small" :color="statusColor">{{ statusText }}</v-chip>
+      <div class="d-flex align-center">
+        波形可视化
+        <v-tooltip location="bottom">
+          <template #activator="{ props }">
+            <v-icon v-bind="props" size="small" class="ml-2" color="info">
+              mdi-information
+            </v-icon>
+          </template>
+          <div>
+            <div>数据源：{{ dataSourceText }}</div>
+            <div v-if="targetNode">绑定节点: {{ targetNode.name }}</div>
+          </div>
+        </v-tooltip>
+      </div>
+      
+      <div class="d-flex align-center ga-2">
+        <!-- 数据源选择 -->
+        <v-select
+          v-model="selectedNodeId"
+          :items="availableOscNodes"
+          item-title="name"
+          item-value="id"
+          density="compact"
+          variant="outlined"
+          hide-details
+          placeholder="选择数据源"
+          style="width: 200px"
+          class="mr-2"
+          @update:model-value="onNodeSelected"
+        >
+          <template #item="{ props, item }">
+            <v-list-item v-bind="props">
+              <template #append>
+                <v-chip v-if="isNodeBound(item.raw.id)" size="x-small" color="primary">
+                  已绑定
+                </v-chip>
+              </template>
+            </v-list-item>
+          </template>
+        </v-select>
+        
+        <v-chip size="small" :color="statusColor">
+          <v-icon left size="small">{{ statusIcon }}</v-icon>
+          {{ statusText }}
+        </v-chip>
+      </div>
     </v-card-title>
+    
     <v-divider />
+    
     <v-card-text>
+      <!-- 未选择数据源提示 -->
+      <v-alert v-if="!selectedNodeId" type="info" class="mb-4">
+        请从上方下拉菜单选择计算图中的示波器节点作为数据源。
+        <a href="#/cpgraph" target="_blank">前往计算图编辑器 →</a>
+      </v-alert>
+      
+      <!-- 计算图未冻结提示 -->
+      <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
+        计算图未冻结。请在<a href="#/cpgraph" target="_blank">计算图编辑器</a>中点击"冻结"按钮启动数据流。
+      </v-alert>
+      
       <div class="osc-root">
         <div class="osc-controls">
           <div class="control">
@@ -16,6 +73,7 @@
               density="compact"
               variant="outlined"
               hide-details
+              :disabled="!canDisplay"
             />
           </div>
           <div class="control control-wide">
@@ -27,7 +85,15 @@
               :step="1"
               density="compact"
               hide-details
+              :disabled="!canDisplay"
             />
+          </div>
+          <div class="control">
+            <div class="control-label">数据状态</div>
+            <div class="text-body-2">
+              <div>接收: {{ packetCount }} 包</div>
+              <div>最后: {{ lastPacketTimeStr }}</div>
+            </div>
           </div>
         </div>
 
@@ -40,6 +106,11 @@
 
           <div class="osc-canvas-wrap">
             <canvas ref="canvasRef" class="osc-canvas"></canvas>
+            <!-- 无数据遮罩 -->
+            <div v-if="!canDisplay" class="no-data-overlay">
+              <v-icon size="48" color="grey-lighten-1">mdi-waveform</v-icon>
+              <div class="text-h6 mt-2">{{ noDataText }}</div>
+            </div>
           </div>
 
           <div class="osc-scales">
@@ -52,6 +123,7 @@
                 :step="0.1"
                 density="compact"
                 hide-details
+                :disabled="!canDisplay"
               />
             </div>
           </div>
@@ -63,106 +135,171 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { createEegSocket, type EegPacket } from '../services/ws';
-import { graphRuntime } from '../services/runtime';
+import { sessionStore } from '../services/sessionStore';
+import { eegWebSocket, type EegDataPacket } from '../services/websocket';
+import { fetchGraph } from '../services/graph';
+import type { GraphNode } from '../services/graph';
 
+// 配置
 const channelCount = 8;
 const rowHeight = 90;
-const channelScales = ref<number[]>(Array.from({ length: channelCount }, () => 1));
-const timeWindowSec = ref(5);
+
+// 状态
+const canvasRef = ref<HTMLCanvasElement | null>(null);
 const mode = ref<'scan' | 'scroll'>('scroll');
-const modeItems = [
-  { title: '扫描', value: 'scan' },
-  { title: '滚动', value: 'scroll' },
-];
+const timeWindowSec = ref(5);
+const channelScales = ref<number[]>(Array.from({ length: channelCount }, () => 1));
 const samples: Array<Array<{ t: number; v: number }>> = Array.from(
   { length: channelCount },
   () => [],
 );
-const canvasRef = ref<HTMLCanvasElement | null>(null);
-const status = ref<'open' | 'close' | 'error'>('close');
-let ws: WebSocket | null = null;
-let resizeObserver: ResizeObserver | null = null;
-let animationId = 0;
-let sweepStart = 0;
+
+// 数据源
+const selectedNodeId = ref<string | null>(null);
+const graphNodes = ref<GraphNode[]>([]);
+const isGraphFrozen = ref(false);
+const packetCount = ref(0);
 const lastPacketTime = ref<number>(0);
 
+// WebSocket 状态
+const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+
+// 计算属性
+const modeItems = [
+  { title: '扫描', value: 'scan' },
+  { title: '滚动', value: 'scroll' },
+];
+
+const availableOscNodes = computed(() => {
+  return graphNodes.value.filter(n => n.type === 'OSC');
+});
+
+const targetNode = computed(() => {
+  if (!selectedNodeId.value) return null;
+  return graphNodes.value.find(n => n.id === selectedNodeId.value);
+});
+
+const canDisplay = computed(() => {
+  return selectedNodeId.value && isGraphFrozen.value;
+});
+
 const statusText = computed(() => {
-  if (status.value === 'open') return '在线';
-  if (status.value === 'error') return '错误';
+  if (!selectedNodeId.value) return '未选择';
+  if (!isGraphFrozen.value) return '未冻结';
+  if (wsStatus.value === 'connected') return '接收中';
+  if (wsStatus.value === 'connecting') return '连接中';
+  if (wsStatus.value === 'error') return '错误';
   return '离线';
 });
 
 const statusColor = computed(() => {
-  if (status.value === 'open') return 'green';
-  if (status.value === 'error') return 'red';
+  if (!selectedNodeId.value) return 'grey';
+  if (!isGraphFrozen.value) return 'warning';
+  if (wsStatus.value === 'connected') return 'success';
+  if (wsStatus.value === 'connecting') return 'info';
+  if (wsStatus.value === 'error') return 'error';
   return 'grey';
 });
 
-onMounted(() => {
-  const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-  const host = 'localhost';
-  const url = `${protocol}://${host}:8000/ws/stream/`;
-  ws = createEegSocket(
-    url,
-    (packet: EegPacket) => {
-      const t = typeof packet.t === 'number' ? packet.t : Date.now() / 1000;
-      lastPacketTime.value = t;
-      if (sweepStart === 0) sweepStart = t;
-      packet.channels.slice(0, channelCount).forEach((v, idx) => {
-        samples[idx].push({ t, v });
-      });
-      pruneSamples(t);
-    },
-    (s) => (status.value = s),
-  );
+const statusIcon = computed(() => {
+  if (!selectedNodeId.value) return 'mdi-help-circle';
+  if (!isGraphFrozen.value) return 'mdi-pause-circle';
+  if (wsStatus.value === 'connected') return 'mdi-check-circle';
+  if (wsStatus.value === 'connecting') return 'mdi-loading';
+  if (wsStatus.value === 'error') return 'mdi-alert-circle';
+  return 'mdi-checkbox-blank-circle-outline';
+});
 
-  // 订阅计算图runtime数据
-  const unsubscribe = graphRuntime.subscribe((packet: EegPacket) => {
-    const t = typeof packet.t === 'number' ? packet.t : Date.now() / 1000;
-    lastPacketTime.value = t;
-    if (sweepStart === 0) sweepStart = t;
-    packet.channels.slice(0, channelCount).forEach((v, idx) => {
-      samples[idx].push({ t, v });
-    });
-    pruneSamples(t);
-    // 更新状态为在线
-    status.value = 'open';
-  });
+const dataSourceText = computed(() => {
+  if (!selectedNodeId.value) return '未选择数据源';
+  const node = graphNodes.value.find(n => n.id === selectedNodeId.value);
+  return node ? node.name : selectedNodeId.value;
+});
 
-  // 保存取消订阅函数
-  (window as unknown as { __oscUnsubscribe?: () => void }).__oscUnsubscribe = unsubscribe;
+const noDataText = computed(() => {
+  if (!selectedNodeId.value) return '请选择数据源';
+  if (!isGraphFrozen.value) return '计算图未冻结';
+  return '等待数据...';
+});
 
-  resizeObserver = new ResizeObserver(() => resizeCanvas());
-  if (canvasRef.value) {
-    resizeObserver.observe(canvasRef.value);
-    resizeCanvas();
+const lastPacketTimeStr = computed(() => {
+  if (!lastPacketTime.value) return '-';
+  const diff = (Date.now() / 1000 - lastPacketTime.value).toFixed(1);
+  return `${diff}s 前`;
+});
+
+// 检查节点是否已被其他示波器绑定
+function isNodeBound(nodeId: string): boolean {
+  const mappings = sessionStore.getOutputMappings();
+  // 检查是否有其他示波器绑定了这个节点
+  // 注意：当前示波器组件只是一个视图，实际的示波器实例在 sessionStore 中管理
+  // 这里简化处理，只检查是否有绑定
+  return Object.keys(mappings).includes(nodeId);
+}
+
+// 节点选择处理
+function onNodeSelected(nodeId: string | null) {
+  if (!nodeId) {
+    selectedNodeId.value = null;
+    return;
   }
-  animationId = requestAnimationFrame(drawLoop);
-});
+  
+  selectedNodeId.value = nodeId;
+  
+  // 更新 SessionStorage 的映射
+  // 注意：这里假设每个示波器组件实例对应一个示波器ID
+  // 实际使用时应该从 props 传入 oscId
+  const oscId = 'osc-default'; // 默认示波器ID
+  sessionStore.bindOutputNode(nodeId, oscId);
+  
+  // 清空历史数据
+  samples.forEach(ch => ch.length = 0);
+  packetCount.value = 0;
+}
 
-onUnmounted(() => {
-  ws?.close();
-  // 取消runtime订阅
-  const unsubscribe = (window as unknown as { __oscUnsubscribe?: () => void }).__oscUnsubscribe;
-  if (unsubscribe) unsubscribe();
-  if (resizeObserver && canvasRef.value) resizeObserver.unobserve(canvasRef.value);
-  if (animationId) cancelAnimationFrame(animationId);
-});
+// 加载计算图节点
+async function loadGraphNodes() {
+  try {
+    const payload = await fetchGraph();
+    graphNodes.value = payload.nodes;
+    isGraphFrozen.value = payload.frozen;
+    sessionStore.setGraph(payload);
+  } catch (err) {
+    console.error('Failed to load graph:', err);
+    const stored = sessionStore.getGraph();
+    graphNodes.value = stored.nodes;
+    isGraphFrozen.value = stored.frozen;
+  }
+}
 
-watch([timeWindowSec, mode], () => {
-  if (lastPacketTime.value) sweepStart = lastPacketTime.value;
-  pruneSamples(lastPacketTime.value || Date.now() / 1000);
-});
+// WebSocket 数据处理
+function handleDataPacket(packet: EegDataPacket) {
+  // 只处理选中的节点数据
+  if (packet.nodeId !== selectedNodeId.value) return;
+  
+  const t = packet.timestamp / 1000;
+  lastPacketTime.value = t;
+  packetCount.value++;
+  
+  packet.channels.slice(0, channelCount).forEach((v, idx) => {
+    samples[idx].push({ t, v });
+  });
+  
+  pruneSamples(t);
+}
 
-const pruneSamples = (now: number) => {
+function pruneSamples(now: number) {
   const cutoff = now - timeWindowSec.value;
   samples.forEach((ch) => {
     while (ch.length && ch[0].t < cutoff) ch.shift();
   });
-};
+}
 
-const resizeCanvas = () => {
+// 绘图
+let animationId = 0;
+let sweepStart = 0;
+
+function resizeCanvas() {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const dpr = window.devicePixelRatio || 1;
@@ -172,14 +309,9 @@ const resizeCanvas = () => {
   canvas.height = Math.floor(height * dpr);
   const ctx = canvas.getContext('2d');
   if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-};
+}
 
-const drawLoop = () => {
-  drawWaveform();
-  animationId = requestAnimationFrame(drawLoop);
-};
-
-const drawWaveform = () => {
+function drawWaveform() {
   const canvas = canvasRef.value;
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
@@ -194,6 +326,7 @@ const drawWaveform = () => {
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, width, height);
 
+  // 绘制网格线
   ctx.strokeStyle = '#e0e0e0';
   ctx.lineWidth = 1;
   for (let i = 0; i <= channelCount; i += 1) {
@@ -214,6 +347,7 @@ const drawWaveform = () => {
     const midY = rowTop + rowHeight / 2;
     const scale = channelScales.value[idx] || 1;
 
+    // 垂直网格线
     ctx.strokeStyle = '#cfd8dc';
     ctx.lineWidth = 1;
     const tickCount = 4;
@@ -225,6 +359,7 @@ const drawWaveform = () => {
       ctx.stroke();
     }
 
+    // 绘制波形
     ctx.strokeStyle = '#1976d2';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
@@ -253,6 +388,7 @@ const drawWaveform = () => {
     });
     ctx.stroke();
 
+    // 中线
     ctx.strokeStyle = '#bdbdbd';
     ctx.setLineDash([4, 4]);
     ctx.beginPath();
@@ -261,12 +397,14 @@ const drawWaveform = () => {
     ctx.stroke();
     ctx.setLineDash([]);
 
+    // 缩放标签
     ctx.fillStyle = '#607d8b';
     ctx.font = '12px sans-serif';
     ctx.textAlign = 'right';
     ctx.fillText(`${(1 / scale).toFixed(1)}x`, leftPad - 6, rowTop + 14);
   });
 
+  // 时间轴标签
   ctx.fillStyle = '#546e7a';
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'center';
@@ -278,7 +416,68 @@ const drawWaveform = () => {
   }
   ctx.textAlign = 'left';
   ctx.fillText('s', leftPad + plotWidth + 4, height - 6);
-};
+}
+
+function drawLoop() {
+  drawWaveform();
+  animationId = requestAnimationFrame(drawLoop);
+}
+
+// 生命周期
+let wsUnsubscribe: (() => void) | null = null;
+let wsStatusUnsubscribe: (() => void) | null = null;
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(async () => {
+  await loadGraphNodes();
+  
+  // 如果有绑定的节点，自动选择
+  const mappings = sessionStore.getOutputMappings();
+  const oscId = 'osc-default';
+  const boundNodeId = Object.entries(mappings).find(([_, id]) => id === oscId)?.[0];
+  if (boundNodeId) {
+    selectedNodeId.value = boundNodeId;
+  }
+  
+  // 订阅 WebSocket 数据
+  wsUnsubscribe = eegWebSocket.onData(handleDataPacket);
+  
+  // 订阅 WebSocket 状态
+  wsStatusUnsubscribe = eegWebSocket.onStatusChange((status) => {
+    wsStatus.value = status;
+  });
+  
+  // 监听 sessionStore 变化
+  sessionStore.subscribe((state) => {
+    if (state.graph.nodes.length > 0) {
+      graphNodes.value = state.graph.nodes;
+    }
+    isGraphFrozen.value = state.graph.frozen;
+  });
+  
+  // 初始化画布
+  resizeObserver = new ResizeObserver(() => resizeCanvas());
+  if (canvasRef.value) {
+    resizeObserver.observe(canvasRef.value);
+    resizeCanvas();
+  }
+  
+  // 启动动画循环
+  animationId = requestAnimationFrame(drawLoop);
+});
+
+onUnmounted(() => {
+  if (wsUnsubscribe) wsUnsubscribe();
+  if (wsStatusUnsubscribe) wsStatusUnsubscribe();
+  if (resizeObserver && canvasRef.value) resizeObserver.unobserve(canvasRef.value);
+  if (animationId) cancelAnimationFrame(animationId);
+});
+
+// 监听时间窗口变化
+watch([timeWindowSec, mode], () => {
+  if (lastPacketTime.value) sweepStart = lastPacketTime.value;
+  pruneSamples(lastPacketTime.value || Date.now() / 1000);
+});
 </script>
 
 <style scoped>
@@ -288,7 +487,7 @@ const drawWaveform = () => {
 }
 .osc-controls {
   display: grid;
-  grid-template-columns: 180px 1fr;
+  grid-template-columns: 180px 1fr 120px;
   gap: 16px;
   align-items: center;
 }
@@ -328,6 +527,19 @@ const drawWaveform = () => {
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   background: #fff;
+}
+.no-data-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.9);
+  color: #666;
 }
 .osc-scales {
   display: grid;
