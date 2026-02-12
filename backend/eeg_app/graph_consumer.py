@@ -5,7 +5,7 @@ from channels.generic.websocket import AsyncWebsocketConsumer
 
 
 class EegGraphConsumer(AsyncWebsocketConsumer):
-    """计算图数据流 WebSocket Consumer
+    """计算图数据流 WebSocket Consumer (支持SAVE/REPLAY)
     
     消息格式:
     客户端 -> 服务器:
@@ -24,6 +24,8 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         self.subscribed_nodes = set()
         self.running = True
         self.graph_frozen = False
+        self._save_nodes = []  # SAVE节点列表
+        self._replay_nodes = []  # REPLAY节点列表
         
         # 从 graph_store 获取计算图状态
         from .graph_store import get_graph
@@ -32,13 +34,82 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         
         print(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
         
+        # 初始化SAVE和REPLAY节点
+        self._init_save_replay_nodes(graph)
+        
         # 如果计算图已冻结，开始发送数据
         if self.graph_frozen:
             asyncio.create_task(self.stream_data())
     
     async def disconnect(self, code):
         self.running = False
+        # 停止所有录制和回放
+        self._stop_all_save_replay()
         print(f"[WebSocket] Client disconnected, code: {code}")
+    
+    def _init_save_replay_nodes(self, graph):
+        """初始化SAVE和REPLAY节点"""
+        from .data_recorder import start_recording
+        from .data_replay import start_replay
+        
+        nodes = graph.get('nodes', [])
+        
+        # 收集SAVE节点
+        self._save_nodes = []
+        for node in nodes:
+            if node.get('type') == 'SAVE':
+                params = node.get('params', {})
+                filename = params.get('filename')
+                format_type = params.get('format', 'CSV')
+                
+                result = start_recording(
+                    node_id=node['id'],
+                    filename=filename,
+                    format=format_type
+                )
+                if result.get('ok'):
+                    self._save_nodes.append(node['id'])
+                    print(f"[WebSocket] SAVE node initialized: {node['id']} -> {result.get('filepath')}")
+                else:
+                    print(f"[WebSocket] SAVE node failed: {node['id']} - {result.get('error')}")
+        
+        # 收集REPLAY节点
+        self._replay_nodes = []
+        for node in nodes:
+            if node.get('type') == 'REPLAY':
+                params = node.get('params', {})
+                filename = params.get('file')
+                if isinstance(filename, list) and filename:
+                    filename = filename[0]  # v-file-input returns array
+                loop = params.get('loop', False)
+                
+                if filename:
+                    result = start_replay(
+                        node_id=node['id'],
+                        filename=filename,
+                        loop=loop
+                    )
+                    if result.get('ok'):
+                        self._replay_nodes.append(node['id'])
+                        print(f"[WebSocket] REPLAY node initialized: {node['id']} -> {result.get('filename')}")
+                    else:
+                        print(f"[WebSocket] REPLAY node failed: {node['id']} - {result.get('error')}")
+    
+    def _stop_all_save_replay(self):
+        """停止所有录制和回放"""
+        from .data_recorder import stop_recording
+        from .data_replay import stop_replay
+        
+        for node_id in self._save_nodes:
+            result = stop_recording(node_id)
+            print(f"[WebSocket] SAVE stopped: {node_id} - {result}")
+        
+        for node_id in self._replay_nodes:
+            result = stop_replay(node_id)
+            print(f"[WebSocket] REPLAY stopped: {node_id} - {result}")
+        
+        self._save_nodes = []
+        self._replay_nodes = []
     
     async def receive(self, text_data):
         """处理客户端消息"""
@@ -66,7 +137,24 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
             elif msg_type == 'command':
                 command = message.get('command')
                 print(f"[WebSocket] Received command: {command}")
-                # TODO: 处理控制命令
+                
+            elif msg_type == 'get_recordings':
+                # 返回活跃录制列表
+                from .data_recorder import get_active_recordings
+                recordings = get_active_recordings()
+                await self.send(text_data=json.dumps({
+                    'type': 'recordings',
+                    'recordings': recordings
+                }))
+                
+            elif msg_type == 'get_saved_files':
+                # 返回已保存文件列表
+                from .data_recorder import list_saved_files
+                files = list_saved_files()
+                await self.send(text_data=json.dumps({
+                    'type': 'saved_files',
+                    'files': files
+                }))
                 
         except json.JSONDecodeError:
             await self.send(text_data=json.dumps({
@@ -78,6 +166,28 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 'type': 'error',
                 'error': str(e)
             }))
+    
+    def _get_source_channels(self):
+        """获取数据源通道数据（支持REPLAY节点）"""
+        from .data_replay import read_next_sample, is_replaying
+        
+        # 优先使用REPLAY节点作为数据源
+        for node_id in self._replay_nodes:
+            if is_replaying(node_id):
+                sample = read_next_sample(node_id)
+                if sample:
+                    return sample['channels']
+        
+        # 没有REPLAY节点或回放结束，返回None
+        return None
+    
+    def _save_channels(self, channels):
+        """保存通道数据到所有SAVE节点"""
+        from .data_recorder import write_sample
+        
+        timestamp = time.time() * 1000
+        for node_id in self._save_nodes:
+            write_sample(node_id, timestamp, channels)
     
     async def stream_data(self):
         """发送计算图处理后的数据"""
@@ -91,8 +201,6 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         dt = 1.0 / sample_rate
         
         # 50Hz 低通滤波器（一阶RC滤波器）
-        # RC = 1 / (2 * pi * fc) = 1 / (2 * pi * 50) ≈ 0.00318
-        # alpha = dt / (RC + dt) = 0.001 / (0.00318 + 0.001) ≈ 0.24
         FILTER_CUTOFF = 50  # Hz
         RC = 1.0 / (2 * math.pi * FILTER_CUTOFF)
         alpha = dt / (RC + dt)
@@ -100,6 +208,9 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         # 每通道的滤波器状态
         filtered_values = [0.0] * 8
         first_sample = [True] * 8
+        
+        # 检查是否有REPLAY节点
+        has_replay = len(self._replay_nodes) > 0
         
         while self.running:
             # 刷新计算图状态
@@ -116,25 +227,18 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 await asyncio.sleep(0.1)
                 continue
             
-            # 获取计算图节点
-            nodes = graph.get('nodes', [])
+            # 获取数据源
+            replay_channels = self._get_source_channels()
             
-            # 为每个订阅的OSC节点生成数据
-            for node in nodes:
-                if node['type'] != 'OSC':
-                    continue
-                if node['id'] not in self.subscribed_nodes:
-                    continue
-                
-                # 获取节点参数
-                params = node.get('params', {})
-                time_window = params.get('timeWindow', 5)
-                
+            if replay_channels is not None:
+                # 使用回放数据
+                raw_channels = replay_channels
+            else:
                 # 生成模拟数据（方波 + 噪声，25Hz方波用于测试）
                 raw_channels = []
                 for i in range(8):
-                    # 方波信号 - 25Hz（用于测试50Hz低通滤波器效果）
-                    freq = 25  # 25Hz方波
+                    # 方波信号 - 25Hz
+                    freq = 25
                     square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
                     square_signal = square * 30
                     
@@ -148,17 +252,31 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                     random_noise = random.uniform(-5, 5)
                     
                     raw_channels.append(square_signal + noise + random_noise)
-                
-                # 应用50Hz低通滤波器
-                channels = []
-                for i in range(8):
-                    if first_sample[i]:
-                        filtered_values[i] = raw_channels[i]
-                        first_sample[i] = False
-                    else:
-                        # 一阶低通滤波器: y[n] = alpha * x[n] + (1-alpha) * y[n-1]
-                        filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
-                    channels.append(filtered_values[i])
+            
+            # 应用50Hz低通滤波器
+            channels = []
+            for i in range(8):
+                if first_sample[i]:
+                    filtered_values[i] = raw_channels[i]
+                    first_sample[i] = False
+                else:
+                    # 一阶低通滤波器
+                    filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
+                channels.append(filtered_values[i])
+            
+            # 保存数据到文件（如果有SAVE节点）
+            if self._save_nodes:
+                self._save_channels(channels)
+            
+            # 获取计算图节点并发送数据
+            nodes = graph.get('nodes', [])
+            
+            # 为每个订阅的OSC节点生成数据
+            for node in nodes:
+                if node['type'] != 'OSC':
+                    continue
+                if node['id'] not in self.subscribed_nodes:
+                    continue
                 
                 # 发送数据包
                 payload = {

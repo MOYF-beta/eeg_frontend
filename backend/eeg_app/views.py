@@ -4,6 +4,8 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from .graph_store import get_graph, run_graph, set_frozen, set_graph, validate_graph
+from .data_recorder import list_saved_files, get_active_recordings, get_file_path
+from .data_replay import list_replayable_files
 
 
 def health(request):
@@ -21,6 +23,24 @@ def devices(request):
             }
         ]
     })
+
+
+def saved_files(request):
+    """获取已保存的数据文件列表"""
+    if request.method != 'GET':
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+    
+    files = list_saved_files()
+    return JsonResponse({'ok': True, 'files': files})
+
+
+def replayable_files(request):
+    """获取可回放的文件列表"""
+    if request.method != 'GET':
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+    
+    files = list_replayable_files()
+    return JsonResponse({'ok': True, 'files': files})
 
 
 @csrf_exempt
