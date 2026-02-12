@@ -406,12 +406,15 @@ function createPorts(type: GraphNodeType) {
 }
 
 // 添加节点 - 使用 rect 形状配合 attrs
-function addNode(type: GraphNodeType, x: number, y: number, name?: string, params?: Record<string, unknown>) {
+function addNode(type: GraphNodeType, x: number, y: number, name?: string, params?: Record<string, unknown>, existingId?: string) {
   const graph = graphRef.value;
   if (!graph) return null;
 
   const config = nodeTypes[type];
-  const nodeId = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  // 优先使用传入的ID（从后端加载时），确保ID有效
+  const nodeId = existingId && existingId.trim() !== '' 
+    ? existingId 
+    : `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
 
   // 初始化默认参数
   const paramConfig = nodeParamConfigs[type];
@@ -508,29 +511,56 @@ async function loadFromBackend() {
     const payload = await fetchGraph();
     frozen.value = payload.frozen;
 
+    // 先清空画布
+    graph.clearCells();
+
+    // 加载节点
     payload.nodes.forEach((node: GraphNode) => {
-      // 使用新的 addNode 函数，传入参数以显示属性
-      addNode(node.type, node.x, node.y, node.name, node.params);
+      if (!node.id) {
+        console.warn('Node without id:', node);
+        node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      }
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
     });
 
+    // 加载边 - 确保节点存在后再连接
     payload.edges.forEach((edge) => {
-      graph.addEdge({
-        id: edge.id,
-        source: { cell: edge.source, port: `${edge.source}-out` },
-        target: { cell: edge.target, port: `${edge.target}-in` },
-        attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-      });
+      const sourceNode = graph.getCellById(edge.source);
+      const targetNode = graph.getCellById(edge.target);
+      if (sourceNode && targetNode) {
+        graph.addEdge({
+          id: edge.id,
+          source: { cell: edge.source, port: 'out' },
+          target: { cell: edge.target, port: 'in' },
+          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+        });
+      } else {
+        console.warn('Skipping edge with missing nodes:', edge);
+      }
     });
 
     hasNodes.value = graph.getNodes().length > 0;
     setGraphInteracting(graph, !frozen.value);
   } catch (err) {
     console.error('Failed to load graph:', err);
+    // 加载失败时显示空白画布，不阻塞用户操作
+    hasNodes.value = false;
   }
 }
 
 function setGraphInteracting(graph: Graph, enabled: boolean) {
-  graph.toggleClipboard(enabled);
+  // X6 2.x: 使用 options 配置交互状态
+  if (graph) {
+    graph.options.interacting = enabled ? {
+      nodeMovable: true,
+      edgeMovable: true,
+      edgeLabelMovable: true,
+      arrowheadMovable: true,
+      vertexMovable: true,
+      vertexAddable: true,
+      vertexDeletable: true,
+    } : false;
+  }
 }
 
 async function applyFrozen() {
@@ -547,7 +577,7 @@ function buildPayload(): GraphPayload {
   const nodes: GraphNode[] = graph.getNodes().map((node) => {
     const data = node.getData() as GraphNode;
     const { x, y } = node.position();
-    return { ...data, x, y };
+    return { ...data, id: node.id, x, y };
   });
 
   const edges = graph.getEdges().map((edge) => ({
