@@ -90,6 +90,17 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         sample_rate = 1000  # Hz
         dt = 1.0 / sample_rate
         
+        # 50Hz 低通滤波器（一阶RC滤波器）
+        # RC = 1 / (2 * pi * fc) = 1 / (2 * pi * 50) ≈ 0.00318
+        # alpha = dt / (RC + dt) = 0.001 / (0.00318 + 0.001) ≈ 0.24
+        FILTER_CUTOFF = 50  # Hz
+        RC = 1.0 / (2 * math.pi * FILTER_CUTOFF)
+        alpha = dt / (RC + dt)
+        
+        # 每通道的滤波器状态
+        filtered_values = [0.0] * 8
+        first_sample = [True] * 8
+        
         while self.running:
             # 刷新计算图状态
             graph = get_graph()
@@ -119,11 +130,11 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 params = node.get('params', {})
                 time_window = params.get('timeWindow', 5)
                 
-                # 生成模拟数据（方波 + 噪声，与前端测试信号一致）
-                channels = []
+                # 生成模拟数据（方波 + 噪声，25Hz方波用于测试）
+                raw_channels = []
                 for i in range(8):
-                    # 方波信号
-                    freq = 5 + i * 0.5
+                    # 方波信号 - 25Hz（用于测试50Hz低通滤波器效果）
+                    freq = 25  # 25Hz方波
                     square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
                     square_signal = square * 30
                     
@@ -136,7 +147,18 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                     # 随机噪声
                     random_noise = random.uniform(-5, 5)
                     
-                    channels.append(square_signal + noise + random_noise)
+                    raw_channels.append(square_signal + noise + random_noise)
+                
+                # 应用50Hz低通滤波器
+                channels = []
+                for i in range(8):
+                    if first_sample[i]:
+                        filtered_values[i] = raw_channels[i]
+                        first_sample[i] = False
+                    else:
+                        # 一阶低通滤波器: y[n] = alpha * x[n] + (1-alpha) * y[n-1]
+                        filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
+                    channels.append(filtered_values[i])
                 
                 # 发送数据包
                 payload = {

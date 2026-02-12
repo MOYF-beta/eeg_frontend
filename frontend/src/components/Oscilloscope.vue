@@ -15,7 +15,7 @@
           </div>
         </v-tooltip>
       </div>
-      
+
       <div class="d-flex align-center ga-2">
         <!-- 数据源选择 -->
         <v-select
@@ -41,28 +41,39 @@
             </v-list-item>
           </template>
         </v-select>
-        
+
+        <!-- 解除绑定按钮 -->
+        <v-btn
+          v-if="selectedNodeId"
+          size="small"
+          color="error"
+          variant="text"
+          @click="unbindNode"
+        >
+          解除绑定
+        </v-btn>
+
         <v-chip size="small" :color="statusColor">
           <v-icon left size="small">{{ statusIcon }}</v-icon>
           {{ statusText }}
         </v-chip>
       </div>
     </v-card-title>
-    
+
     <v-divider />
-    
+
     <v-card-text>
       <!-- 未选择数据源提示 -->
       <v-alert v-if="!selectedNodeId" type="info" class="mb-4">
         请从上方下拉菜单选择计算图中的示波器节点作为数据源。
         <a href="#/cpgraph" target="_blank">前往计算图编辑器 →</a>
       </v-alert>
-      
+
       <!-- 计算图未冻结提示 -->
       <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
         计算图未冻结。请在<a href="#/cpgraph" target="_blank">计算图编辑器</a>中点击"冻结"按钮启动数据流。
       </v-alert>
-      
+
       <div class="osc-root">
         <div class="osc-controls">
           <div class="control">
@@ -243,18 +254,51 @@ function onNodeSelected(nodeId: string | null) {
     selectedNodeId.value = null;
     return;
   }
-  
+
   selectedNodeId.value = nodeId;
-  
-  // 更新 SessionStorage 的映射
-  // 注意：这里假设每个示波器组件实例对应一个示波器ID
-  // 实际使用时应该从 props 传入 oscId
+
+  // 确保示波器实例存在
   const oscId = 'osc-default'; // 默认示波器ID
+  let osc = sessionStore.getOscilloscopeById(oscId);
+  if (!osc) {
+    // 如果不存在，创建一个默认示波器实例
+    sessionStore.addOscilloscope({
+      id: oscId,
+      name: '默认示波器',
+      isActive: true,
+      timeWindow: 5,
+      yScale: 1,
+    });
+  }
+
+  // 更新 SessionStorage 的映射
   sessionStore.bindOutputNode(nodeId, oscId);
-  
+
+  // 更新 WebSocket 订阅，通知后端我们需要这个节点的数据
+  eegWebSocket.updateSubscription();
+
   // 清空历史数据
   samples.forEach(ch => ch.length = 0);
   packetCount.value = 0;
+}
+
+// 解除绑定
+function unbindNode() {
+  if (!selectedNodeId.value) return;
+
+  // 从 SessionStorage 解除绑定
+  sessionStore.unbindOutputNode(selectedNodeId.value);
+
+  // 更新 WebSocket 订阅
+  eegWebSocket.updateSubscription();
+
+  // 清空选择
+  selectedNodeId.value = null;
+
+  // 清空历史数据
+  samples.forEach(ch => ch.length = 0);
+  packetCount.value = 0;
+  lastPacketTime.value = null;
 }
 
 // 加载计算图节点
@@ -276,15 +320,15 @@ async function loadGraphNodes() {
 function handleDataPacket(packet: EegDataPacket) {
   // 只处理选中的节点数据
   if (packet.nodeId !== selectedNodeId.value) return;
-  
+
   const t = packet.timestamp / 1000;
   lastPacketTime.value = t;
   packetCount.value++;
-  
+
   packet.channels.slice(0, channelCount).forEach((v, idx) => {
     samples[idx].push({ t, v });
   });
-  
+
   pruneSamples(t);
 }
 
@@ -430,7 +474,7 @@ let resizeObserver: ResizeObserver | null = null;
 
 onMounted(async () => {
   await loadGraphNodes();
-  
+
   // 如果有绑定的节点，自动选择
   const mappings = sessionStore.getOutputMappings();
   const oscId = 'osc-default';
@@ -438,15 +482,15 @@ onMounted(async () => {
   if (boundNodeId) {
     selectedNodeId.value = boundNodeId;
   }
-  
+
   // 订阅 WebSocket 数据
   wsUnsubscribe = eegWebSocket.onData(handleDataPacket);
-  
+
   // 订阅 WebSocket 状态
   wsStatusUnsubscribe = eegWebSocket.onStatusChange((status) => {
     wsStatus.value = status;
   });
-  
+
   // 监听 sessionStore 变化
   sessionStore.subscribe((state) => {
     if (state.graph.nodes.length > 0) {
@@ -454,16 +498,21 @@ onMounted(async () => {
     }
     isGraphFrozen.value = state.graph.frozen;
   });
-  
+
   // 初始化画布
   resizeObserver = new ResizeObserver(() => resizeCanvas());
   if (canvasRef.value) {
     resizeObserver.observe(canvasRef.value);
     resizeCanvas();
   }
-  
+
   // 启动动画循环
   animationId = requestAnimationFrame(drawLoop);
+
+  // 确保 WebSocket 已连接
+  if (!eegWebSocket.isConnected()) {
+    eegWebSocket.connect();
+  }
 });
 
 onUnmounted(() => {
