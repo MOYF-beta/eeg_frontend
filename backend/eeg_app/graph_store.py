@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import json
+import os
 import time
 from typing import Dict, List, TypedDict
+
+# 数据文件路径
+DATA_FILE = os.path.join(os.path.dirname(__file__), 'graph_data.json')
 
 
 class GraphNode(TypedDict):
@@ -37,7 +42,14 @@ NODE_TYPES = {
     'SAVE',
 }
 
+# 默认空图
+_DEFAULT_GRAPH: GraphPayload = {
+    'nodes': [],
+    'edges': [],
+    'frozen': False,
+}
 
+# 内存中的图数据
 _GRAPH: GraphPayload = {
     'nodes': [],
     'edges': [],
@@ -45,21 +57,56 @@ _GRAPH: GraphPayload = {
 }
 
 
+def _load_from_file() -> GraphPayload:
+    """从JSON文件加载图数据"""
+    try:
+        if os.path.exists(DATA_FILE):
+            with open(DATA_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                # 验证数据结构
+                if 'nodes' in data and 'edges' in data and 'frozen' in data:
+                    print(f'[GraphStore] Loaded graph from {DATA_FILE}: {len(data["nodes"])} nodes, {len(data["edges"])} edges')
+                    return {
+                        'nodes': data.get('nodes', []),
+                        'edges': data.get('edges', []),
+                        'frozen': data.get('frozen', False),
+                    }
+    except Exception as e:
+        print(f'[GraphStore] Failed to load from file: {e}')
+    return _DEFAULT_GRAPH.copy()
+
+
+def _save_to_file(payload: GraphPayload) -> None:
+    """保存图数据到JSON文件"""
+    try:
+        with open(DATA_FILE, 'w', encoding='utf-8') as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+        print(f'[GraphStore] Saved graph to {DATA_FILE}')
+    except Exception as e:
+        print(f'[GraphStore] Failed to save to file: {e}')
+
+
 def get_graph() -> GraphPayload:
+    """获取当前图数据"""
     return _GRAPH
 
 
 def set_graph(payload: GraphPayload) -> None:
+    """设置图数据并保存到文件"""
     _GRAPH['nodes'] = payload.get('nodes', [])
     _GRAPH['edges'] = payload.get('edges', [])
     _GRAPH['frozen'] = payload.get('frozen', False)
+    _save_to_file(_GRAPH)
 
 
 def set_frozen(value: bool) -> None:
+    """设置冻结状态并保存"""
     _GRAPH['frozen'] = value
+    _save_to_file(_GRAPH)
 
 
 def validate_graph(payload: GraphPayload) -> List[str]:
+    """验证图数据"""
     errors: List[str] = []
     node_ids = set()
     for node in payload.get('nodes', []):
@@ -86,9 +133,14 @@ def validate_graph(payload: GraphPayload) -> List[str]:
 
 
 def run_graph() -> Dict:
+    """运行计算图"""
     return {
         'status': 'running',
         'startedAt': time.time(),
         'nodeCount': len(_GRAPH['nodes']),
         'edgeCount': len(_GRAPH['edges']),
     }
+
+
+# 初始化时从文件加载数据
+_GRAPH = _load_from_file()
