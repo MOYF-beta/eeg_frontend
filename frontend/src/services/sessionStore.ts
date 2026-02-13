@@ -33,6 +33,8 @@ export interface NodeMappings {
   inputs: Record<string, string>; // nodeId -> deviceId
   // 输出节点 -> 示波器ID
   outputs: Record<string, string>; // nodeId -> oscId
+  // 示波器视图到节点的映射（视图选择 -> 节点状态显示）
+  viewBindings: Record<string, string>; // viewId -> nodeId
 }
 
 // 完整的Session状态
@@ -58,6 +60,7 @@ const defaultState: EegSessionState = {
   mappings: {
     inputs: {},
     outputs: {},
+    viewBindings: {},
   },
   lastUpdated: Date.now(),
 };
@@ -265,6 +268,46 @@ class SessionStore {
   // 获取所有输出节点映射
   getOutputMappings(): Record<string, string> {
     return { ...this.state.mappings.outputs };
+  }
+
+  // ========== 示波器视图绑定（单向：视图选择 -> 节点状态）==========
+
+  // 绑定示波器视图到节点
+  bindViewToNode(viewId: string, nodeId: string | null) {
+    if (nodeId) {
+      this.state.mappings.viewBindings[viewId] = nodeId;
+    } else {
+      // 查找并删除此视图的所有绑定
+      Object.keys(this.state.mappings.viewBindings).forEach(key => {
+        if (key === viewId) {
+          delete this.state.mappings.viewBindings[key];
+        }
+      });
+    }
+    this.saveToStorage();
+    this.notify();
+  }
+
+  // 获取视图绑定的节点
+  getViewBoundNode(viewId: string): string | undefined {
+    return this.state.mappings.viewBindings[viewId];
+  }
+
+  // 获取节点被哪些视图绑定
+  getNodeBoundViews(nodeId: string): string[] {
+    return Object.entries(this.state.mappings.viewBindings)
+      .filter(([, boundNodeId]) => boundNodeId === nodeId)
+      .map(([viewId]) => viewId);
+  }
+
+  // 获取所有视图绑定
+  getViewBindings(): Record<string, string> {
+    return { ...this.state.mappings.viewBindings };
+  }
+
+  // 检查节点是否被任何视图绑定
+  isNodeBoundByView(nodeId: string): boolean {
+    return Object.values(this.state.mappings.viewBindings).includes(nodeId);
   }
 
   // ========== 冻结验证 ==========

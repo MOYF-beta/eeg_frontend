@@ -253,14 +253,20 @@ const noDataText = computed(() => {
 const totalSamples = computed(() => timestamps.length);
 
 // 方法
+const viewId = 'osc-view-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+
 const isNodeBound = (nodeId: string) => {
   return false;
 };
 
 const onNodeSelected = (nodeId: string | null) => {
   if (nodeId) {
-    sessionStore.bindOscilloscope('osc-' + Date.now(), nodeId);
+    // 绑定视图到节点（单向：视图选择 -> 节点状态）
+    sessionStore.bindViewToNode(viewId, nodeId);
     subscribeToNode(nodeId);
+  } else {
+    // 解绑
+    sessionStore.bindViewToNode(viewId, null);
   }
 };
 
@@ -268,6 +274,8 @@ const unbindNode = () => {
   if (selectedNodeId.value) {
     eegWebSocket.unsubscribe([selectedNodeId.value]);
   }
+  // 解绑视图
+  sessionStore.bindViewToNode(viewId, null);
   selectedNodeId.value = null;
 };
 

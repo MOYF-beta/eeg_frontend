@@ -205,6 +205,9 @@ const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
 const hasNodes = ref(false);
 
+// 存储 sessionStore 取消订阅函数
+let unsubscribeSessionStore: (() => void) | null = null;
+
 // 新增：NodeEditDialog 相关状态
 const nodeEditDialogOpen = ref(false);
 const editingNode = ref<GraphNode | null>(null);
@@ -359,7 +362,7 @@ function handleNodeSave({ name, params }: { name: string; params: Record<string,
   node.setData(data);
 
   // 更新节点标签显示
-  const labelText = generateNodeLabel(data.type, data.name, data.params);
+  const labelText = generateNodeLabel(data.type, data.name, data.params, editingNode.value?.id);
   node.attr('label/text', labelText);
 }
 
@@ -387,7 +390,7 @@ function saveNodeEdit() {
   node.setData(data);
 
   // 更新节点标签显示
-  const labelText = generateNodeLabel(data.type, data.name, data.params);
+  const labelText = generateNodeLabel(data.type, data.name, data.params, editDialog.value.nodeId);
   node.attr('label/text', labelText);
 
   editDialog.value.open = false;
@@ -514,13 +517,17 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
   return node;
 }
 
-// 生成节点标签（显示名称+关键属性）
-function generateNodeLabel(type: GraphNodeType, name: string, params: Record<string, unknown>): string {
+// 生成节点标签（显示名称+关键属性+绑定状态）
+function generateNodeLabel(type: GraphNodeType, name: string, params: Record<string, unknown>, nodeId?: string): string {
   const keyParam = getKeyParamDisplay(type, params);
+  // 检查节点是否被示波器视图绑定
+  const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
+  const boundIndicator = isBound ? '🔗 ' : '';
+  
   if (keyParam) {
-    return `${name}\n${keyParam}`;
+    return `${boundIndicator}${name}\n${keyParam}`;
   }
-  return name;
+  return `${boundIndicator}${name}`;
 }
 
 // 获取节点关键属性显示文本
@@ -940,6 +947,18 @@ onMounted(async () => {
     openNodeEditDialog(node.id);
   });
 
+  // 订阅 sessionStore 变化，更新节点绑定状态显示
+  unsubscribeSessionStore = sessionStore.subscribe((state) => {
+    // 当视图绑定变化时，更新所有 OSC 和 SPECTRUM 节点的标签
+    graph.getNodes().forEach((node) => {
+      const data = node.getData() as GraphNode;
+      if (data && (data.type === 'OSC' || data.type === 'SPECTRUM')) {
+        const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
+        node.attr('label/text', labelText);
+      }
+    });
+  });
+
   // 加载数据
   await nextTick();
   await loadFromBackend();
@@ -949,6 +968,8 @@ onUnmounted(() => {
   stopMockDataStream();
   graphRuntime.dispose();
   graphRef.value?.dispose();
+  // 取消订阅
+  unsubscribeSessionStore?.();
 });
 </script>
 
