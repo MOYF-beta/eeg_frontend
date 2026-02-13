@@ -79,7 +79,20 @@ class SessionStore {
     try {
       const stored = sessionStorage.getItem(STORAGE_KEY);
       if (stored) {
-        return { ...defaultState, ...JSON.parse(stored) };
+        const parsed = JSON.parse(stored);
+        // 确保嵌套对象有默认值
+        return {
+          ...defaultState,
+          ...parsed,
+          mappings: {
+            ...defaultState.mappings,
+            ...(parsed.mappings || {}),
+          },
+          graph: {
+            ...defaultState.graph,
+            ...(parsed.graph || {}),
+          },
+        };
       }
     } catch (e) {
       console.error('Failed to load session state:', e);
@@ -274,6 +287,9 @@ class SessionStore {
 
   // 绑定示波器视图到节点
   bindViewToNode(viewId: string, nodeId: string | null) {
+    if (!this.state.mappings.viewBindings) {
+      this.state.mappings.viewBindings = {};
+    }
     if (nodeId) {
       this.state.mappings.viewBindings[viewId] = nodeId;
     } else {
@@ -290,24 +306,26 @@ class SessionStore {
 
   // 获取视图绑定的节点
   getViewBoundNode(viewId: string): string | undefined {
-    return this.state.mappings.viewBindings[viewId];
+    return this.state.mappings?.viewBindings?.[viewId];
   }
 
   // 获取节点被哪些视图绑定
   getNodeBoundViews(nodeId: string): string[] {
-    return Object.entries(this.state.mappings.viewBindings)
+    const bindings = this.state.mappings?.viewBindings || {};
+    return Object.entries(bindings)
       .filter(([, boundNodeId]) => boundNodeId === nodeId)
       .map(([viewId]) => viewId);
   }
 
   // 获取所有视图绑定
   getViewBindings(): Record<string, string> {
-    return { ...this.state.mappings.viewBindings };
+    return { ...(this.state.mappings?.viewBindings || {}) };
   }
 
   // 检查节点是否被任何视图绑定
   isNodeBoundByView(nodeId: string): boolean {
-    return Object.values(this.state.mappings.viewBindings).includes(nodeId);
+    const bindings = this.state.mappings?.viewBindings || {};
+    return Object.values(bindings).includes(nodeId);
   }
 
   // ========== 冻结验证 ==========
