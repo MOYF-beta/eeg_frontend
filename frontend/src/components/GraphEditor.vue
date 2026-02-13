@@ -169,6 +169,16 @@
       </v-card-actions>
     </v-card>
   </v-dialog>
+
+  <!-- 使用新的 NodeEditDialog 组件 -->
+  <NodeEditDialog
+    v-model="nodeEditDialogOpen"
+    :node-data="editingNode"
+    :all-nodes="allNodes"
+    :all-edges="allEdges"
+    @save="handleNodeSave"
+    @bind-oscilloscope="handleBindOscilloscope"
+  />
 </template>
 
 <script setup lang="ts">
@@ -188,10 +198,18 @@ import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
 
+import NodeEditDialog from './nodes/NodeEditDialog.vue';
+
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
 const hasNodes = ref(false);
+
+// 新增：NodeEditDialog 相关状态
+const nodeEditDialogOpen = ref(false);
+const editingNode = ref<GraphNode | null>(null);
+const allNodes = ref<GraphNode[]>([]);
+const allEdges = ref<Array<{id: string; source: string; target: string}>>([]);
 
 // 监听冻结状态变化
 watch(frozen, (newVal, oldVal) => {
@@ -307,29 +325,54 @@ function openNodeEditDialog(nodeId: string) {
   if (!node || !node.isNode()) return;
 
   const data = node.getData() as GraphNode;
-  const type = data.type;
-  const config = nodeTypes[type];
-  const paramConfig = nodeParamConfigs[type];
+  const { x, y } = node.position();
 
-  // 获取当前参数值（如果没有则使用默认值）
-  const currentParams = data.params || {};
-  const defaultParams: Record<string, unknown> = {};
-  paramConfig.forEach((field) => {
-    defaultParams[field.key] = currentParams[field.key] ?? field.default;
+  // 更新所有节点和边的信息
+  allNodes.value = graph.getNodes().map((n) => {
+    const nodeData = n.getData() as GraphNode;
+    const pos = n.position();
+    return { ...nodeData, id: n.id, x: pos.x, y: pos.y };
   });
+  allEdges.value = graph.getEdges().map((e) => ({
+    id: e.id,
+    source: e.getSourceCellId() || '',
+    target: e.getTargetCellId() || '',
+  }));
 
-  editDialog.value = {
-    open: true,
-    nodeId,
-    nodeName: data.name,
-    nodeType: type,
-    params: { ...defaultParams },
-    config: { color: config.color, bg: config.bg },
-    fields: paramConfig,
-  };
+  // 使用新的对话框
+  editingNode.value = { ...data, id: nodeId, x, y };
+  nodeEditDialogOpen.value = true;
 }
 
-// 保存节点编辑
+// 处理节点保存
+function handleNodeSave({ name, params }: { name: string; params: Record<string, unknown> }) {
+  const graph = graphRef.value;
+  if (!graph || !editingNode.value) return;
+
+  const node = graph.getCellById(editingNode.value.id);
+  if (!node || !node.isNode()) return;
+
+  // 更新节点数据
+  const data = node.getData() as GraphNode;
+  data.name = name;
+  data.params = { ...params };
+  node.setData(data);
+
+  // 更新节点标签显示
+  const labelText = generateNodeLabel(data.type, data.name, data.params);
+  node.attr('label/text', labelText);
+}
+
+// 处理示波器绑定
+function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: string | null }) {
+  if (oscId) {
+    sessionStore.bindOutputNode(nodeId, oscId);
+  } else {
+    sessionStore.unbindOutputNode(nodeId);
+  }
+}
+
+// 保存节点编辑（旧版，保留兼容性）
 function saveNodeEdit() {
   const graph = graphRef.value;
   if (!graph || !editDialog.value.nodeId) return;
@@ -593,13 +636,20 @@ async function applyFrozen() {
     // 验证是否可以冻结
     const validation = sessionStore.validateFreeze();
     console.log('[GraphEditor] Freeze validation result:', validation);
-    
+
     if (!validation.valid) {
       // 验证失败，提示错误并取消冻结
       console.error('[GraphEditor] Freeze validation failed:', validation.errors);
       alert(`无法冻结计算图:\n${validation.errors.join('\n')}`);
       frozen.value = false;
       return;
+    }
+
+    // 显示警告信息（如果有）
+    if (validation.warnings.length > 0) {
+      console.warn('[GraphEditor] Freeze warnings:', validation.warnings);
+      // 可选：显示警告但不阻止冻结
+      // alert(`警告:\n${validation.warnings.join('\n')}`);
     }
 
     // 验证通过，提交到后端

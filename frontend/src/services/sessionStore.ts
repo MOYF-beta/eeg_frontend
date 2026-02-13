@@ -270,8 +270,9 @@ class SessionStore {
   // ========== 冻结验证 ==========
 
   // 验证是否可以冻结
-  validateFreeze(): { valid: boolean; errors: string[] } {
+  validateFreeze(): { valid: boolean; errors: string[]; warnings: string[] } {
     const errors: string[] = [];
+    const warnings: string[] = [];
 
     // 检查所有SOURCE节点是否已绑定设备
     const sourceNodes = this.state.graph.nodes.filter((n) => n.type === 'SOURCE');
@@ -281,17 +282,18 @@ class SessionStore {
       }
     });
 
-    // 检查所有OSC节点是否已绑定示波器
+    // 检查OSC节点是否绑定示波器（改为警告，不是错误）
     const oscNodes = this.state.graph.nodes.filter((n) => n.type === 'OSC');
     oscNodes.forEach((node) => {
       if (!this.state.mappings.outputs[node.id]) {
-        errors.push(`示波器节点 "${node.name}" 未绑定显示通道`);
+        warnings.push(`示波器节点 "${node.name}" 未绑定到显示实例，冻结后可在可视化页面绑定`);
       }
     });
 
     return {
       valid: errors.length === 0,
       errors,
+      warnings,
     };
   }
 
