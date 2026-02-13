@@ -260,6 +260,7 @@ const isNodeBound = (nodeId: string) => {
 };
 
 const onNodeSelected = (nodeId: string | null) => {
+  console.log('[Oscilloscope] Node selected:', nodeId, 'viewId:', viewId);
   if (nodeId) {
     // 绑定视图到节点（单向：视图选择 -> 节点状态）
     sessionStore.bindViewToNode(viewId, nodeId);

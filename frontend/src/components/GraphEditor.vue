@@ -522,6 +522,7 @@ function generateNodeLabel(type: GraphNodeType, name: string, params: Record<str
   const keyParam = getKeyParamDisplay(type, params);
   // 检查节点是否被示波器视图绑定
   const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
+  console.log('[generateNodeLabel] nodeId:', nodeId, 'isBound:', isBound);
   const boundIndicator = isBound ? '🔗 ' : '';
   
   if (keyParam) {
@@ -949,11 +950,13 @@ onMounted(async () => {
 
   // 订阅 sessionStore 变化，更新节点绑定状态显示
   unsubscribeSessionStore = sessionStore.subscribe((state) => {
+    console.log('[GraphEditor] Session store updated, viewBindings:', state.mappings?.viewBindings);
     // 当视图绑定变化时，更新所有 OSC 和 SPECTRUM 节点的标签
     graph.getNodes().forEach((node) => {
       const data = node.getData() as GraphNode;
       if (data && (data.type === 'OSC' || data.type === 'SPECTRUM')) {
         const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
+        console.log('[GraphEditor] Updating node label:', node.id, labelText);
         node.attr('label/text', labelText);
       }
     });
