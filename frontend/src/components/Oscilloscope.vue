@@ -447,7 +447,6 @@ const updateGraphState = async () => {
 // 清理函数和unsub函数需要在onUnmounted中访问
 let cleanupChart: (() => void) | null = null;
 let unsubConnected: (() => void) | null = null;
-let unsubDisconnected: (() => void) | null = null;
 let unsubData: (() => void) | null = null;
 
 console.log('[Oscilloscope] Component code loaded - v2');
@@ -462,14 +461,15 @@ onMounted(async () => {
     await updateGraphState();
 
     // 注册WebSocket回调（使用正确的方法调用）
-    unsubConnected = eegWebSocket.onConnected(() => {
-      wsStatus.value = 'connected';
-      if (selectedNodeId.value && isGraphFrozen.value) {
-        subscribeToNode(selectedNodeId.value);
+    unsubConnected = eegWebSocket.onStatusChange((status) => {
+      if (status === 'connected') {
+        wsStatus.value = 'connected';
+        if (selectedNodeId.value && isGraphFrozen.value) {
+          subscribeToNode(selectedNodeId.value);
+        }
+      } else if (status === 'disconnected') {
+        wsStatus.value = 'disconnected';
       }
-    });
-    unsubDisconnected = eegWebSocket.onDisconnected(() => {
-      wsStatus.value = 'disconnected';
     });
     unsubData = eegWebSocket.onData(handleDataPacket);
 
@@ -497,7 +497,6 @@ onUnmounted(() => {
   }
   // 取消WebSocket回调注册
   unsubConnected?.();
-  unsubDisconnected?.();
   unsubData?.();
 });
 
