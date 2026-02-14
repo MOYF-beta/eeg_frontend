@@ -450,36 +450,42 @@ let unsubConnected: (() => void) | null = null;
 let unsubDisconnected: (() => void) | null = null;
 let unsubData: (() => void) | null = null;
 
+console.log('[Oscilloscope] Component code loaded - v2');
+
 // 生命周期
 onMounted(async () => {
-  // 初始化 ECharts
-  cleanupChart = initChart();
+  try {
+    // 初始化 ECharts
+    cleanupChart = initChart();
 
-  // 加载计算图状态（先获取冻结状态）
-  await updateGraphState();
+    // 加载计算图状态（先获取冻结状态）
+    await updateGraphState();
 
-  // 注册WebSocket回调（使用正确的方法调用）
-  unsubConnected = eegWebSocket.onConnected(() => {
-    wsStatus.value = 'connected';
-    if (selectedNodeId.value && isGraphFrozen.value) {
-      subscribeToNode(selectedNodeId.value);
+    // 注册WebSocket回调（使用正确的方法调用）
+    unsubConnected = eegWebSocket.onConnected(() => {
+      wsStatus.value = 'connected';
+      if (selectedNodeId.value && isGraphFrozen.value) {
+        subscribeToNode(selectedNodeId.value);
+      }
+    });
+    unsubDisconnected = eegWebSocket.onDisconnected(() => {
+      wsStatus.value = 'disconnected';
+    });
+    unsubData = eegWebSocket.onData(handleDataPacket);
+
+    // 如果WebSocket已连接，更新状态
+    if (eegWebSocket.isConnected()) {
+      wsStatus.value = 'connected';
+      // 如果已连接，立即订阅当前选中的节点
+      if (selectedNodeId.value && isGraphFrozen.value) {
+        subscribeToNode(selectedNodeId.value);
+      }
+    } else if (isGraphFrozen.value) {
+      // 如果计算图已冻结但WebSocket未连接，尝试连接
+      eegWebSocket.connect();
     }
-  });
-  unsubDisconnected = eegWebSocket.onDisconnected(() => {
-    wsStatus.value = 'disconnected';
-  });
-  unsubData = eegWebSocket.onData(handleDataPacket);
-
-  // 如果WebSocket已连接，更新状态
-  if (eegWebSocket.isConnected()) {
-    wsStatus.value = 'connected';
-    // 如果已连接，立即订阅当前选中的节点
-    if (selectedNodeId.value && isGraphFrozen.value) {
-      subscribeToNode(selectedNodeId.value);
-    }
-  } else if (isGraphFrozen.value) {
-    // 如果计算图已冻结但WebSocket未连接，尝试连接
-    eegWebSocket.connect();
+  } catch (err) {
+    console.error('[Oscilloscope] Error in onMounted:', err);
   }
 });
 
