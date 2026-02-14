@@ -121,7 +121,7 @@
         <div class="osc-chart-container">
           <!-- ECharts 容器 -->
           <div ref="chartRef" class="osc-chart"></div>
-          
+
           <!-- 无数据遮罩 -->
           <div v-if="!canDisplay" class="no-data-overlay">
             <v-icon size="48" color="grey-lighten-1">mdi-waveform</v-icon>
@@ -158,6 +158,12 @@ const chartRef = ref<HTMLDivElement | null>(null);
 let chart: echarts.ECharts | null = null;
 const mode = ref<'scan' | 'scroll'>('scroll');
 const timeWindowSec = ref(5);
+
+// 性能优化：目标刷新率 30fps
+const TARGET_FPS = 30;
+const FRAME_INTERVAL = 1000 / TARGET_FPS; // ~33.33ms
+let lastFrameTime = 0;
+let isFramePending = false;
 
 // 数据存储 - 使用环形缓冲区
 const MAX_SAMPLES = 50000; // 最大缓存5万点 (50秒@1000Hz)
@@ -289,9 +295,9 @@ const subscribeToNode = (nodeId: string) => {
 // 初始化 ECharts
 const initChart = () => {
   if (!chartRef.value) return;
-  
+
   chart = echarts.init(chartRef.value);
-  
+
   const option: echarts.EChartsOption = {
     backgroundColor: '#fff',
     grid: {
@@ -358,13 +364,13 @@ const initChart = () => {
       data: [],
     })),
   };
-  
+
   chart.setOption(option);
-  
+
   // 响应窗口大小变化
   const handleResize = () => chart?.resize();
   window.addEventListener('resize', handleResize);
-  
+
   return () => {
     window.removeEventListener('resize', handleResize);
   };
@@ -373,15 +379,15 @@ const initChart = () => {
 // 更新图表数据
 const updateChart = () => {
   if (!chart || samples[0].length === 0) return;
-  
+
   // 构建数据点
   const seriesData = samples.map((channelData, chIdx) => {
     return channelData.map((value, idx) => [timestamps[idx], value + chIdx * 100]); // 通道分离显示
   });
-  
+
   const option: echarts.EChartsOption = {
     xAxis: {
-      min: mode.value === 'scroll' 
+      min: mode.value === 'scroll'
         ? Math.max(0, (timestamps[timestamps.length - 1] || 0) - timeWindowSec.value * 1000)
         : 0,
       max: mode.value === 'scroll'
@@ -392,16 +398,16 @@ const updateChart = () => {
       data: data,
     })),
   };
-  
+
   chart.setOption(option);
 };
 
 // WebSocket 数据处理器
 const handleDataPacket = (packet: EegDataPacket) => {
   if (packet.nodeId !== selectedNodeId.value) return;
-  
+
   packetCount.value++;
-  
+
   // 添加时间戳（相对于第一个包的时间）
   if (timestamps.length === 0) {
     timestamps.push(0);
@@ -409,12 +415,12 @@ const handleDataPacket = (packet: EegDataPacket) => {
     const lastTime = timestamps[timestamps.length - 1];
     timestamps.push(lastTime + 1); // 1ms间隔（1000Hz）
   }
-  
+
   // 添加通道数据
   for (let ch = 0; ch < channelCount && ch < packet.channels.length; ch++) {
     samples[ch].push(packet.channels[ch]);
   }
-  
+
   // 环形缓冲区：移除旧数据
   if (timestamps.length > MAX_SAMPLES) {
     timestamps.shift();
@@ -422,11 +428,27 @@ const handleDataPacket = (packet: EegDataPacket) => {
       samples[ch].shift();
     }
   }
-  
-  // 每100ms更新一次图表（约100个样本）
-  if (packetCount.value % 100 === 0) {
-    updateChart();
-  }
+
+  // 请求渲染帧（30fps节流）
+  requestRenderFrame();
+};
+
+// 渲染循环：使用 requestAnimationFrame 实现 30fps
+const requestRenderFrame = () => {
+  if (isFramePending) return;
+  isFramePending = true;
+
+  requestAnimationFrame(() => {
+    isFramePending = false;
+    const now = performance.now();
+    const elapsed = now - lastFrameTime;
+
+    // 检查是否达到帧间隔
+    if (elapsed >= FRAME_INTERVAL) {
+      lastFrameTime = now - (elapsed % FRAME_INTERVAL);
+      updateChart();
+    }
+  });
 };
 
 // 更新计算图状态
@@ -435,7 +457,7 @@ const updateGraphState = async () => {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
     isGraphFrozen.value = graph.frozen || false;
-    
+
     if (isGraphFrozen.value && selectedNodeId.value) {
       subscribeToNode(selectedNodeId.value);
     }
