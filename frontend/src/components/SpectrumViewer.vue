@@ -549,6 +549,13 @@ onMounted(() => {
   // 如果WebSocket已连接，更新状态
   if (eegWebSocket.isConnected()) {
     wsStatus.value = 'connected';
+    // 如果已连接，立即订阅当前选中的节点
+    if (selectedNodeId.value && isGraphFrozen.value) {
+      subscribeToNode(selectedNodeId.value);
+    }
+  } else if (isGraphFrozen.value) {
+    // 如果计算图已冻结但WebSocket未连接，尝试连接
+    eegWebSocket.connect();
   }
 });
 
