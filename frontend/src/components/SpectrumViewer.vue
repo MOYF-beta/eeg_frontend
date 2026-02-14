@@ -519,22 +519,27 @@ const loop = () => {
   animationId = requestAnimationFrame(loop);
 };
 
+// 清理函数和unsub函数需要在onUnmounted中访问
+let unsubConnected: (() => void) | null = null;
+let unsubDisconnected: (() => void) | null = null;
+let unsubData: (() => void) | null = null;
+
 // 生命周期
 onMounted(async () => {
   // 加载计算图状态（先获取冻结状态）
   await updateGraphState();
 
   // 注册WebSocket回调（使用正确的方法调用）
-  const unsubConnected = eegWebSocket.onConnected(() => {
+  unsubConnected = eegWebSocket.onConnected(() => {
     wsStatus.value = 'connected';
     if (selectedNodeId.value && isGraphFrozen.value) {
       subscribeToNode(selectedNodeId.value);
     }
   });
-  const unsubDisconnected = eegWebSocket.onDisconnected(() => {
+  unsubDisconnected = eegWebSocket.onDisconnected(() => {
     wsStatus.value = 'disconnected';
   });
-  const unsubData = eegWebSocket.onData(handleDataPacket);
+  unsubData = eegWebSocket.onData(handleDataPacket);
 
   // 设置画布
   resizeObserver.value = new ResizeObserver(() => resizeCanvas());
@@ -557,20 +562,20 @@ onMounted(async () => {
     // 如果计算图已冻结但WebSocket未连接，尝试连接
     eegWebSocket.connect();
   }
+});
 
-  onUnmounted(() => {
-    if (selectedNodeId.value) {
-      eegWebSocket.unsubscribe([selectedNodeId.value]);
-    }
-    if (resizeObserver.value && canvasRef.value) {
-      resizeObserver.value.unobserve(canvasRef.value);
-    }
-    cancelAnimationFrame(animationId);
-    // 取消WebSocket回调注册
-    unsubConnected();
-    unsubDisconnected();
-    unsubData();
-  });
+onUnmounted(() => {
+  if (selectedNodeId.value) {
+    eegWebSocket.unsubscribe([selectedNodeId.value]);
+  }
+  if (resizeObserver.value && canvasRef.value) {
+    resizeObserver.value.unobserve(canvasRef.value);
+  }
+  cancelAnimationFrame(animationId);
+  // 取消WebSocket回调注册
+  unsubConnected?.();
+  unsubDisconnected?.();
+  unsubData?.();
 });
 
 // 监听选中节点变化
