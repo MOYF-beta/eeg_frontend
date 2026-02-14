@@ -4,7 +4,21 @@
       计算图编辑器
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
-        <v-btn size="small" color="primary" @click="run" :disabled="!frozen">运行</v-btn>
+        <v-btn 
+          size="small" 
+          :color="isRunning ? 'error' : 'primary'" 
+          @click="toggleRun" 
+          :disabled="!frozen"
+        >
+          <v-icon left size="small" class="mr-1">
+            {{ isRunning ? 'mdi-stop' : 'mdi-play' }}
+          </v-icon>
+          {{ isRunning ? '停止' : '运行' }}
+        </v-btn>
+        <v-chip v-if="isRunning" size="small" color="success" class="ml-1">
+          <v-icon size="small" class="mr-1">mdi-check-circle</v-icon>
+          运行中
+        </v-chip>
         <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
         <v-btn size="small" variant="tonal" @click="triggerFileLoad">加载</v-btn>
         <v-btn size="small" color="secondary" @click="loadMockData">加载Mock</v-btn>
@@ -200,6 +214,8 @@ import {
   runGraph,
   saveGraph,
   setGraphFrozen,
+  stopGraph,
+  getGraphRuntimeState,
   type GraphNode,
   type GraphNodeType,
   type GraphPayload,
@@ -214,6 +230,53 @@ const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
 const hasNodes = ref(false);
+const isRunning = ref(false);
+let runtimeStateTimer: number | null = null;
+
+// 运行时状态轮询
+async function pollRuntimeState() {
+  try {
+    const res = await getGraphRuntimeState();
+    if (res.ok) {
+      isRunning.value = res.state.running;
+    }
+  } catch (e) {
+    console.error('[GraphEditor] Failed to poll runtime state:', e);
+  }
+}
+
+function startRuntimeStatePolling() {
+  if (runtimeStateTimer) return;
+  pollRuntimeState();
+  runtimeStateTimer = window.setInterval(pollRuntimeState, 2000);
+}
+
+function stopRuntimeStatePolling() {
+  if (runtimeStateTimer) {
+    clearInterval(runtimeStateTimer);
+    runtimeStateTimer = null;
+  }
+}
+
+// 切换运行/停止
+async function toggleRun() {
+  if (isRunning.value) {
+    // 停止
+    try {
+      await stopGraph();
+      graphRuntime.stop();
+      stopMockDataStream();
+      isRunning.value = false;
+      console.log('[GraphEditor] Graph stopped');
+    } catch (err) {
+      console.error('[GraphEditor] Failed to stop graph:', err);
+      alert('停止失败: ' + (err as Error).message);
+    }
+  } else {
+    // 启动
+    await run();
+  }
+}
 
 // 存储 sessionStore 取消订阅函数
 let unsubscribeSessionStore: (() => void) | null = null;
@@ -358,7 +421,7 @@ function openNodeEditDialog(nodeId: string) {
 }
 
 // 处理节点保存
-function handleNodeSave({ name, params }: { name: string; params: Record<string, unknown> }) {
+function handleNodeSave({ name, params, deviceId }: { name: string; params: Record<string, unknown>; deviceId?: string | null }) {
   const graph = graphRef.value;
   if (!graph || !editingNode.value) return;
 
@@ -369,6 +432,9 @@ function handleNodeSave({ name, params }: { name: string; params: Record<string,
   const data = node.getData() as GraphNode;
   data.name = name;
   data.params = { ...params };
+  if (deviceId !== undefined) {
+    data.deviceId = deviceId || undefined;
+  }
   node.setData(data);
 
   // 更新节点标签显示
@@ -849,8 +915,12 @@ async function run() {
   console.log('[GraphEditor] Runtime started, calling runGraph API');
   // 调用后端API
   try {
-    await runGraph();
+    const res = await runGraph();
     console.log('[GraphEditor] Graph run API called successfully');
+    if (res.ok) {
+      isRunning.value = true;
+      startRuntimeStatePolling();
+    }
   } catch (err) {
     console.error('[GraphEditor] Failed to run graph:', err);
     alert('运行失败: ' + (err as Error).message);
@@ -923,6 +993,8 @@ function clear() {
   // 停止运行时
   graphRuntime.stop();
   stopMockDataStream();
+  stopRuntimeStatePolling();
+  isRunning.value = false;
   
   graph.clearCells();
   hasNodes.value = false;
@@ -1075,10 +1147,14 @@ onMounted(async () => {
   // 加载数据
   await nextTick();
   await loadFromBackend();
+  
+  // 启动运行时状态轮询
+  startRuntimeStatePolling();
 });
 
 onUnmounted(() => {
   stopMockDataStream();
+  stopRuntimeStatePolling();
   graphRuntime.dispose();
   graphRef.value?.dispose();
   // 取消订阅

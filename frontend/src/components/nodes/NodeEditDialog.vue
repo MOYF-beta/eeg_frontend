@@ -24,14 +24,44 @@
         
         <!-- 数据源专用表单 -->
         <template v-if="nodeType === 'SOURCE'">
+          <!-- 设备选择器 -->
           <v-select
-            v-model="form.params.device"
-            :items="['模拟设备', '脑电设备-1', '脑电设备-2']"
+            v-model="selectedDeviceId"
+            :items="availableDevices"
+            item-title="displayName"
+            item-value="id"
             label="选择设备"
             density="compact"
             variant="outlined"
             class="mb-3"
-          />
+            clearable
+            :hint="selectedDeviceId ? `已绑定设备: ${selectedDeviceId}` : '未绑定设备'"
+            persistent-hint
+          >
+            <template #item="{ props, item }">
+              <v-list-item v-bind="props">
+                <template #append>
+                  <v-chip
+                    v-if="isDeviceBoundToOtherNode(item.raw.id)"
+                    size="x-small"
+                    color="warning"
+                  >
+                    已绑定到其他节点
+                  </v-chip>
+                  <v-chip
+                    v-else-if="item.raw.id === selectedDeviceId"
+                    size="x-small"
+                    color="success"
+                  >
+                    当前选择
+                  </v-chip>
+                </template>
+              </v-list-item>
+            </template>
+          </v-select>
+
+          <v-divider class="my-3" />
+          
           <v-text-field
             v-model.number="form.params.sampleRate"
             label="采样率 (Hz)"
@@ -48,6 +78,7 @@
             variant="outlined"
             class="mb-3"
           />
+          
           <!-- 通道命名 -->
           <v-expansion-panels>
             <v-expansion-panel>
@@ -363,6 +394,34 @@ const availableOscilloscopes = computed(() => {
   return sessionStore.getOscilloscopes();
 });
 
+// 设备选择
+const selectedDeviceId = ref<string | null>(null);
+
+// 可用设备列表
+const availableDevices = computed(() => {
+  const devices = sessionStore.getDevices();
+  return devices.map(d => ({
+    id: d.id,
+    name: d.name,
+    displayName: `${d.name} (${d.status === 'online' ? '在线' : '离线'})`,
+    status: d.status,
+  }));
+});
+
+// 检查设备是否已绑定到其他 SOURCE 节点
+function isDeviceBoundToOtherNode(deviceId: string): boolean {
+  if (!props.allNodes || !props.nodeData) return false;
+  
+  return props.allNodes.some(node => {
+    // 跳过当前节点
+    if (node.id === props.nodeData?.id) return false;
+    // 只检查 SOURCE 类型节点
+    if (node.type !== 'SOURCE') return false;
+    // 检查是否绑定了此设备
+    return node.deviceId === deviceId || node.params?.deviceId === deviceId;
+  });
+}
+
 // 获取上游节点
 function getUpstreamSource(nodeId: string): GraphNode | null {
   if (!props.allEdges || !props.allNodes) return null;
@@ -407,6 +466,9 @@ watch(() => props.nodeData, (data) => {
     form.value.params = { ...data.params };
     paramsJson.value = JSON.stringify(data.params || {}, null, 2);
     jsonError.value = '';
+    
+    // 加载设备选择
+    selectedDeviceId.value = data.deviceId || data.params?.deviceId || null;
     
     // 加载通道命名
     if (data.params?.channelNames) {
@@ -456,6 +518,8 @@ const save = () => {
   // 保存通道信息
   if (nodeType.value === 'SOURCE') {
     form.value.params.channelNames = channelNames.value;
+    // 保存设备ID到params
+    form.value.params.deviceId = selectedDeviceId.value;
   }
   
   // 保存示波器通道选择
@@ -467,6 +531,7 @@ const save = () => {
   emit('save', {
     name: form.value.name,
     params: form.value.params,
+    deviceId: nodeType.value === 'SOURCE' ? selectedDeviceId.value : undefined,
   });
   
   // 处理示波器绑定

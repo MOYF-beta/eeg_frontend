@@ -16,6 +16,7 @@ export type GraphNode = {
   x: number;
   y: number;
   params: Record<string, unknown>;
+  deviceId?: string; // SOURCE/REPLAY 节点绑定的设备ID
 };
 
 export type GraphEdge = {
@@ -66,6 +67,18 @@ export async function setGraphFrozen(frozen: boolean) {
 export async function runGraph() {
   const res = await fetch(`${baseUrl}/graph/run/`, { method: 'POST' });
   if (!res.ok) throw new Error('Failed to run graph');
+  return res.json();
+}
+
+export async function stopGraph() {
+  const res = await fetch(`${baseUrl}/graph/run/`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to stop graph');
+  return res.json();
+}
+
+export async function getGraphRuntimeState() {
+  const res = await fetch(`${baseUrl}/graph/run/`, { method: 'GET' });
+  if (!res.ok) throw new Error('Failed to get runtime state');
   return res.json();
 }
 

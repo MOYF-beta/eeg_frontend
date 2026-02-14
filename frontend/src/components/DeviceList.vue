@@ -7,18 +7,14 @@
           <v-icon left>mdi-refresh</v-icon>
           刷新
         </v-btn>
-        <v-btn color="secondary" size="small" @click="addMockDevice">
-          添加模拟设备
+        <v-btn color="secondary" size="small" @click="showAddDialog = true">
+          <v-icon left>mdi-plus</v-icon>
+          添加设备
         </v-btn>
       </div>
     </v-card-title>
     <v-divider />
     <v-card-text>
-      <!-- 计算图状态提示 -->
-      <v-alert v-if="graphNodes.length === 0" type="info" class="mb-4">
-        计算图中没有输入节点。请先在<router-link to="/cpgraph">计算图编辑器</router-link>中添加数据源节点。
-      </v-alert>
-      
       <v-row>
         <v-col
           v-for="device in devices"
@@ -38,84 +34,129 @@
               </v-chip>
             </v-card-title>
             <v-card-subtitle>
-              地址: {{ device.port || device.address }}
+              地址: {{ device.port || device.address || 'N/A' }}
             </v-card-subtitle>
             <v-card-text class="text-body-2">
               <div>采样率: {{ device.sampleRate }}Hz</div>
               <div>通道数: {{ device.channels }}{{ Array.isArray(device.channels) ? '通道' : 'ch' }}</div>
               
-              <!-- 计算图节点绑定 -->
+              <!-- 显示绑定状态 -->
               <v-divider class="my-2" />
               <div class="d-flex align-center">
-                <span class="text-caption mr-2">绑定计算图节点:</span>
-                <v-select
-                  v-model="nodeBindings[device.id]"
-                  :items="availableSourceNodes"
-                  item-title="name"
-                  item-value="id"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  placeholder="选择输入节点"
-                  class="flex-grow-1"
-                  @update:model-value="(val) => bindNode(device.id, val)"
+                <span class="text-caption mr-2">绑定状态:</span>
+                <v-chip
+                  v-if="getBoundNode(device.id)"
+                  size="small"
+                  color="success"
+                  class="mr-2"
                 >
-                  <template #item="{ props, item }">
-                    <v-list-item v-bind="props">
-                      <template #append>
-                        <v-chip v-if="isNodeBound(item.raw.id)" size="x-small" color="primary">
-                          已绑定
-                        </v-chip>
-                      </template>
-                    </v-list-item>
-                  </template>
-                </v-select>
-              </div>
-              <div v-if="nodeBindings[device.id]" class="mt-1">
-                <v-chip size="x-small" color="success">
-                  已绑定到: {{ getNodeName(nodeBindings[device.id]) }}
+                  <v-icon size="small" class="mr-1">mdi-link</v-icon>
+                  {{ getBoundNode(device.id)?.name }}
                 </v-chip>
+                <v-chip v-else size="small" color="grey">
+                  <v-icon size="small" class="mr-1">mdi-link-off</v-icon>
+                  未绑定
+                </v-chip>
+                <span class="text-caption text-grey">
+                  {{ getBoundNode(device.id) ? '在计算图中绑定' : '在计算图编辑器中绑定设备' }}
+                </span>
               </div>
             </v-card-text>
             <v-card-actions>
-              <v-btn size="small" variant="text" @click="viewDevice(device.id)">
-                查看详情
+              <v-btn size="small" variant="text" @click="editDevice(device)">
+                编辑
               </v-btn>
               <v-spacer />
               <v-btn 
                 size="small" 
                 color="error" 
                 variant="text"
-                @click="unbindNode(device.id)"
-                :disabled="!nodeBindings[device.id]"
+                @click="deleteDevice(device.id)"
               >
-                解除绑定
+                删除
               </v-btn>
             </v-card-actions>
           </v-card>
         </v-col>
       </v-row>
-      
-      <!-- 未绑定设备提示 -->
-      <v-alert v-if="unboundSourceNodes.length > 0" type="warning" class="mt-4">
+
+      <!-- 空状态 -->
+      <v-alert v-if="devices.length === 0" type="info" class="mt-4">
+        暂无设备。点击"添加设备"按钮添加新设备。
+      </v-alert>
+
+      <!-- 绑定说明 -->
+      <v-alert type="info" class="mt-4" variant="tonal">
         <div class="d-flex align-center">
-          <span>以下计算图输入节点未绑定设备：</span>
-          <v-chip
-            v-for="node in unboundSourceNodes"
-            :key="node.id"
-            size="small"
-            class="mx-1"
-          >
-            {{ node.name }}
-          </v-chip>
+          <v-icon class="mr-2">mdi-information</v-icon>
+          <span>
+            设备绑定已移至
+            <router-link to="/cpgraph">计算图编辑器</router-link>
+            。在编辑 SOURCE 节点时选择绑定的设备。
+          </span>
         </div>
       </v-alert>
     </v-card-text>
   </v-card>
+
+  <!-- 添加/编辑设备对话框 -->
+  <v-dialog v-model="showAddDialog" max-width="500">
+    <v-card>
+      <v-card-title>{{ editingDevice ? '编辑设备' : '添加设备' }}</v-card-title>
+      <v-divider />
+      <v-card-text class="pt-4">
+        <v-text-field
+          v-model="deviceForm.name"
+          label="设备名称"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+        />
+        <v-select
+          v-model="deviceForm.type"
+          :items="['simulated', 'serial', 'network']"
+          label="设备类型"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+        />
+        <v-text-field
+          v-model="deviceForm.address"
+          label="地址/端口"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          placeholder="如: COM3 或 192.168.1.100:8080"
+        />
+        <v-text-field
+          v-model.number="deviceForm.sampleRate"
+          label="采样率 (Hz)"
+          type="number"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+        />
+        <v-text-field
+          v-model.number="deviceForm.channels"
+          label="通道数"
+          type="number"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+        />
+      </v-card-text>
+      <v-divider />
+      <v-card-actions>
+        <v-btn variant="text" @click="closeDialog">取消</v-btn>
+        <v-spacer />
+        <v-btn color="primary" @click="saveDevice">保存</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted } from 'vue';
+import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { sessionStore, type Device } from '../services/sessionStore';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
@@ -123,67 +164,23 @@ import type { GraphNode } from '../services/graph';
 // 本地状态
 const devices = ref<Device[]>([]);
 const graphNodes = ref<GraphNode[]>([]);
-const nodeBindings = ref<Record<string, string>>({}); // deviceId -> nodeId
+const showAddDialog = ref(false);
+const editingDevice = ref<Device | null>(null);
 
-// 计算属性：可用的 SOURCE 节点
-const availableSourceNodes = computed(() => {
-  return graphNodes.value.filter(n => n.type === 'SOURCE');
+const deviceForm = ref({
+  name: '',
+  type: 'simulated',
+  address: '',
+  sampleRate: 1000,
+  channels: 8,
 });
 
-// 计算属性：未绑定的 SOURCE 节点
-const unboundSourceNodes = computed(() => {
-  const boundNodeIds = Object.values(nodeBindings.value);
-  return availableSourceNodes.value.filter(n => !boundNodeIds.includes(n.id));
-});
-
-// 检查节点是否已被其他设备绑定
-function isNodeBound(nodeId: string): boolean {
-  return Object.values(nodeBindings.value).includes(nodeId);
-}
-
-// 获取节点名称
-function getNodeName(nodeId: string): string {
-  const node = graphNodes.value.find(n => n.id === nodeId);
-  return node?.name || nodeId;
-}
-
-// 绑定设备到节点
-function bindNode(deviceId: string, nodeId: string | null) {
-  if (!nodeId) {
-    sessionStore.unbindInputNode(nodeBindings.value[deviceId]);
-    delete nodeBindings.value[deviceId];
-    return;
-  }
-  
-  // 检查节点是否已被其他设备绑定
-  const existingDevice = Object.entries(nodeBindings.value)
-    .find(([_, nid]) => nid === nodeId);
-  
-  if (existingDevice && existingDevice[0] !== deviceId) {
-    // 解除之前的绑定
-    const oldDeviceId = existingDevice[0];
-    delete nodeBindings.value[oldDeviceId];
-  }
-  
-  // 建立新的绑定
-  sessionStore.bindInputNode(nodeId, deviceId);
-  nodeBindings.value[deviceId] = nodeId;
-}
-
-// 解除绑定
-function unbindNode(deviceId: string) {
-  const nodeId = nodeBindings.value[deviceId];
-  if (nodeId) {
-    sessionStore.unbindInputNode(nodeId);
-    delete nodeBindings.value[deviceId];
-  }
-}
-
-// 查看设备详情
-function viewDevice(id: string) {
-  console.log('View device:', id);
-  // TODO: 打开设备详情对话框
-}
+// 计算属性：获取绑定到此设备的节点
+const getBoundNode = (deviceId: string): GraphNode | undefined => {
+  return graphNodes.value.find(node => 
+    node.type === 'SOURCE' && (node.deviceId === deviceId || node.params?.deviceId === deviceId)
+  );
+};
 
 // 刷新设备列表
 async function refreshDevices() {
@@ -198,9 +195,6 @@ async function refreshDevices() {
   
   // 同时刷新计算图节点
   await loadGraphNodes();
-  
-  // 同步绑定关系
-  syncBindings();
 }
 
 // 加载计算图节点
@@ -208,7 +202,6 @@ async function loadGraphNodes() {
   try {
     const payload = await fetchGraph();
     graphNodes.value = payload.nodes;
-    
     // 同时更新 sessionStore
     sessionStore.setGraph(payload);
   } catch (err) {
@@ -216,19 +209,6 @@ async function loadGraphNodes() {
     // 从 sessionStore 获取
     graphNodes.value = sessionStore.getGraph().nodes;
   }
-}
-
-// 同步绑定关系
-function syncBindings() {
-  const mappings = sessionStore.getInputMappings();
-  nodeBindings.value = {};
-  
-  // 反转映射：nodeId -> deviceId 转为 deviceId -> nodeId
-  Object.entries(mappings).forEach(([nodeId, deviceId]) => {
-    if (devices.value.find(d => d.id === deviceId)) {
-      nodeBindings.value[deviceId] = nodeId;
-    }
-  });
 }
 
 // 加载默认设备
@@ -248,20 +228,72 @@ function loadDefaultDevices() {
   sessionStore.setDevices(defaultDevices);
 }
 
-// 添加模拟设备
-function addMockDevice() {
-  const newId = `mock-${devices.value.length + 1}`;
-  const newDevice: Device = {
-    id: newId,
-    name: `模拟设备 ${devices.value.length + 1}`,
-    status: 'online',
+// 编辑设备
+function editDevice(device: Device) {
+  editingDevice.value = device;
+  deviceForm.value = {
+    name: device.name,
+    type: 'simulated',
+    address: device.port || device.address || '',
+    sampleRate: device.sampleRate,
+    channels: device.channels,
+  };
+  showAddDialog.value = true;
+}
+
+// 删除设备
+function deleteDevice(deviceId: string) {
+  if (!confirm('确定要删除此设备吗？')) return;
+  
+  devices.value = devices.value.filter(d => d.id !== deviceId);
+  sessionStore.setDevices(devices.value);
+}
+
+// 关闭对话框
+function closeDialog() {
+  showAddDialog.value = false;
+  editingDevice.value = null;
+  deviceForm.value = {
+    name: '',
+    type: 'simulated',
+    address: '',
     sampleRate: 1000,
     channels: 8,
-    port: `COM${devices.value.length + 3}`,
   };
+}
+
+// 保存设备
+function saveDevice() {
+  if (editingDevice.value) {
+    // 编辑现有设备
+    const index = devices.value.findIndex(d => d.id === editingDevice.value!.id);
+    if (index !== -1) {
+      devices.value[index] = {
+        ...editingDevice.value,
+        name: deviceForm.value.name,
+        sampleRate: deviceForm.value.sampleRate,
+        channels: deviceForm.value.channels,
+        port: deviceForm.value.address,
+        address: deviceForm.value.address,
+      };
+    }
+  } else {
+    // 添加新设备
+    const newId = `dev-${Date.now()}`;
+    const newDevice: Device = {
+      id: newId,
+      name: deviceForm.value.name || `设备 ${devices.value.length + 1}`,
+      status: 'online',
+      sampleRate: deviceForm.value.sampleRate,
+      channels: deviceForm.value.channels,
+      port: deviceForm.value.address,
+      address: deviceForm.value.address,
+    };
+    devices.value.push(newDevice);
+  }
   
-  devices.value.push(newDevice);
   sessionStore.setDevices(devices.value);
+  closeDialog();
 }
 
 // 监听 sessionStore 变化
@@ -278,7 +310,6 @@ onMounted(() => {
     if (state.graph.nodes.length > 0) {
       graphNodes.value = state.graph.nodes;
     }
-    syncBindings();
   });
 });
 

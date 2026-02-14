@@ -3,7 +3,7 @@ import json
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .graph_store import get_graph, run_graph, set_frozen, set_graph, validate_graph
+from .graph_store import get_graph, run_graph, stop_graph, get_runtime_state, set_frozen, set_graph, validate_graph
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path
 from .data_replay import list_replayable_files
 
@@ -70,9 +70,13 @@ def graph_freeze(request):
 
 @csrf_exempt
 def graph_run(request):
-    if request.method != 'POST':
-        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
-    return JsonResponse({'ok': True, 'result': run_graph()})
+    if request.method == 'POST':
+        return JsonResponse({'ok': True, 'result': run_graph()})
+    if request.method == 'GET':
+        return JsonResponse({'ok': True, 'state': get_runtime_state()})
+    if request.method == 'DELETE':
+        return JsonResponse({'ok': True, 'result': stop_graph()})
+    return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
 
 @csrf_exempt

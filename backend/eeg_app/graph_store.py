@@ -56,6 +56,13 @@ _GRAPH: GraphPayload = {
     'frozen': False,
 }
 
+# 运行时状态
+_RUNTIME_STATE = {
+    'running': False,
+    'startedAt': None,
+    'stoppedAt': None,
+}
+
 
 def _load_from_file() -> GraphPayload:
     """从JSON文件加载图数据"""
@@ -134,11 +141,36 @@ def validate_graph(payload: GraphPayload) -> List[str]:
 
 def run_graph() -> Dict:
     """运行计算图"""
+    global _RUNTIME_STATE
+    _RUNTIME_STATE['running'] = True
+    _RUNTIME_STATE['startedAt'] = time.time()
+    _RUNTIME_STATE['stoppedAt'] = None
     return {
         'status': 'running',
-        'startedAt': time.time(),
+        'startedAt': _RUNTIME_STATE['startedAt'],
         'nodeCount': len(_GRAPH['nodes']),
         'edgeCount': len(_GRAPH['edges']),
+    }
+
+
+def stop_graph() -> Dict:
+    """停止计算图"""
+    global _RUNTIME_STATE
+    _RUNTIME_STATE['running'] = False
+    _RUNTIME_STATE['stoppedAt'] = time.time()
+    return {
+        'status': 'stopped',
+        'startedAt': _RUNTIME_STATE['startedAt'],
+        'stoppedAt': _RUNTIME_STATE['stoppedAt'],
+    }
+
+
+def get_runtime_state() -> Dict:
+    """获取运行时状态"""
+    return {
+        'running': _RUNTIME_STATE['running'],
+        'startedAt': _RUNTIME_STATE['startedAt'],
+        'stoppedAt': _RUNTIME_STATE['stoppedAt'],
     }
 
 

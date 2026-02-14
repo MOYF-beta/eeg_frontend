@@ -1,86 +1,135 @@
-# 软件设计
+# EEG 脑电系统
 
-## 框架
+Vue3 + Vite + Django + WebSocket 实时脑电数据可视化系统
 
-vue + electron + Vuetify
-当前使用web app,未来可能打包到安卓
+## 功能特性
 
-后端使用python + django
+- **计算图编辑器**: 可视化拖拽构建数据处理流程
+- **扫描模式示波器**: 类似医院监护仪的扫描线显示，从左到右移动，左侧新数据右侧旧数据
+- **设备管理**: 设备增删改查，绑定状态显示
+- **实时数据流**: WebSocket 传输，30fps 刷新率
 
-## 设计
+## 技术栈
 
-- 主页：
-    - 脑电设备列表，每一行是一个卡片
-        - 设备名称
-        - 设备地址（串口号）
-        - 设备8个通道的波形图实时可视化（可以选择显示哪些通道）
-        - 设备8个通道的阻抗
-        - 配置设备8个通道的电极助记名
-        - 配置设备助记名
-    - 添加设备
-        - 物理设备（暂时空置）
-        - 测试模拟信号源 （一个设备对象，每个通道可以选择方波、正弦波并配置频率）
+### 前端
+- Vue 3 + Composition API
+- Vite 5.x
+- Vuetify 3
+- @antv/x6 (计算图可视化)
+- ECharts (波形显示)
 
-- 波形可视化（示波器）
-    - 这是一个重要的前端类，是一个基于echart实现的示波器
-    - 这个组件与后端建立websocket连接，接受后端实时传输的数据包并绘制图像
-    - 在建立websocket链接时传输元信息，获得通道数，通道采样率，通道名称（设备地址&助记名 + 通道编号+助记名），通道单位
-    - 数据更新：扫描/滚动
-    - 每个通道一行。每行可以分表调整幅度，可以整体调整窗口大小。调整窗口大小后旧窗口过长的数据被舍弃
-    - 简单计算值：可以以平行于x的直线显示/隐藏：窗口内(虚线)/全局（实线）的最大(红)/最小（蓝），平均值（黄），全局数据附带一个重置按钮
-    - 录制按键和录制指示（时间），录制指令发送给后端处理
+### 后端
+- Django
+- Django Channels (WebSocket)
+- Daphne (ASGI 服务器)
 
-- 频域显示器
-    - 同样基于echart实现的频谱图，处理的信息与波形可视化相同。接受后端实时传输的频谱数据包并绘制图像
-    - 每个通道显示
-    - 每个频率的最大最小平均分别以频谱图上的曲线表示
+## 项目结构
 
+```
+eeg_frontend/
+├── frontend/          # Vue3 前端
+│   ├── src/
+│   │   ├── components/    # 组件
+│   │   │   ├── GraphEditor.vue      # 计算图编辑器
+│   │   │   ├── Oscilloscope.vue     # 扫描模式示波器
+│   │   │   ├── DeviceList.vue       # 设备管理
+│   │   │   └── nodes/
+│   │   │       └── NodeEditDialog.vue   # 节点编辑（含设备绑定）
+│   │   ├── services/
+│   │   │   ├── graph.ts       # API 接口
+│   │   │   ├── sessionStore.ts    # 状态管理
+│   │   │   └── websocket.ts   # WebSocket 连接
+│   │   └── views/
+│   └── package.json
+├── backend/           # Django 后端
+│   ├── eeg_app/
+│   │   ├── consumers.py       # WebSocket Consumer
+│   │   ├── graph_consumer.py  # 计算图数据流
+│   │   ├── graph_store.py     # 计算图存储
+│   │   └── views.py           # API 视图
+│   └── manage.py
+```
 
-- 数据处理系统
+## 快速开始
 
-- 一个基于AntV X6的数据处理流程编辑器，编辑一个计算图
-- 后端从设备的实时数据或是采集数据的回放进行实时处理（使用滑动窗口处理）。每一个节点的数据都使用pandas dataframe存储（为了方便同时存储通道名称），用numpy/scipy处理
-- 实时数据、回放数据为数据的来源节点（可以选择数据的时间范围）
-- 处理节点可以配置参数，具有输入和输出边。输出后在原有名称上附带-{节点名}
-    - 运算节点
-        - 滤波器(先实现高通/低通道)
-        - 求和器
-    - 工具节点
-        - 通道分离器（可以在内部创建组，如1,2-3）
-        - 通道合并器（合并dataframe）
-    - 示波器节点（创建后前端可以访问数据）
-    - 频谱显示器节点（创建后前端可以访问数据）
-    - 保存节点
-        - 可以设定文件名，以csv格式记录数据
-这些节点类似低代码编程工具，每个GUI节点上可以调节参数，并用边构成计算图。使用AntV X6自定义节点实现
-计算图必须冻结后才可以运行。
+### 1. 安装依赖
 
-- 原速模式运行时示波器等可以访问活跃的节点，并实时向数据文件写入原始二进制数
-- 处理模式示波器无效，以最快速度算出需要保存的内容然后导出
+**前端:**
+```bash
+cd frontend
+npm install
+```
 
-## 基础版实现（已生成）
+**后端:**
+```bash
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-前端：Vue 3 + Vite + Vuetify + AntV X6，包含设备列表、基础波形/频域显示与流程图示例。后端：Django + Channels，提供健康检查、设备列表与 WebSocket 模拟数据流。
+### 2. 启动服务
 
-### 目录结构
+**后端 (端口 8000):**
+```bash
+cd backend
+source venv/bin/activate
+daphne -b 0.0.0.0 -p 8000 eeg_backend.asgi:application
+```
 
-- [frontend](frontend)
-- [backend](backend)
+**前端 (端口 5173):**
+```bash
+cd frontend
+npm run dev
+```
 
-### 运行前端
+### 3. 访问
 
-1. 安装依赖：在 [frontend](frontend) 目录执行 `npm install`
-2. 启动：执行 `npm run dev`
+- 计算图: http://localhost:5173/cpgraph
+- 设备管理: http://localhost:5173/devices
+- 可视化: http://localhost:5173/visualization
+- 后端 API: http://localhost:8000/api/
 
-cd /home/zch/Documents/eeg_frontend/frontend && npm run dev -- --host 0.0.0.0 --port 5173
+## 核心功能说明
 
-### 运行后端
+### 扫描模式示波器
 
-1. 安装依赖：在 [backend](backend) 目录安装 [requirements.txt](backend/requirements.txt)
-2. 启动（支持 WebSocket）：执行 `python -m daphne -b 0.0.0.0 -p 8000 eeg_backend.asgi:application`
+不同于传统的滚动模式，扫描模式下：
+- 扫描线从左到右移动
+- 线的左侧显示新数据
+- 线的右侧显示旧数据
+- 到达最右端后回到最左端重新开始
+- 图形稳定不滚动，只有扫描线移动
 
-### 接口
+### 设备绑定流程
 
-- 健康检查：GET http://localhost:8000/api/health/
-- 设备列表：GET http://localhost:8000/api/devices/
-- WebSocket：ws://localhost:8000/ws/stream/
+1. 在 `/devices` 页面添加设备
+2. 在 `/cpgraph` 计算图编辑器添加 SOURCE 节点
+3. 双击 SOURCE 节点编辑，选择绑定的设备
+4. 冻结计算图并运行
+
+### 运行按钮状态
+
+- 未运行: 绿色「运行」按钮
+- 运行中: 红色「停止」按钮 + 「运行中」标签
+- 每 2 秒轮询后端状态
+
+## API 接口
+
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| /api/graph/ | GET/POST | 获取/保存计算图 |
+| /api/graph/freeze/ | POST | 冻结/解冻计算图 |
+| /api/graph/run/ | GET/POST/DELETE | 获取状态/启动/停止运行 |
+| /api/devices/ | GET | 获取设备列表 |
+| ws://localhost:8000/ws/eeg/ | WebSocket | 实时数据流 |
+
+## 注意事项
+
+- 冻结前需确保所有 SOURCE 节点已绑定设备
+- WebSocket 依赖 Django Channels，必须使用 Daphne 运行
+- 开发模式下前端会自动代理 API 请求到后端
+
+## 最近更新
+
+- v5: 扫描模式示波器、设备绑定移至节点编辑、运行按钮状态显示

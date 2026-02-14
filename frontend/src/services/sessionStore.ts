@@ -335,11 +335,18 @@ class SessionStore {
     const errors: string[] = [];
     const warnings: string[] = [];
 
-    // 检查所有SOURCE节点是否已绑定设备
+    // 检查所有SOURCE节点是否已绑定设备（从节点数据读取）
     const sourceNodes = this.state.graph.nodes.filter((n) => n.type === 'SOURCE');
     sourceNodes.forEach((node) => {
-      if (!this.state.mappings.inputs[node.id]) {
+      const deviceId = node.deviceId || node.params?.deviceId;
+      if (!deviceId) {
         errors.push(`输入节点 "${node.name}" 未绑定设备`);
+      } else {
+        // 检查设备是否存在
+        const device = this.getDeviceById(deviceId);
+        if (!device) {
+          errors.push(`输入节点 "${node.name}" 绑定的设备不存在: ${deviceId}`);
+        }
       }
     });
 
