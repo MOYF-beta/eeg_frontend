@@ -452,17 +452,17 @@ onMounted(async () => {
   // 加载计算图状态（先获取冻结状态）
   await updateGraphState();
   
-  // 注册WebSocket回调
-  eegWebSocket.onConnected = () => {
+  // 注册WebSocket回调（使用正确的方法调用）
+  const unsubConnected = eegWebSocket.onConnected(() => {
     wsStatus.value = 'connected';
     if (selectedNodeId.value && isGraphFrozen.value) {
       subscribeToNode(selectedNodeId.value);
     }
-  };
-  eegWebSocket.onDisconnected = () => {
+  });
+  const unsubDisconnected = eegWebSocket.onDisconnected(() => {
     wsStatus.value = 'disconnected';
-  };
-  eegWebSocket.onData = handleDataPacket;
+  });
+  const unsubData = eegWebSocket.onData(handleDataPacket);
   
   // 如果WebSocket已连接，更新状态
   if (eegWebSocket.isConnected()) {
@@ -482,6 +482,10 @@ onMounted(async () => {
     if (selectedNodeId.value) {
       eegWebSocket.unsubscribe([selectedNodeId.value]);
     }
+    // 取消WebSocket回调注册
+    unsubConnected();
+    unsubDisconnected();
+    unsubData();
   });
 });
 

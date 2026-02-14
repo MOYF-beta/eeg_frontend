@@ -115,7 +115,7 @@
 
       <div class="spec-wrap">
         <canvas ref="canvasRef" class="spec-canvas" :class="{ 'disabled': !canDisplay }"></canvas>
-        
+
         <!-- 无数据遮罩 -->
         <div v-if="!canDisplay" class="no-data-overlay">
           <v-icon size="48" color="grey-lighten-1">mdi-chart-bar</v-icon>
@@ -294,7 +294,7 @@ const subscribeToNode = (nodeId: string) => {
 const computeFFT = (data: number[]): number[] => {
   const n = bufferSize;
   const mags = new Array(n / 2).fill(0);
-  
+
   for (let k = 0; k < n / 2; k++) {
     let re = 0;
     let im = 0;
@@ -308,7 +308,7 @@ const computeFFT = (data: number[]): number[] => {
     }
     mags[k] = Math.sqrt(re * re + im * im) / n;
   }
-  
+
   return mags;
 };
 
@@ -320,7 +320,7 @@ const computeSpectrum = () => {
       spectrumData.value[ch] = computeFFT(data);
     }
   }
-  
+
   // 计算平均频谱
   if (displayMode.value === 'average') {
     const avg = new Array(bufferSize / 2).fill(0);
@@ -360,7 +360,7 @@ const drawSpectrum = () => {
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
   if (!ctx) return;
-  
+
   const width = canvas.clientWidth || 600;
   const height = canvas.clientHeight || 260;
   const leftPad = 48;
@@ -431,7 +431,7 @@ const drawSpectrum = () => {
   ctx.textAlign = 'center';
   ctx.fillText('幅值', 0, 0);
   ctx.restore();
-  
+
   // 绘制图例（分通道模式）
   if (displayMode.value === 'channels') {
     const legendX = leftPad + 10;
@@ -460,7 +460,7 @@ const drawSingleSpectrum = (
   channel?: number
 ) => {
   if (!mags || mags.length === 0) return;
-  
+
   const maxMag = Math.max(...mags, 0.001);
   ctx.strokeStyle = color;
   ctx.lineWidth = 2;
@@ -477,10 +477,10 @@ const drawSingleSpectrum = (
 // WebSocket 数据处理器
 const handleDataPacket = (packet: EegDataPacket) => {
   if (packet.nodeId !== selectedNodeId.value) return;
-  
+
   packetCount.value++;
   lastPacketTime.value = Date.now();
-  
+
   // 保存样本数据
   for (let ch = 0; ch < channelCount && ch < packet.channels.length; ch++) {
     samples[ch].push(packet.channels[ch]);
@@ -488,7 +488,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
       samples[ch].shift();
     }
   }
-  
+
   // 每200ms计算一次频谱
   const now = performance.now();
   if (now - lastComputeTime > 200) {
@@ -503,7 +503,7 @@ const updateGraphState = async () => {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
     isGraphFrozen.value = graph.frozen || false;
-    
+
     // 如果已冻结且有选中节点，订阅数据
     if (isGraphFrozen.value && selectedNodeId.value) {
       subscribeToNode(selectedNodeId.value);
@@ -523,29 +523,29 @@ const loop = () => {
 onMounted(async () => {
   // 加载计算图状态（先获取冻结状态）
   await updateGraphState();
-  
-  // 注册WebSocket回调
-  eegWebSocket.onConnected = () => {
+
+  // 注册WebSocket回调（使用正确的方法调用）
+  const unsubConnected = eegWebSocket.onConnected(() => {
     wsStatus.value = 'connected';
     if (selectedNodeId.value && isGraphFrozen.value) {
       subscribeToNode(selectedNodeId.value);
     }
-  };
-  eegWebSocket.onDisconnected = () => {
+  });
+  const unsubDisconnected = eegWebSocket.onDisconnected(() => {
     wsStatus.value = 'disconnected';
-  };
-  eegWebSocket.onData = handleDataPacket;
-  
+  });
+  const unsubData = eegWebSocket.onData(handleDataPacket);
+
   // 设置画布
   resizeObserver.value = new ResizeObserver(() => resizeCanvas());
   if (canvasRef.value) {
     resizeObserver.value.observe(canvasRef.value);
     resizeCanvas();
   }
-  
+
   // 启动动画
   animationId = requestAnimationFrame(loop);
-  
+
   // 如果WebSocket已连接，更新状态
   if (eegWebSocket.isConnected()) {
     wsStatus.value = 'connected';
@@ -557,16 +557,20 @@ onMounted(async () => {
     // 如果计算图已冻结但WebSocket未连接，尝试连接
     eegWebSocket.connect();
   }
-});
 
-onUnmounted(() => {
-  if (selectedNodeId.value) {
-    eegWebSocket.unsubscribe([selectedNodeId.value]);
-  }
-  if (resizeObserver.value && canvasRef.value) {
-    resizeObserver.value.unobserve(canvasRef.value);
-  }
-  cancelAnimationFrame(animationId);
+  onUnmounted(() => {
+    if (selectedNodeId.value) {
+      eegWebSocket.unsubscribe([selectedNodeId.value]);
+    }
+    if (resizeObserver.value && canvasRef.value) {
+      resizeObserver.value.unobserve(canvasRef.value);
+    }
+    cancelAnimationFrame(animationId);
+    // 取消WebSocket回调注册
+    unsubConnected();
+    unsubDisconnected();
+    unsubData();
+  });
 });
 
 // 监听选中节点变化
