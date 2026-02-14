@@ -38,6 +38,11 @@ Thumbs.db
 /dist/
 /build/
 
+# Electron build/release outputs
+/electron/release/
+/electron/resources/
+/electron/*.AppImage
+
 # Misc
 .env.local
 .env.*
