@@ -105,12 +105,12 @@
       <!-- 未选择数据源提示 -->
       <v-alert v-if="!selectedNodeId" type="info" class="mb-4">
         请从上方下拉菜单选择计算图中的频谱节点作为数据源。
-        <a href="#/cpgraph" target="_blank">前往计算图编辑器 →</a>
+        <router-link to="/cpgraph" target="_blank">前往计算图编辑器 →</router-link>
       </v-alert>
 
       <!-- 计算图未冻结提示 -->
       <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
-        计算图未冻结。请在<a href="#/cpgraph" target="_blank">计算图编辑器</a>中点击"冻结"按钮启动数据流。
+        计算图未冻结。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"冻结"按钮启动数据流。
       </v-alert>
 
       <div class="spec-wrap">

@@ -16,7 +16,7 @@
     <v-card-text>
       <!-- 计算图状态提示 -->
       <v-alert v-if="graphNodes.length === 0" type="info" class="mb-4">
-        计算图中没有输入节点。请先在<a href="#/cpgraph">计算图编辑器</a>中添加数据源节点。
+        计算图中没有输入节点。请先在<router-link to="/cpgraph">计算图编辑器</router-link>中添加数据源节点。
       </v-alert>
       
       <v-row>

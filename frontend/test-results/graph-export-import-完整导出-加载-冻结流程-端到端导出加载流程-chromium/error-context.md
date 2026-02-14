@@ -1,0 +1,86 @@
+# Page snapshot
+
+```yaml
+- generic [ref=e4]:
+  - banner [ref=e5]:
+    - generic [ref=e6]:
+      - generic [ref=e8]: EEG 脑电系统
+      - link "设备" [ref=e9] [cursor=pointer]:
+        - /url: /devices
+        - generic [ref=e10]: 设备
+      - link "示波器" [ref=e11] [cursor=pointer]:
+        - /url: /oscilloscope
+        - generic [ref=e12]: 示波器
+      - link "可视化" [ref=e13] [cursor=pointer]:
+        - /url: /visualization
+        - generic [ref=e14]: 可视化
+      - link "计算图" [ref=e15] [cursor=pointer]:
+        - /url: /cpgraph
+        - generic [ref=e16]: 计算图
+      - link "测试" [ref=e17] [cursor=pointer]:
+        - /url: /test
+        - generic [ref=e18]: 测试
+  - main [ref=e19]:
+    - generic [ref=e20]:
+      - heading "计算图" [level=1] [ref=e21]
+      - generic [ref=e22]:
+        - generic [ref=e23]:
+          - text: 计算图编辑器
+          - generic [ref=e24]:
+            - generic [ref=e27]:
+              - checkbox "冻结" [ref=e31] [cursor=pointer]
+              - generic [ref=e32] [cursor=pointer]: 冻结
+            - button "运行" [disabled]:
+              - generic: 运行
+            - button "导出" [ref=e33] [cursor=pointer]:
+              - generic [ref=e34]: 导出
+            - button "加载" [ref=e35] [cursor=pointer]:
+              - generic [ref=e36]: 加载
+            - button "加载Mock" [ref=e37] [cursor=pointer]:
+              - generic [ref=e38]: 加载Mock
+            - button "清空" [active] [ref=e39] [cursor=pointer]:
+              - generic [ref=e40]: 清空
+        - separator [ref=e41]
+        - generic [ref=e43]:
+          - generic [ref=e44]:
+            - generic [ref=e45]: 节点库
+            - generic [ref=e46]:
+              - generic [ref=e47]: 数据来源
+              - generic [ref=e48]:
+                - generic [ref=e49]: SRC
+                - generic [ref=e50]: 数据源
+              - generic [ref=e51]:
+                - generic [ref=e52]: RPL
+                - generic [ref=e53]: 回放
+            - generic [ref=e54]:
+              - generic [ref=e55]: 处理节点
+              - generic [ref=e56]:
+                - generic [ref=e57]: FIL
+                - generic [ref=e58]: 滤波器
+              - generic [ref=e59]:
+                - generic [ref=e60]: SUM
+                - generic [ref=e61]: 求和器
+              - generic [ref=e62]:
+                - generic [ref=e63]: SPT
+                - generic [ref=e64]: 分离器
+              - generic [ref=e65]:
+                - generic [ref=e66]: MRG
+                - generic [ref=e67]: 合并器
+            - generic [ref=e68]:
+              - generic [ref=e69]: 显示与保存
+              - generic [ref=e70]:
+                - generic [ref=e71]: OSC
+                - generic [ref=e72]: 示波器
+              - generic [ref=e73]:
+                - generic [ref=e74]: FFT
+                - generic [ref=e75]: 频谱
+              - generic [ref=e76]:
+                - generic [ref=e77]: SAV
+                - generic [ref=e78]: 保存
+          - img [ref=e82]:
+            - generic [ref=e84]:
+              - generic [ref=e87]: 脑电数据源1000Hz 8ch
+              - generic [ref=e91]: 低通滤波器lowpass 50Hz
+              - generic [ref=e96]: 通道分离
+              - generic [ref=e101]: 波形显示器5s scroll
+```

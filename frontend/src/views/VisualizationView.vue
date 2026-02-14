@@ -26,7 +26,7 @@
     <!-- 提示信息 -->
     <v-alert v-if="!hasOscNodes && !hasSpectrumNodes" type="info" class="mb-4">
       计算图中没有示波器或频谱节点。
-      <a href="#/cpgraph">前往计算图编辑器添加 →</a>
+      <router-link to="/cpgraph">前往计算图编辑器添加 →</router-link>
     </v-alert>
 
     <!-- 示波器卡片列表 -->
