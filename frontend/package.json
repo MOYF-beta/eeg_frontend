@@ -19,11 +19,7 @@
     "electron:build:all": "npm run build && electron-builder --linux --win"
   },
   "dependencies": {
-    "@antv/x6": "^2.18.1",
-    "@antv/x6-plugin-dnd": "^2.1.1",
-    "@antv/x6-plugin-snapline": "^2.1.7",
-    "@antv/x6-plugin-stencil": "^2.1.5",
-    "@antv/x6-vue-shape": "^3.0.2",
+    "@antv/x6": "^3.0.0",
     "@mdi/font": "^7.4.47",
     "echarts": "^6.0.0",
     "vue": "^3.4.21",

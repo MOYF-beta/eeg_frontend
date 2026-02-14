@@ -207,6 +207,11 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         # 数据缓冲区
         sample_buffer = {}
         last_send_time = time.time()
+
+        # 采样节拍控制（基于实际耗时追赶采样率）
+        last_sample_time = time.perf_counter()
+        sample_accumulator = 0.0
+        max_samples_per_loop = int(sample_rate * 0.2)  # 最多补偿200ms
         
         # 50Hz 低通滤波器（一阶RC滤波器）
         FILTER_CUTOFF = 50  # Hz
@@ -234,62 +239,76 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 await asyncio.sleep(0.1)
                 continue
             
-            # 获取数据源
-            replay_channels = self._get_source_channels()
-            
-            if replay_channels is not None:
-                # 使用回放数据
-                raw_channels = replay_channels
+            # 计算应生成的样本数
+            now = time.perf_counter()
+            elapsed_samples = (now - last_sample_time) * sample_rate
+            last_sample_time = now
+            sample_accumulator += elapsed_samples
+            samples_to_generate = int(sample_accumulator)
+
+            if samples_to_generate <= 0:
+                await asyncio.sleep(0.001)
+                continue
+
+            if samples_to_generate > max_samples_per_loop:
+                samples_to_generate = max_samples_per_loop
+                sample_accumulator = 0.0
             else:
-                # 生成模拟数据（方波 + 噪声，25Hz方波用于测试）
-                raw_channels = []
-                for i in range(8):
-                    # 方波信号 - 25Hz
-                    freq = 25
-                    square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-                    square_signal = square * 30
-                    
-                    # 高频噪声
-                    high_freq1 = 50 + i * 10
-                    high_freq2 = 120 + i * 5
-                    noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
-                            math.sin(2 * math.pi * high_freq2 * t) * 15
-                    
-                    # 随机噪声
-                    random_noise = random.uniform(-5, 5)
-                    
-                    raw_channels.append(square_signal + noise + random_noise)
-            
-            # 应用50Hz低通滤波器
-            channels = []
-            for i in range(8):
-                if first_sample[i]:
-                    filtered_values[i] = raw_channels[i]
-                    first_sample[i] = False
-                else:
-                    # 一阶低通滤波器
-                    filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
-                channels.append(filtered_values[i])
-            
-            # 保存数据到文件（如果有SAVE节点）
-            if self._save_nodes:
-                self._save_channels(channels)
-            
+                sample_accumulator -= samples_to_generate
+
             # 获取计算图节点并缓冲数据
             nodes = graph.get('nodes', [])
-            
-            for node in nodes:
-                if node['type'] != 'OSC':
-                    continue
-                if node['id'] not in self.subscribed_nodes:
-                    continue
-                
-                # 初始化缓冲区
-                if node['id'] not in sample_buffer:
-                    sample_buffer[node['id']] = []
-                
-                # 添加样本到缓冲区
-                sample_buffer[node['id']].append(channels[:])  # 复制列表
+            osc_nodes = [node for node in nodes if node.get('type') == 'OSC' and node.get('id') in self.subscribed_nodes]
+
+            for _ in range(samples_to_generate):
+                # 获取数据源（每个样本一次，支持REPLAY）
+                replay_channels = self._get_source_channels()
+
+                if replay_channels is not None:
+                    # 使用回放数据
+                    raw_channels = replay_channels
+                else:
+                    # 生成模拟数据（方波 + 噪声，25Hz方波用于测试）
+                    raw_channels = []
+                    for i in range(8):
+                        # 方波信号 - 25Hz
+                        freq = 25
+                        square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
+                        square_signal = square * 30
+
+                        # 高频噪声
+                        high_freq1 = 50 + i * 10
+                        high_freq2 = 120 + i * 5
+                        noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
+                                math.sin(2 * math.pi * high_freq2 * t) * 15
+
+                        # 随机噪声
+                        random_noise = random.uniform(-5, 5)
+
+                        raw_channels.append(square_signal + noise + random_noise)
+
+                # 应用50Hz低通滤波器
+                channels = []
+                for i in range(8):
+                    if first_sample[i]:
+                        filtered_values[i] = raw_channels[i]
+                        first_sample[i] = False
+                    else:
+                        # 一阶低通滤波器
+                        filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
+                    channels.append(filtered_values[i])
+
+                # 保存数据到文件（如果有SAVE节点）
+                if self._save_nodes:
+                    self._save_channels(channels)
+
+                for node in osc_nodes:
+                    node_id = node['id']
+                    if node_id not in sample_buffer:
+                        sample_buffer[node_id] = []
+                    sample_buffer[node_id].append(channels[:])
+
+                t += dt
             
             # 检查是否到达发送时间（30fps）
             current_time = time.time()
@@ -301,18 +320,19 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 # 发送缓冲的数据
                 for node_id, samples in list(sample_buffer.items()):
                     if samples:
-                        # 使用最新的样本
+                        # 使用最新的样本作为兼容字段，同时发送批量样本
                         latest_channels = samples[-1]
-                        
-                        # 发送数据包
+
+                        # 发送数据包（批量样本）
                         payload = {
                             'type': 'data',
                             'timestamp': int(time.time() * 1000),
                             'nodeId': node_id,
                             'channels': latest_channels,
+                            'samples': samples,
                             'sampleRate': sample_rate,
                         }
-                        
+
                         try:
                             await self.send(text_data=json.dumps(payload))
                         except Exception as e:
@@ -322,4 +342,4 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 
                 # 清空缓冲区
                 sample_buffer.clear()
-            await asyncio.sleep(dt)
+            await asyncio.sleep(0.001)

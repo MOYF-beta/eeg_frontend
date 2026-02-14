@@ -1,1 +1,0 @@
-{"error":"[NOT_FOUND] File @antv/x6@2.15.3/dist/x6.js not found"}

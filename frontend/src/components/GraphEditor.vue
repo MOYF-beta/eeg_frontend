@@ -207,8 +207,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
-import { Graph } from '@antv/x6';
-import { Snapline } from '@antv/x6-plugin-snapline';
+import { Graph, Snapline } from '@antv/x6';
 import {
   fetchGraph,
   runGraph,
