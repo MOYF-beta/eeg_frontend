@@ -445,12 +445,12 @@ const updateGraphState = async () => {
 };
 
 // 生命周期
-onMounted(() => {
+onMounted(async () => {
   // 初始化 ECharts
   const cleanup = initChart();
   
-  // 加载计算图状态
-  updateGraphState();
+  // 加载计算图状态（先获取冻结状态）
+  await updateGraphState();
   
   // 注册WebSocket回调
   eegWebSocket.onConnected = () => {

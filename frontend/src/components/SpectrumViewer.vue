@@ -520,9 +520,9 @@ const loop = () => {
 };
 
 // 生命周期
-onMounted(() => {
-  // 加载计算图状态
-  updateGraphState();
+onMounted(async () => {
+  // 加载计算图状态（先获取冻结状态）
+  await updateGraphState();
   
   // 注册WebSocket回调
   eegWebSocket.onConnected = () => {
