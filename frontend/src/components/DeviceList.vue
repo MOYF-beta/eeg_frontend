@@ -115,7 +115,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { sessionStore, type Device } from '../services/sessionStore';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
@@ -283,7 +283,7 @@ onMounted(() => {
 });
 
 // 清理
-watch(() => {}, () => {
+onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
   }

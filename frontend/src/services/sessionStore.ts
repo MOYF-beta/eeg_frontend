@@ -121,7 +121,7 @@ class SessionStore {
   }
 
   // 订阅状态变化
-  subscribe = (listener: (state: EegSessionState) => void): (() => void) => {
+  subscribe(listener: (state: EegSessionState) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }

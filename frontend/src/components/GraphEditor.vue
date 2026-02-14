@@ -4,8 +4,9 @@
       计算图编辑器
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
-        <v-btn size="small" variant="tonal" @click="save">保存</v-btn>
         <v-btn size="small" color="primary" @click="run" :disabled="!frozen">运行</v-btn>
+        <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
+        <v-btn size="small" variant="tonal" @click="triggerFileLoad">加载</v-btn>
         <v-btn size="small" color="secondary" @click="loadMockData">加载Mock</v-btn>
         <v-btn size="small" color="info" @click="clear">清空</v-btn>
       </div>
@@ -178,6 +179,15 @@
     :all-edges="allEdges"
     @save="handleNodeSave"
     @bind-oscilloscope="handleBindOscilloscope"
+  />
+
+  <!-- 隐藏的文件输入用于加载计算图 -->
+  <input
+    id="graph-file-input"
+    type="file"
+    accept=".json"
+    style="display: none"
+    @change="loadGraphFromFile"
   />
 </template>
 
@@ -656,11 +666,21 @@ async function applyFrozen() {
     // 显示警告信息（如果有）
     if (validation.warnings.length > 0) {
       console.warn('[GraphEditor] Freeze warnings:', validation.warnings);
-      // 可选：显示警告但不阻止冻结
-      // alert(`警告:\n${validation.warnings.join('\n')}`);
     }
 
-    // 验证通过，提交到后端
+    // 验证通过，先自动保存到后端
+    try {
+      console.log('[GraphEditor] Auto-saving graph before freeze...');
+      await saveGraph(payload);
+      console.log('[GraphEditor] Auto-save successful');
+    } catch (err) {
+      console.error('[GraphEditor] Auto-save failed:', err);
+      alert('自动保存失败，无法冻结计算图');
+      frozen.value = false;
+      return;
+    }
+
+    // 然后冻结并启动 WebSocket
     try {
       console.log('[GraphEditor] Calling setGraphFrozen(true)...');
       await setGraphFrozen(true);
@@ -722,6 +742,96 @@ async function save() {
   } catch (err) {
     console.error('[GraphEditor] Failed to save graph:', err);
     alert('保存失败: ' + (err as Error).message);
+  }
+}
+
+// 导出计算图为 JSON 文件
+function exportGraph() {
+  const payload = buildPayload();
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `eeg-graph-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  
+  console.log('[GraphEditor] Graph exported');
+}
+
+// 触发文件选择
+function triggerFileLoad() {
+  const input = document.getElementById('graph-file-input') as HTMLInputElement;
+  if (input) {
+    input.click();
+  }
+}
+
+// 从文件加载计算图
+async function loadGraphFromFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const payload = JSON.parse(text) as GraphPayload;
+    
+    // 验证数据结构
+    if (!payload.nodes || !Array.isArray(payload.nodes) || !payload.edges || !Array.isArray(payload.edges)) {
+      alert('无效的计算图文件格式');
+      return;
+    }
+
+    const graph = graphRef.value;
+    if (!graph) return;
+
+    // 清空当前画布
+    graph.clearCells();
+
+    // 加载节点
+    payload.nodes.forEach((node: GraphNode) => {
+      if (!node.id) {
+        console.warn('Node without id:', node);
+        node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      }
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
+    });
+
+    // 加载边
+    payload.edges.forEach((edge) => {
+      const sourceNode = graph.getCellById(edge.source);
+      const targetNode = graph.getCellById(edge.target);
+      if (sourceNode && targetNode) {
+        graph.addEdge({
+          id: edge.id,
+          source: { cell: edge.source, port: 'out' },
+          target: { cell: edge.target, port: 'in' },
+          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+        });
+      } else {
+        console.warn('Skipping edge with missing nodes:', edge);
+      }
+    });
+
+    hasNodes.value = graph.getNodes().length > 0;
+    frozen.value = payload.frozen || false;
+    
+    // 保存到后端
+    await saveGraph(buildPayload());
+    
+    console.log('[GraphEditor] Graph loaded from file:', file.name);
+    alert('计算图加载成功');
+  } catch (err) {
+    console.error('[GraphEditor] Failed to load graph from file:', err);
+    alert('加载失败: ' + (err as Error).message);
+  } finally {
+    // 清空 input 以便可以再次选择同一文件
+    input.value = '';
   }
 }
 

@@ -228,6 +228,37 @@ class EegWebSocket {
     }
   }
 
+  // 公开方法：订阅指定节点（供可视化组件使用）
+  subscribe(nodeIds: string[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('WebSocket not connected, cannot subscribe');
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'subscribe',
+        nodeIds: nodeIds,
+      })
+    );
+    console.log('Subscribed to nodes:', nodeIds);
+  }
+
+  // 公开方法：取消订阅指定节点
+  unsubscribe(nodeIds: string[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    this.ws.send(
+      JSON.stringify({
+        type: 'unsubscribe',
+        nodeIds: nodeIds,
+      })
+    );
+    console.log('Unsubscribed from nodes:', nodeIds);
+  }
+
   // ========== 事件监听 ==========
 
   onData(callback: (packet: EegDataPacket) => void): () => void {
