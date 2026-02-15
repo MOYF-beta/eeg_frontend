@@ -39,7 +39,7 @@
 
     <!-- 频谱卡片列表 -->
     <div v-for="(spec, index) in spectrums" :key="spec.id">
-      <SpectrumViewer
+      <FrequencyView
         :initial-node-id="spec.initialNodeId"
         @remove="removeSpectrum(index)"
       />
@@ -59,7 +59,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import Oscilloscope from '../components/Oscilloscope.vue';
-import SpectrumViewer from '../components/SpectrumViewer.vue';
+import FrequencyView from '../components/FrequencyView.vue';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
 

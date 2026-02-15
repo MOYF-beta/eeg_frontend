@@ -7,9 +7,17 @@ type WsStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 export interface EegDataPacket {
   timestamp: number;
   nodeId: string; // 数据来源节点ID
+  nodeType?: string;
   channels: number[]; // 各通道数据值
   samples?: number[][]; // 批量样本（可选）
   sampleRate?: number;
+  fftSize?: number;
+  freqResolution?: number;
+  spectra?: number[][]; // 每通道频谱
+  spectrum?: number[]; // 平均频谱
+  spectrogramRow?: number[]; // 时频谱单帧(0~1)
+  spectrogramDbMin?: number;
+  spectrogramDbMax?: number;
 }
 
 // WebSocket配置
@@ -176,9 +184,17 @@ class EegWebSocket {
         const packet: EegDataPacket = {
           timestamp: message.timestamp || Date.now(),
           nodeId: message.nodeId,
+          nodeType: message.nodeType,
           channels: message.channels,
           samples: message.samples,
           sampleRate: message.sampleRate,
+          fftSize: message.fftSize,
+          freqResolution: message.freqResolution,
+          spectra: message.spectra,
+          spectrum: message.spectrum,
+          spectrogramRow: message.spectrogramRow,
+          spectrogramDbMin: message.spectrogramDbMin,
+          spectrogramDbMax: message.spectrogramDbMax,
         };
         this.listeners.onData.forEach((cb) => cb(packet));
       }

@@ -1,6 +1,9 @@
 import asyncio
 import json
 import time
+from collections import deque
+
+import numpy as np
 from channels.generic.websocket import AsyncWebsocketConsumer
 
 
@@ -26,6 +29,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         self.graph_frozen = False
         self._save_nodes = []  # SAVE节点列表
         self._replay_nodes = []  # REPLAY节点列表
+        self._spectrum_buffers = [deque(maxlen=2048) for _ in range(8)]
         
         # 从 graph_store 获取计算图状态
         from .graph_store import get_graph
@@ -110,6 +114,61 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         
         self._save_nodes = []
         self._replay_nodes = []
+
+    @staticmethod
+    def _extract_fft_size(nodes):
+        """从 SPECTRUM 节点参数中提取 FFT 点数，缺省 512"""
+        valid_sizes = {256, 512, 1024, 2048}
+        for node in nodes:
+            if node.get('type') != 'SPECTRUM':
+                continue
+            params = node.get('params', {}) or {}
+            raw = params.get('fftSize', params.get('fft_size', 512))
+            try:
+                size = int(raw)
+            except Exception:
+                continue
+            if size in valid_sizes:
+                return size
+        return 512
+
+    def _compute_spectrum_bundle(self, sample_rate: int, fft_size: int):
+        """计算后端频谱数据（每通道频谱 + 平均频谱 + 时频谱行）"""
+        if fft_size < 8:
+            return None
+
+        min_len = min((len(ch) for ch in self._spectrum_buffers), default=0)
+        if min_len < fft_size:
+            return None
+
+        channel_frames = []
+        for ch in self._spectrum_buffers:
+            arr = np.array(list(ch)[-fft_size:], dtype=np.float64)
+            channel_frames.append(arr)
+
+        data = np.stack(channel_frames, axis=0)  # [C, N]
+        window = np.hamming(fft_size)
+        data = data * window
+
+        fft = np.fft.rfft(data, axis=1)
+        mags = np.abs(fft) / fft_size  # [C, K]
+        avg = np.mean(mags, axis=0)    # [K]
+
+        db = 20.0 * np.log10(np.maximum(avg, 1e-12))
+        db_min = float(np.min(db))
+        db_max = float(np.max(db))
+        span = max(1e-6, db_max - db_min)
+        norm_row = np.clip((db - db_min) / span, 0.0, 1.0)
+
+        return {
+            'fftSize': fft_size,
+            'freqResolution': float(sample_rate / fft_size),
+            'spectra': mags.tolist(),
+            'spectrum': avg.tolist(),
+            'spectrogramRow': norm_row.tolist(),
+            'spectrogramDbMin': db_min,
+            'spectrogramDbMax': db_max,
+        }
     
     async def receive(self, text_data):
         """处理客户端消息"""
@@ -259,6 +318,10 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
             # 获取计算图节点并缓冲数据
             nodes = graph.get('nodes', [])
             osc_nodes = [node for node in nodes if node.get('type') == 'OSC' and node.get('id') in self.subscribed_nodes]
+            spectrum_nodes = [node for node in nodes if node.get('type') == 'SPECTRUM' and node.get('id') in self.subscribed_nodes]
+            output_nodes = osc_nodes + spectrum_nodes
+
+            fft_size = self._extract_fft_size(nodes)
 
             for _ in range(samples_to_generate):
                 # 获取数据源（每个样本一次，支持REPLAY）
@@ -297,12 +360,13 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                         # 一阶低通滤波器
                         filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
                     channels.append(filtered_values[i])
+                    self._spectrum_buffers[i].append(filtered_values[i])
 
                 # 保存数据到文件（如果有SAVE节点）
                 if self._save_nodes:
                     self._save_channels(channels)
 
-                for node in osc_nodes:
+                for node in output_nodes:
                     node_id = node['id']
                     if node_id not in sample_buffer:
                         sample_buffer[node_id] = []
@@ -316,6 +380,8 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
             
             if elapsed >= FRAME_INTERVAL:
                 last_send_time = current_time
+                node_type_map = {node.get('id'): node.get('type') for node in nodes}
+                spectrum_bundle = self._compute_spectrum_bundle(sample_rate, fft_size)
                 
                 # 发送缓冲的数据
                 for node_id, samples in list(sample_buffer.items()):
@@ -328,10 +394,15 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                             'type': 'data',
                             'timestamp': int(time.time() * 1000),
                             'nodeId': node_id,
+                            'nodeType': node_type_map.get(node_id),
                             'channels': latest_channels,
                             'samples': samples,
                             'sampleRate': sample_rate,
                         }
+
+                        # 频谱数据由后端统一计算，供频谱/时频谱前端直接消费
+                        if spectrum_bundle is not None:
+                            payload.update(spectrum_bundle)
 
                         try:
                             await self.send(text_data=json.dumps(payload))

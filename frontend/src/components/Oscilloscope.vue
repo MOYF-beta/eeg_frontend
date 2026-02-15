@@ -308,6 +308,23 @@ let scanCycle = 0;
 let lastRenderedCycle = 0;
 let lastRenderedPosition = 0;
 
+type RunningChannelStats = {
+  count: number;
+  sum: number[];
+  rawMax: number[];
+  rawMin: number[];
+};
+
+const createEmptyRunningStats = (): RunningChannelStats => ({
+  count: 0,
+  sum: new Array(channelCount).fill(0),
+  rawMax: new Array(channelCount).fill(-Infinity),
+  rawMin: new Array(channelCount).fill(Infinity),
+});
+
+let statsCurrentRunning: RunningChannelStats = createEmptyRunningStats();
+let statsPrevRunning: RunningChannelStats = createEmptyRunningStats();
+
 // 数据源
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
@@ -468,6 +485,8 @@ const createSamplesBuffer = (windowSize: number) => {
   const size = Math.max(1, windowSize);
   samplesCurrent = Array.from({ length: channelCount }, () => new Array(size).fill(0));
   samplesPrev = Array.from({ length: channelCount }, () => new Array(size).fill(0));
+  statsCurrentRunning = createEmptyRunningStats();
+  statsPrevRunning = createEmptyRunningStats();
 };
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
@@ -678,48 +697,42 @@ type ChannelStats = {
   rawMin: number[];
 };
 
-const computeChannelStats = (buffer: number[][], count: number): ChannelStats => {
+const buildChannelStats = (running: RunningChannelStats): ChannelStats => {
   const means = new Array(channelCount).fill(0);
   const maxAbs = new Array(channelCount).fill(1);
-  const rawMax = new Array(channelCount).fill(-Infinity);
-  const rawMin = new Array(channelCount).fill(Infinity);
+  const rawMax = new Array(channelCount).fill(0);
+  const rawMin = new Array(channelCount).fill(0);
 
+  const count = running.count;
   if (count <= 0) {
     return {
       means,
       maxAbs,
-      rawMax: rawMax.map(() => 0),
-      rawMin: rawMin.map(() => 0),
+      rawMax,
+      rawMin,
     };
   }
 
   for (let ch = 0; ch < channelCount; ch++) {
-    const channel = buffer[ch];
-    if (!channel) continue;
-    let sum = 0;
-    for (let i = 0; i < count; i++) {
-      sum += channel[i] || 0;
-    }
-    const mean = sum / count;
+    const mean = (running.sum[ch] || 0) / count;
     means[ch] = mean;
 
-    let peak = 0;
-    for (let i = 0; i < count; i++) {
-      const value = channel[i] || 0;
-      rawMax[ch] = Math.max(rawMax[ch], value);
-      rawMin[ch] = Math.min(rawMin[ch], value);
-      const v = value - (centerEnabled.value ? mean : 0);
-      const abs = Math.abs(v);
-      if (abs > peak) peak = abs;
-    }
+    const max = Number.isFinite(running.rawMax[ch]) ? running.rawMax[ch] : 0;
+    const min = Number.isFinite(running.rawMin[ch]) ? running.rawMin[ch] : 0;
+    rawMax[ch] = max;
+    rawMin[ch] = min;
+
+    const peak = centerEnabled.value
+      ? Math.max(Math.abs(max - mean), Math.abs(min - mean))
+      : Math.max(Math.abs(max), Math.abs(min));
     maxAbs[ch] = peak || 1;
   }
 
   return {
     means,
     maxAbs,
-    rawMax: rawMax.map((value) => (Number.isFinite(value) ? value : 0)),
-    rawMin: rawMin.map((value) => (Number.isFinite(value) ? value : 0)),
+    rawMax,
+    rawMin,
   };
 };
 
@@ -811,10 +824,8 @@ const drawSamples = (
 const drawFullWindow = () => {
   if (!waveCtx) return;
   const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
-  const currentCount = Math.min(windowSize, scanPosition.value);
-  const prevCount = isWrapped.value ? windowSize : 0;
-  const statsCurrent = computeChannelStats(samplesCurrent, currentCount);
-  const statsPrev = computeChannelStats(samplesPrev, prevCount);
+  const statsCurrent = buildChannelStats(statsCurrentRunning);
+  const statsPrev = isWrapped.value ? buildChannelStats(statsPrevRunning) : buildChannelStats(createEmptyRunningStats());
 
   clearWaveCanvas();
 
@@ -888,9 +899,7 @@ const redrawAllSamples = () => {
 
 const renderFrame = () => {
   if (!canDisplay.value) return;
-  const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
-  const currentCount = Math.min(windowSize, scanPosition.value);
-  const statsCurrent = computeChannelStats(samplesCurrent, currentCount);
+  const statsCurrent = buildChannelStats(statsCurrentRunning);
   updateChannelRange(statsCurrent);
 
   if (lastRenderedCycle !== scanCycle) {
@@ -923,10 +932,16 @@ const handleDataPacket = (packet: EegDataPacket) => {
   const pushSample = (channels: number[]) => {
     packetCount.value++;
 
-    for (let ch = 0; ch < channelCount && ch < channels.length; ch++) {
+    for (let ch = 0; ch < channelCount; ch++) {
       if (!samplesCurrent[ch]) continue;
-      samplesCurrent[ch][scanPosition.value] = channels[ch];
+      const value = channels[ch] ?? 0;
+      samplesCurrent[ch][scanPosition.value] = value;
+
+      statsCurrentRunning.sum[ch] += value;
+      if (value > statsCurrentRunning.rawMax[ch]) statsCurrentRunning.rawMax[ch] = value;
+      if (value < statsCurrentRunning.rawMin[ch]) statsCurrentRunning.rawMin[ch] = value;
     }
+    statsCurrentRunning.count += 1;
 
     scanPosition.value++;
     totalReceivedSamples.value++;
@@ -938,6 +953,15 @@ const handleDataPacket = (packet: EegDataPacket) => {
       const prev = samplesPrev;
       samplesPrev = samplesCurrent;
       samplesCurrent = prev;
+
+      const prevStats = statsPrevRunning;
+      statsPrevRunning = statsCurrentRunning;
+      statsCurrentRunning = prevStats;
+      statsCurrentRunning.count = 0;
+      statsCurrentRunning.sum.fill(0);
+      statsCurrentRunning.rawMax.fill(-Infinity);
+      statsCurrentRunning.rawMin.fill(Infinity);
+
       for (let ch = 0; ch < channelCount; ch++) {
         samplesCurrent[ch]?.fill(0);
       }
