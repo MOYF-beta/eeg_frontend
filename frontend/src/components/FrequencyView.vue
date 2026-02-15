@@ -194,7 +194,24 @@
         <div ref="chartContainerRef" class="osc-chart-container">
           <div class="osc-chart">
             <canvas ref="gridCanvasRef" class="osc-canvas" aria-hidden="true"></canvas>
-            <canvas ref="spectrumCanvasRef" class="osc-canvas" aria-hidden="true"></canvas>
+            <canvas
+              ref="spectrumCanvasRef"
+              class="osc-canvas"
+              :class="{ 'osc-canvas-hidden': displayMode !== 'spectrum' }"
+              aria-hidden="true"
+            ></canvas>
+            <canvas
+              ref="spectrogramCanvasRef"
+              class="osc-canvas"
+              :class="{ 'osc-canvas-hidden': displayMode !== 'spectrogram' }"
+              aria-hidden="true"
+            ></canvas>
+            <canvas
+              ref="spectrogramOverlayCanvasRef"
+              class="osc-canvas"
+              :class="{ 'osc-canvas-hidden': displayMode !== 'spectrogram' }"
+              aria-hidden="true"
+            ></canvas>
           </div>
 
           <!-- 无数据遮罩 -->
@@ -211,7 +228,7 @@
           </div>
         </div>
 
-        <div v-if="canDisplay && displayMode === 'spectrum'" class="freq-datazoom-wrap px-4 py-3">
+        <div v-if="canDisplay" class="freq-datazoom-wrap px-4 py-3">
           <div 
             class="freq-datazoom-inner" 
             ref="zoomOuterRef"
@@ -258,23 +275,41 @@ const props = defineProps<{
 const CHANNEL_COUNT = 8;
 const MAX_FREQ_LIMIT = 500;
 const channelColors = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#3949ab'];
+const heatmapPalette = [
+  '#313695',
+  '#4575b4',
+  '#74add1',
+  '#abd9e9',
+  '#e0f3f8',
+  '#ffffbf',
+  '#fee090',
+  '#fdae61',
+  '#f46d43',
+  '#d73027',
+  '#a50026',
+];
 
 const viewId = `freq-view-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 
 const chartContainerRef = ref<HTMLDivElement | null>(null);
 const gridCanvasRef = ref<HTMLCanvasElement | null>(null);
 const spectrumCanvasRef = ref<HTMLCanvasElement | null>(null);
+const spectrogramCanvasRef = ref<HTMLCanvasElement | null>(null);
+const spectrogramOverlayCanvasRef = ref<HTMLCanvasElement | null>(null);
 const previewCanvasRef = ref<HTMLCanvasElement | null>(null);
 const zoomOuterRef = ref<HTMLDivElement | null>(null);
 
 let gridCtx: CanvasRenderingContext2D | null = null;
 let spectrumCtx: CanvasRenderingContext2D | null = null;
+let spectrogramCtx: CanvasRenderingContext2D | null = null;
+let spectrogramOverlayCtx: CanvasRenderingContext2D | null = null;
 let previewCtx: CanvasRenderingContext2D | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let renderFrameId = 0;
 
 const TARGET_FPS = 24;
 const FRAME_INTERVAL = 1000 / TARGET_FPS;
+const MAX_DISPLAY_LAG_MS = 250;
 let lastRenderTime = 0;
 let isRenderPending = false;
 
@@ -300,8 +335,12 @@ const backendAverageSpectrum = ref<number[]>([]);
 const backendFftSize = ref(512);
 const backendFreqResolution = ref(1000 / 512);
 const spectrogramRows = ref<number[][]>([]);
+const spectrogramRowsByChannel = ref<Record<number, number[][]>>({});
 const spectrogramHistorySec = ref(10);
 const bufferFill = ref(0);
+const spectrogramPendingFrames = ref<Array<{ avg?: number[]; channels: Record<number, number[]> }>>([]);
+const spectrogramScanPos = ref(0);
+const spectrogramLayoutKey = ref('');
 
 const canvasSize = ref({ width: 0, height: 0, dpr: 1 });
 const plotMetrics = ref({ left: 46, right: 12, top: 12, bottom: 24, width: 0, height: 0 });
@@ -372,7 +411,11 @@ const selectionBoxStyle = computed(() => {
   return { left: `${left}%`, width: `${Math.max(0.5, width)}%` };
 });
 
-const hasSpectrumData = computed(() => previewSpectrum.value.length > 1 || spectra.value.length > 0);
+const hasSpectrumData = computed(() => {
+  if (previewSpectrum.value.length > 1 || spectra.value.length > 0) return true;
+  if (spectrogramRows.value.length > 0) return true;
+  return Object.values(spectrogramRowsByChannel.value).some((rows) => rows.length > 0);
+});
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -380,10 +423,89 @@ const resetData = () => {
   backendSpectra.value = [];
   backendAverageSpectrum.value = [];
   spectrogramRows.value = [];
+  spectrogramRowsByChannel.value = {};
+  spectrogramPendingFrames.value = [];
+  spectrogramScanPos.value = 0;
+  spectrogramLayoutKey.value = '';
   spectra.value = [];
   previewSpectrum.value = [];
   packetCount.value = 0;
   bufferFill.value = 0;
+};
+
+const getActiveChannels = () => {
+  const normalized = (selectedChannels.value.length > 0 ? selectedChannels.value : [0])
+    .map((ch) => clamp(Math.floor(ch), 0, CHANNEL_COUNT - 1))
+    .filter((ch, idx, arr) => arr.indexOf(ch) === idx);
+  return normalized.length > 0 ? normalized : [0];
+};
+
+const normalizeSpectrogramRow = (mags: number[], dbMin?: number, dbMax?: number) => {
+  if (!Array.isArray(mags) || mags.length === 0) return [];
+  const dbValues = mags.map((m) => 20 * Math.log10(Math.max(1e-9, Number(m) || 0)));
+  let lo = Number.isFinite(dbMin) ? Number(dbMin) : Infinity;
+  let hi = Number.isFinite(dbMax) ? Number(dbMax) : -Infinity;
+  if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) {
+    for (const v of dbValues) {
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
+  }
+  const span = Math.max(1e-6, hi - lo);
+  return dbValues.map((v) => clamp((v - lo) / span, 0, 1));
+};
+
+const makeSpectrogramLayout = () => {
+  const { left, top, width: pW, height: pH } = plotMetrics.value;
+  const channels = averageEnabled.value ? [-1] : getActiveChannels();
+  const regionCount = Math.max(1, channels.length);
+  const regionGap = 8;
+  const totalGap = regionGap * (regionCount - 1);
+  const usableWidth = Math.max(1, pW - totalGap);
+  const dpr = Math.max(1, canvasSize.value.dpr || window.devicePixelRatio || 1);
+  const topPx = Math.max(0, Math.floor(top * dpr));
+  const heightPx = Math.max(1, Math.floor(Math.max(1, pH) * dpr));
+
+  const regions = channels.map((ch, region) => {
+    const regionLeft = left + ((usableWidth / regionCount) * region) + regionGap * region;
+    const regionWidth = Math.max(1, usableWidth / regionCount);
+    return {
+      channel: ch,
+      leftPx: Math.max(0, Math.floor(regionLeft * dpr)),
+      widthPx: Math.max(1, Math.floor(regionWidth * dpr)),
+    };
+  });
+
+  const key = `${channels.join(',')}|${regions.map((r) => `${r.leftPx}:${r.widthPx}`).join('|')}|${topPx}|${heightPx}|${freqRange.value.join(':')}`;
+  return { regions, topPx, heightPx, key };
+};
+
+const clearSpectrogramCanvas = () => {
+  if (spectrogramCtx) {
+    spectrogramCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
+  }
+  if (spectrogramOverlayCtx) {
+    spectrogramOverlayCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
+  }
+};
+
+const resolveFrameRow = (frame: { avg?: number[]; channels: Record<number, number[]> }, channel: number) => {
+  if (channel === -1) {
+    if (frame.avg && frame.avg.length > 1) return frame.avg;
+    const active = getActiveChannels();
+    const rows = active
+      .map((ch) => frame.channels[ch])
+      .filter((row): row is number[] => Array.isArray(row) && row.length > 1);
+    if (rows.length === 0) return [];
+    const len = Math.min(...rows.map((r) => r.length));
+    const avg = new Array(len).fill(0);
+    for (let i = 0; i < len; i += 1) {
+      for (const row of rows) avg[i] += row[i] || 0;
+      avg[i] /= rows.length;
+    }
+    return avg;
+  }
+  return frame.channels[channel] || [];
 };
 
 const stepWindowSec = (step: number) => {
@@ -442,6 +564,11 @@ const drawGrid = () => {
   if (displayMode.value === 'spectrogram') {
     const yTicks = 8;
     const xTicks = 10;
+    const channels = averageEnabled.value ? [-1] : getActiveChannels();
+    const regionCount = Math.max(1, channels.length);
+    const regionGap = 8;
+    const totalGap = regionGap * (regionCount - 1);
+    const usableWidth = Math.max(1, pW - totalGap);
 
     for (let i = 0; i <= yTicks; i += 1) {
       const y = top + (pH * i) / yTicks;
@@ -451,33 +578,65 @@ const drawGrid = () => {
       gridCtx.stroke();
     }
 
-    for (let i = 0; i <= xTicks; i += 1) {
-      const x = left + (pW * i) / xTicks;
-      gridCtx.beginPath();
-      gridCtx.moveTo(x, top);
-      gridCtx.lineTo(x, top + pH);
-      gridCtx.stroke();
+    for (let region = 0; region < regionCount; region += 1) {
+      const regionLeft = left + ((usableWidth / regionCount) * region) + regionGap * region;
+      const regionWidth = usableWidth / regionCount;
+      for (let i = 0; i <= xTicks; i += 1) {
+        const x = regionLeft + (regionWidth * i) / xTicks;
+        gridCtx.beginPath();
+        gridCtx.moveTo(x, top);
+        gridCtx.lineTo(x, top + pH);
+        gridCtx.stroke();
+      }
     }
 
     gridCtx.strokeStyle = '#e0e0e0';
     gridCtx.strokeRect(left, top, pW, pH);
 
+    if (regionCount > 1) {
+      gridCtx.strokeStyle = '#d7d7d7';
+      for (let region = 1; region < regionCount; region += 1) {
+        const dividerX = left + ((usableWidth / regionCount) * region) + regionGap * (region - 0.5);
+        gridCtx.beginPath();
+        gridCtx.moveTo(dividerX, top);
+        gridCtx.lineTo(dividerX, top + pH);
+        gridCtx.stroke();
+      }
+    }
+
     gridCtx.fillStyle = '#666';
     gridCtx.font = '10px sans-serif';
     gridCtx.textAlign = 'right';
     gridCtx.textBaseline = 'middle';
+    const [fMin, fMax] = freqRange.value;
     for (let i = 0; i <= yTicks; i += 1) {
       const y = top + (pH * i) / yTicks;
-      const hz = Math.round(maxDisplayFreq.value * (1 - i / yTicks));
+      const hz = Math.round(fMax - ((fMax - fMin) * i) / yTicks);
       gridCtx.fillText(`${hz}`, left - 4, y);
     }
 
     gridCtx.textAlign = 'center';
     gridCtx.textBaseline = 'top';
-    for (let i = 0; i <= xTicks; i += 1) {
-      const x = left + (pW * i) / xTicks;
-      const sec = ((i / xTicks) * spectrogramHistorySec.value).toFixed(1);
-      gridCtx.fillText(sec, x, top + pH + 6);
+    for (let region = 0; region < regionCount; region += 1) {
+      const regionWidth = Math.max(1, usableWidth / regionCount);
+      const regionLeft = left + (regionWidth * region) + regionGap * region;
+      
+      // 动态决定时间轴刻度密度，避免重叠
+      const ticks = regionWidth > 200 ? [0, 0.2, 0.4, 0.6, 0.8, 1.0] : 
+                    regionWidth > 120 ? [0, 0.5, 1.0] : [0, 1.0];
+
+      for (const t of ticks) {
+        const x = regionLeft + regionWidth * t;
+        const sec = (t * spectrogramHistorySec.value).toFixed(1);
+        gridCtx.fillText(sec, x, top + pH + 6);
+      }
+
+      const label = channels[region] === -1 ? 'AVG' : `CH${channels[region] + 1}`;
+      gridCtx.textBaseline = 'bottom';
+      gridCtx.fillStyle = '#555';
+      gridCtx.fillText(label, regionLeft + regionWidth / 2, top - 2);
+      gridCtx.textBaseline = 'top';
+      gridCtx.fillStyle = '#666';
     }
     return;
   }
@@ -561,9 +720,9 @@ const renderNow = () => {
   if (!canDisplay.value) return;
   if (displayMode.value === 'spectrogram') {
     drawSpectrogram();
-    return;
+  } else {
+    drawSpectrum();
   }
-  drawSpectrum();
   drawPreview();
 };
 
@@ -620,47 +779,114 @@ const drawSpectrum = () => {
   }
 };
 
+const hexToRgb = (hex: string) => {
+  const normalized = hex.replace('#', '');
+  const full = normalized.length === 3
+    ? normalized.split('').map((c) => `${c}${c}`).join('')
+    : normalized;
+  const value = parseInt(full.substring(0, 6), 16);
+  return {
+    r: (value >> 16) & 0xff,
+    g: (value >> 8) & 0xff,
+    b: value & 0xff,
+  };
+};
+
 const colorForValue = (v: number) => {
   const x = clamp(v, 0, 1);
-  const r = Math.round(255 * clamp(1.5 - Math.abs(4 * x - 3), 0, 1));
-  const g = Math.round(255 * clamp(1.5 - Math.abs(4 * x - 2), 0, 1));
-  const b = Math.round(255 * clamp(1.5 - Math.abs(4 * x - 1), 0, 1));
+  const n = heatmapPalette.length;
+  if (n <= 1) return [0, 0, 0] as const;
+
+  const scaled = x * (n - 1);
+  const i0 = Math.floor(scaled);
+  const i1 = Math.min(n - 1, i0 + 1);
+  const t = scaled - i0;
+
+  const c0 = hexToRgb(heatmapPalette[i0]);
+  const c1 = hexToRgb(heatmapPalette[i1]);
+
+  const r = Math.round(c0.r + (c1.r - c0.r) * t);
+  const g = Math.round(c0.g + (c1.g - c0.g) * t);
+  const b = Math.round(c0.b + (c1.b - c0.b) * t);
   return [r, g, b] as const;
 };
 
 const drawSpectrogram = () => {
-  if (!spectrumCtx) return;
-  const { left, top, width: pW, height: pH } = plotMetrics.value;
-  spectrumCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
+  if (!spectrogramCtx) return;
+  const { width: pW, height: pH } = plotMetrics.value;
+  if (pW <= 1 || pH <= 1) return;
 
-  const rows = spectrogramRows.value;
-  if (rows.length === 0 || pW <= 1 || pH <= 1) return;
+  const layout = makeSpectrogramLayout();
+  if (layout.key !== spectrogramLayoutKey.value) {
+    spectrogramLayoutKey.value = layout.key;
+    spectrogramScanPos.value = 0;
+    clearSpectrogramCanvas();
+  }
 
-  const cols = Math.max(1, Math.floor(pW));
-  const start = Math.max(0, rows.length - cols);
-  const visibleRows = rows.slice(start);
-  const bins = visibleRows[0]?.length || 0;
-  if (bins <= 1) return;
+  if (spectrogramPendingFrames.value.length === 0) return;
 
-  const image = spectrumCtx.createImageData(visibleRows.length, Math.max(1, Math.floor(pH)));
-  const h = Math.max(1, Math.floor(pH));
+  if (spectrogramPendingFrames.value.length > 2) {
+    spectrogramPendingFrames.value.splice(0, spectrogramPendingFrames.value.length - 1);
+  }
 
-  for (let x = 0; x < visibleRows.length; x += 1) {
-    const row = visibleRows[x] || [];
-    for (let y = 0; y < h; y += 1) {
-      const freqRatio = 1 - y / Math.max(1, h - 1);
-      const bin = Math.min(bins - 1, Math.max(0, Math.round(freqRatio * (bins - 1))));
-      const value = row[bin] ?? 0;
-      const [r, g, b] = colorForValue(value);
-      const idx = (y * visibleRows.length + x) * 4;
-      image.data[idx] = r;
-      image.data[idx + 1] = g;
-      image.data[idx + 2] = b;
-      image.data[idx + 3] = 255;
+  const maxColumnsPerFrame = 1;
+  const framesToDraw = Math.min(maxColumnsPerFrame, spectrogramPendingFrames.value.length);
+
+  for (let i = 0; i < framesToDraw; i += 1) {
+    const frame = spectrogramPendingFrames.value.shift();
+    if (!frame) break;
+
+    for (const region of layout.regions) {
+      const row = resolveFrameRow(frame, region.channel);
+      const bins = row.length;
+      if (bins <= 1) continue;
+
+      const [fViewMin, fViewMax] = freqRange.value;
+      const resolution = backendFreqResolution.value || (sampleRate.value / (backendFftSize.value || 512));
+
+      const xOffset = spectrogramScanPos.value % region.widthPx;
+      const xPx = region.leftPx + xOffset;
+      const image = spectrogramCtx.createImageData(1, layout.heightPx);
+      for (let y = 0; y < layout.heightPx; y += 1) {
+        const freqRatio = 1 - y / Math.max(1, layout.heightPx - 1);
+        const f = fViewMin + freqRatio * (fViewMax - fViewMin);
+        const bin = Math.min(bins - 1, Math.max(0, Math.round(f / resolution)));
+        const value = row[bin] ?? 0;
+        const [r, g, b] = colorForValue(value);
+        const idx = y * 4;
+        image.data[idx] = r;
+        image.data[idx + 1] = g;
+        image.data[idx + 2] = b;
+        image.data[idx + 3] = 255;
+      }
+      spectrogramCtx.putImageData(image, xPx, layout.topPx);
+    }
+
+    spectrogramScanPos.value += 1;
+    const regionWidthPx = layout.regions[0]?.widthPx || 1;
+    if (spectrogramScanPos.value >= regionWidthPx) {
+      spectrogramScanPos.value = 0;
     }
   }
 
-  spectrumCtx.putImageData(image, left, top);
+  if (spectrogramOverlayCtx) {
+    spectrogramOverlayCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
+    spectrogramOverlayCtx.save();
+    spectrogramOverlayCtx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+    spectrogramOverlayCtx.lineWidth = 1;
+    for (const region of layout.regions) {
+      const xOffset = spectrogramScanPos.value % Math.max(1, region.widthPx);
+      const xPx = region.leftPx + xOffset;
+      const x = xPx / Math.max(1, canvasSize.value.dpr || 1);
+      const yTop = layout.topPx / Math.max(1, canvasSize.value.dpr || 1);
+      const yBottom = (layout.topPx + layout.heightPx) / Math.max(1, canvasSize.value.dpr || 1);
+      spectrogramOverlayCtx.beginPath();
+      spectrogramOverlayCtx.moveTo(x + 0.5, yTop);
+      spectrogramOverlayCtx.lineTo(x + 0.5, yBottom);
+      spectrogramOverlayCtx.stroke();
+    }
+    spectrogramOverlayCtx.restore();
+  }
 };
 
 const drawPreview = () => {
@@ -697,9 +923,11 @@ const drawPreview = () => {
 };
 
 const initCanvas = () => {
-  if (!chartContainerRef.value || !gridCanvasRef.value || !spectrumCanvasRef.value) return;
+  if (!chartContainerRef.value || !gridCanvasRef.value || !spectrumCanvasRef.value || !spectrogramCanvasRef.value || !spectrogramOverlayCanvasRef.value) return;
   gridCtx = gridCanvasRef.value.getContext('2d');
   spectrumCtx = spectrumCanvasRef.value.getContext('2d');
+  spectrogramCtx = spectrogramCanvasRef.value.getContext('2d');
+  spectrogramOverlayCtx = spectrogramOverlayCanvasRef.value.getContext('2d');
   previewCtx = previewCanvasRef.value?.getContext('2d') || null;
 
   const handleResize = () => {
@@ -708,7 +936,7 @@ const initCanvas = () => {
     const rect = chartContainerRef.value.getBoundingClientRect();
     canvasSize.value = { width: rect.width, height: rect.height, dpr };
 
-    for (const canvas of [gridCanvasRef.value, spectrumCanvasRef.value]) {
+    for (const canvas of [gridCanvasRef.value, spectrumCanvasRef.value, spectrogramCanvasRef.value, spectrogramOverlayCanvasRef.value]) {
       if (!canvas) continue;
       canvas.width = Math.max(1, Math.floor(rect.width * dpr));
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
@@ -780,7 +1008,7 @@ const onGlobalMouseUp = () => {
 };
 
 const onHandleMouseDown = (e: MouseEvent, side: 'left' | 'right') => {
-  if (!canDisplay.value || displayMode.value !== 'spectrum') return;
+  if (!canDisplay.value) return;
   isDragging.value = side;
   dragStartX = e.clientX;
   initialFreqRange = [...freqRange.value];
@@ -789,7 +1017,7 @@ const onHandleMouseDown = (e: MouseEvent, side: 'left' | 'right') => {
 };
 
 const onZoomMouseDown = (e: MouseEvent) => {
-  if (!canDisplay.value || displayMode.value !== 'spectrum') return;
+  if (!canDisplay.value) return;
   isDragging.value = 'box';
   dragStartX = e.clientX;
   initialFreqRange = [...freqRange.value];
@@ -799,6 +1027,15 @@ const onZoomMouseDown = (e: MouseEvent) => {
 
 const handleDataPacket = (packet: EegDataPacket) => {
   if (!selectedNodeId.value || String(packet.nodeId) !== String(selectedNodeId.value)) return;
+
+  const packetTs = Number(packet.timestamp || 0);
+  if (Number.isFinite(packetTs) && packetTs > 0) {
+    const lagMs = Date.now() - packetTs;
+    if (lagMs > MAX_DISPLAY_LAG_MS) {
+      spectrogramPendingFrames.value = [];
+      return;
+    }
+  }
 
   if (packet.sampleRate && packet.sampleRate > 0 && packet.sampleRate !== sampleRate.value) {
     sampleRate.value = packet.sampleRate;
@@ -826,6 +1063,37 @@ const handleDataPacket = (packet: EegDataPacket) => {
     const maxRows = Math.max(100, Math.round(spectrogramHistorySec.value * TARGET_FPS));
     if (spectrogramRows.value.length > maxRows) {
       spectrogramRows.value.splice(0, spectrogramRows.value.length - maxRows);
+    }
+  }
+
+  if (Array.isArray(packet.spectra) && packet.spectra.length > 0) {
+    const byChannel = { ...spectrogramRowsByChannel.value };
+    const frame: { avg?: number[]; channels: Record<number, number[]> } = { channels: {} };
+    if (Array.isArray(packet.spectrogramRow) && packet.spectrogramRow.length > 1) {
+      frame.avg = packet.spectrogramRow;
+    }
+    const maxRows = Math.max(100, Math.round(spectrogramHistorySec.value * TARGET_FPS));
+    for (let ch = 0; ch < Math.min(CHANNEL_COUNT, packet.spectra.length); ch += 1) {
+      const mags = packet.spectra[ch];
+      if (!Array.isArray(mags) || mags.length <= 1) continue;
+      const normalized = normalizeSpectrogramRow(mags, packet.spectrogramDbMin, packet.spectrogramDbMax);
+      if (normalized.length <= 1) continue;
+      const rows = byChannel[ch] ? [...byChannel[ch]] : [];
+      rows.push(normalized);
+      if (rows.length > maxRows) {
+        rows.splice(0, rows.length - maxRows);
+      }
+      byChannel[ch] = rows;
+      frame.channels[ch] = normalized;
+    }
+    spectrogramRowsByChannel.value = byChannel;
+
+    if (Object.keys(frame.channels).length > 0 || (frame.avg && frame.avg.length > 1)) {
+      spectrogramPendingFrames.value.push(frame);
+      const maxPending = 2;
+      if (spectrogramPendingFrames.value.length > maxPending) {
+        spectrogramPendingFrames.value.splice(0, spectrogramPendingFrames.value.length - maxPending);
+      }
     }
   }
 
@@ -889,8 +1157,15 @@ watch(selectedChannels, (channels) => {
     return;
   }
   computeSpectra();
+  drawGrid();
   requestRender();
 }, { deep: true });
+
+watch(averageEnabled, () => {
+  computeSpectra();
+  drawGrid();
+  requestRender();
+});
 
 watch([sampleRate, fftWindowSec], () => {
   spectrogramHistorySec.value = clamp(Math.round(fftWindowSec.value * 10) / 10, 1, 10);
@@ -924,6 +1199,11 @@ watch(canDisplay, (enabled) => {
 });
 
 watch(displayMode, () => {
+  if (displayMode.value === 'spectrum') {
+    clearSpectrogramCanvas();
+  } else if (spectrumCtx) {
+    spectrumCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
+  }
   drawGrid();
   requestRender();
 });
@@ -1064,6 +1344,10 @@ watch(isGraphFrozen, (frozen) => {
   inset: 0;
   width: 100%;
   height: 100%;
+}
+
+.osc-canvas-hidden {
+  display: none;
 }
 
 .no-data-overlay {

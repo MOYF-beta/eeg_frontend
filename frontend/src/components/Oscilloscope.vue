@@ -260,6 +260,7 @@ const GAIN_EXP_MAX = 3;
 // 性能优化：目标刷新率 30fps
 const TARGET_FPS = 30;
 const FRAME_INTERVAL = 1000 / TARGET_FPS;
+const MAX_DISPLAY_LAG_MS = 250;
 
 let lastFrameTime = 0;
 let isFramePending = false;
@@ -459,16 +460,20 @@ const formatGainDisplay = (ch: number) => {
 const viewId = 'osc-view-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
 
 const isNodeBound = (nodeId: string) => {
-  return false;
+  const bound = sessionStore.getViewBoundNode(viewId);
+  return !!bound && bound === nodeId;
 };
 
 const onNodeSelected = (nodeId: string | null) => {
   console.log('[Oscilloscope] Node selected:', nodeId, 'viewId:', viewId);
   if (nodeId) {
     sessionStore.bindViewToNode(viewId, nodeId);
+    selectedNodeId.value = nodeId;
     subscribeToNode(nodeId);
+    sourceDialogOpen.value = false;
   } else {
     sessionStore.bindViewToNode(viewId, null);
+    selectedNodeId.value = null;
   }
 };
 
@@ -927,6 +932,14 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   if (!selectedId || packetNodeId !== selectedId) return;
 
+  const packetTs = Number(packet.timestamp || 0);
+  if (Number.isFinite(packetTs) && packetTs > 0) {
+    const lagMs = Date.now() - packetTs;
+    if (lagMs > MAX_DISPLAY_LAG_MS) {
+      return;
+    }
+  }
+
   const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
 
   const pushSample = (channels: number[]) => {
@@ -969,8 +982,10 @@ const handleDataPacket = (packet: EegDataPacket) => {
   };
 
   if (packet.samples && packet.samples.length > 0) {
-    for (const channels of packet.samples) {
-      pushSample(channels);
+    const maxBatches = Math.max(1, Math.round((SAMPLE_RATE / TARGET_FPS) * 2));
+    const start = Math.max(0, packet.samples.length - maxBatches);
+    for (let i = start; i < packet.samples.length; i += 1) {
+      pushSample(packet.samples[i]);
     }
   } else if (packet.channels?.length) {
     pushSample(packet.channels);
@@ -1024,6 +1039,15 @@ onMounted(async () => {
     initCanvas();
 
     await updateGraphState();
+    // restore any previously bound node for this view
+    try {
+      const bound = sessionStore.getViewBoundNode(viewId);
+      if (bound) {
+        selectedNodeId.value = bound;
+      }
+    } catch (e) {
+      console.warn('[Oscilloscope] Failed to restore bound node:', e);
+    }
 
     unsubConnected = eegWebSocket.onStatusChange((status) => {
       if (status === 'connected') {
