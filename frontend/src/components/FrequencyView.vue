@@ -307,11 +307,14 @@ let previewCtx: CanvasRenderingContext2D | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let renderFrameId = 0;
 
-const TARGET_FPS = 24;
+const TARGET_FPS = 60;
 const FRAME_INTERVAL = 1000 / TARGET_FPS;
 const MAX_DISPLAY_LAG_MS = 250;
 let lastRenderTime = 0;
 let isRenderPending = false;
+let lastFramePos: number | null = null;
+let lastDataTimestamp = 0;
+let lastDataWallTime = 0;
 
 const settingsDialogOpen = ref(false);
 const channelDialogOpen = ref(false);
@@ -338,7 +341,7 @@ const spectrogramRows = ref<number[][]>([]);
 const spectrogramRowsByChannel = ref<Record<number, number[][]>>({});
 const spectrogramHistorySec = ref(10);
 const bufferFill = ref(0);
-const spectrogramPendingFrames = ref<Array<{ avg?: number[]; channels: Record<number, number[]> }>>([]);
+const spectrogramPendingFrames = ref<Array<{ timestamp: number; avg?: number[]; channels: Record<number, number[]> }>>([]);
 const spectrogramScanPos = ref(0);
 const spectrogramLayoutKey = ref('');
 
@@ -431,6 +434,9 @@ const resetData = () => {
   previewSpectrum.value = [];
   packetCount.value = 0;
   bufferFill.value = 0;
+  lastFramePos = null;
+  lastDataTimestamp = 0;
+  lastDataWallTime = 0;
 };
 
 const getActiveChannels = () => {
@@ -487,6 +493,9 @@ const clearSpectrogramCanvas = () => {
   if (spectrogramOverlayCtx) {
     spectrogramOverlayCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
   }
+  lastFramePos = null;
+  lastDataTimestamp = 0;
+  lastDataWallTime = 0;
 };
 
 const resolveFrameRow = (frame: { avg?: number[]; channels: Record<number, number[]> }, channel: number) => {
@@ -813,6 +822,7 @@ const colorForValue = (v: number) => {
 
 const drawSpectrogram = () => {
   if (!spectrogramCtx) return;
+  const { width: pH_dummy, height: pW_dummy } = plotMetrics.value; // Avoid naming collision if any
   const { width: pW, height: pH } = plotMetrics.value;
   if (pW <= 1 || pH <= 1) return;
 
@@ -823,50 +833,90 @@ const drawSpectrogram = () => {
     clearSpectrogramCanvas();
   }
 
-  if (spectrogramPendingFrames.value.length === 0) return;
+  const nowWall = performance.now();
+  const windowTime = Math.max(0.1, spectrogramHistorySec.value);
+  const regionWidthPx = layout.regions[0]?.widthPx || 1;
+  const pixelsPerSecond = regionWidthPx / windowTime;
 
-  if (spectrogramPendingFrames.value.length > 2) {
-    spectrogramPendingFrames.value.splice(0, spectrogramPendingFrames.value.length - 1);
+  // 1. 根据待处理帧进行绘制
+  if (spectrogramPendingFrames.value.length > 0) {
+    // 特殊处理积压包：优先绘制最新的数据
+    if (spectrogramPendingFrames.value.length > 5) {
+      spectrogramPendingFrames.value.splice(0, spectrogramPendingFrames.value.length - 2);
+    }
+
+    const maxColumnsPerFrame = 2;
+    const framesToDraw = Math.min(maxColumnsPerFrame, spectrogramPendingFrames.value.length);
+
+    for (let i = 0; i < framesToDraw; i += 1) {
+      const frame = spectrogramPendingFrames.value.shift();
+      if (!frame) break;
+
+      const frameT = (frame.timestamp || Date.now()) / 1000;
+      const currentPos = Math.floor((frameT % windowTime) * pixelsPerSecond);
+      
+      lastDataTimestamp = frame.timestamp || Date.now();
+      lastDataWallTime = performance.now();
+
+      const columnsToFill: number[] = [];
+      if (lastFramePos === null) {
+        columnsToFill.push(currentPos);
+      } else {
+        let pos = (lastFramePos + 1) % regionWidthPx;
+        const steps = (currentPos >= lastFramePos) 
+          ? (currentPos - lastFramePos) 
+          : (regionWidthPx - lastFramePos + currentPos);
+        
+        const maxFill = Math.min(steps, regionWidthPx / 4);
+        for (let s = 0; s < maxFill; s++) {
+          columnsToFill.push((lastFramePos + 1 + s) % regionWidthPx);
+        }
+        if (maxFill < steps) {
+          columnsToFill.push(currentPos);
+        }
+      }
+      lastFramePos = currentPos;
+
+      for (const region of layout.regions) {
+        const row = resolveFrameRow(frame, region.channel);
+        const bins = row.length;
+        if (bins <= 1) continue;
+
+        const resolution = backendFreqResolution.value || (sampleRate.value / (backendFftSize.value || 512));
+        const [fViewMin, fViewMax] = freqRange.value;
+
+        const image = spectrogramCtx.createImageData(1, layout.heightPx);
+        for (let y = 0; y < layout.heightPx; y += 1) {
+          const freqRatio = 1 - y / Math.max(1, layout.heightPx - 1);
+          const f = fViewMin + freqRatio * (fViewMax - fViewMin);
+          const bin = Math.min(bins - 1, Math.max(0, Math.round(f / resolution)));
+          const value = row[bin] ?? 0;
+          const [r, g, b] = colorForValue(value);
+          const idx = y * 4;
+          image.data[idx] = r;
+          image.data[idx + 1] = g;
+          image.data[idx + 2] = b;
+          image.data[idx + 3] = 255;
+        }
+
+        for (const col of columnsToFill) {
+          const xOffset = col % region.widthPx;
+          const xPx = region.leftPx + xOffset;
+          spectrogramCtx.putImageData(image, xPx, layout.topPx);
+        }
+      }
+    }
   }
 
-  const maxColumnsPerFrame = 1;
-  const framesToDraw = Math.min(maxColumnsPerFrame, spectrogramPendingFrames.value.length);
-
-  for (let i = 0; i < framesToDraw; i += 1) {
-    const frame = spectrogramPendingFrames.value.shift();
-    if (!frame) break;
-
-    for (const region of layout.regions) {
-      const row = resolveFrameRow(frame, region.channel);
-      const bins = row.length;
-      if (bins <= 1) continue;
-
-      const [fViewMin, fViewMax] = freqRange.value;
-      const resolution = backendFreqResolution.value || (sampleRate.value / (backendFftSize.value || 512));
-
-      const xOffset = spectrogramScanPos.value % region.widthPx;
-      const xPx = region.leftPx + xOffset;
-      const image = spectrogramCtx.createImageData(1, layout.heightPx);
-      for (let y = 0; y < layout.heightPx; y += 1) {
-        const freqRatio = 1 - y / Math.max(1, layout.heightPx - 1);
-        const f = fViewMin + freqRatio * (fViewMax - fViewMin);
-        const bin = Math.min(bins - 1, Math.max(0, Math.round(f / resolution)));
-        const value = row[bin] ?? 0;
-        const [r, g, b] = colorForValue(value);
-        const idx = y * 4;
-        image.data[idx] = r;
-        image.data[idx + 1] = g;
-        image.data[idx + 2] = b;
-        image.data[idx + 3] = 255;
-      }
-      spectrogramCtx.putImageData(image, xPx, layout.topPx);
-    }
-
-    spectrogramScanPos.value += 1;
-    const regionWidthPx = layout.regions[0]?.widthPx || 1;
-    if (spectrogramScanPos.value >= regionWidthPx) {
-      spectrogramScanPos.value = 0;
-    }
+  // 2. 估计当前的扫描位置：基于最新的数据时间戳 + 此时流逝的现实时间
+  if (lastDataTimestamp > 0) {
+    const elapsedSec = (nowWall - lastDataWallTime) / 1000;
+    const estimatedDataTime = (lastDataTimestamp / 1000) + elapsedSec;
+    spectrogramScanPos.value = Math.floor((estimatedDataTime % windowTime) * pixelsPerSecond);
+  } else {
+    // 如果还没收到数据，扫描线停在初始位置或根据现实时间移动
+    const now = Date.now() / 1000;
+    spectrogramScanPos.value = Math.floor((now % windowTime) * pixelsPerSecond);
   }
 
   if (spectrogramOverlayCtx) {
@@ -1035,6 +1085,11 @@ const handleDataPacket = (packet: EegDataPacket) => {
       spectrogramPendingFrames.value = [];
       return;
     }
+    lastDataTimestamp = packetTs;
+    lastDataWallTime = performance.now();
+  } else {
+    lastDataTimestamp = Date.now();
+    lastDataWallTime = performance.now();
   }
 
   if (packet.sampleRate && packet.sampleRate > 0 && packet.sampleRate !== sampleRate.value) {
@@ -1068,7 +1123,10 @@ const handleDataPacket = (packet: EegDataPacket) => {
 
   if (Array.isArray(packet.spectra) && packet.spectra.length > 0) {
     const byChannel = { ...spectrogramRowsByChannel.value };
-    const frame: { avg?: number[]; channels: Record<number, number[]> } = { channels: {} };
+    const frame: { timestamp: number; avg?: number[]; channels: Record<number, number[]> } = { 
+      timestamp: packet.timestamp || Date.now(),
+      channels: {} 
+    };
     if (Array.isArray(packet.spectrogramRow) && packet.spectrogramRow.length > 1) {
       frame.avg = packet.spectrogramRow;
     }
@@ -1090,7 +1148,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
 
     if (Object.keys(frame.channels).length > 0 || (frame.avg && frame.avg.length > 1)) {
       spectrogramPendingFrames.value.push(frame);
-      const maxPending = 2;
+      const maxPending = 5;
       if (spectrogramPendingFrames.value.length > maxPending) {
         spectrogramPendingFrames.value.splice(0, spectrogramPendingFrames.value.length - maxPending);
       }

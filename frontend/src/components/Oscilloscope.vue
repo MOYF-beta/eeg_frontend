@@ -91,7 +91,7 @@
           </div>
           <div class="osc-status-section">
             <div class="osc-status-label">采样率</div>
-            <div class="osc-status-text">{{ SAMPLE_RATE }}Hz</div>
+            <div class="osc-status-text">{{ currentSampleRate }}Hz</div>
           </div>
           <div class="osc-status-section osc-status-close">
             <v-btn
@@ -244,7 +244,7 @@ const channelCount = 8;
 const colors = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#3949ab'];
 
 // === 扫描模式配置 ===
-const SAMPLE_RATE = 1000;
+const currentSampleRate = ref(1000);
 const DEFAULT_WINDOW_SEC = 5;
 const MAX_WINDOW_SEC = 10;
 const MIN_WINDOW_SEC = 1;
@@ -257,8 +257,8 @@ const GAIN_FINE_MAX = 9.9;
 const GAIN_EXP_MIN = -3;
 const GAIN_EXP_MAX = 3;
 
-// 性能优化：目标刷新率 30fps
-const TARGET_FPS = 30;
+// 性能优化：目标刷新率 60fps
+const TARGET_FPS = 60;
 const FRAME_INTERVAL = 1000 / TARGET_FPS;
 const MAX_DISPLAY_LAG_MS = 250;
 
@@ -308,6 +308,8 @@ const totalReceivedSamples = ref(0);
 let scanCycle = 0;
 let lastRenderedCycle = 0;
 let lastRenderedPosition = 0;
+let latestDataTimestamp = 0;
+let latestDataWallTime = 0;
 
 type RunningChannelStats = {
   count: number;
@@ -677,23 +679,7 @@ const drawGrid = () => {
   gridCtx.restore();
 };
 
-const drawScanLine = () => {
-  if (!overlayCtx) return;
-  const { width, height } = canvasSize.value;
-  const { left, top, width: plotWidth, height: plotHeight } = plotMetrics.value;
-  const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
-  const x = left + (plotWidth * scanPosition.value) / (windowSize - 1 || 1);
-
-  overlayCtx.clearRect(0, 0, width, height);
-  overlayCtx.save();
-  overlayCtx.strokeStyle = '#ff5722';
-  overlayCtx.lineWidth = 2;
-  overlayCtx.beginPath();
-  overlayCtx.moveTo(x, top);
-  overlayCtx.lineTo(x, top + plotHeight);
-  overlayCtx.stroke();
-  overlayCtx.restore();
-};
+// Scan line removed: overlay canvas retained for potential future overlays
 
 type ChannelStats = {
   means: number[];
@@ -776,14 +762,14 @@ const drawSamples = (
 ) => {
   if (!waveCtx) return;
   const { left, top, width: plotWidth, channelSpacing, amplitudeScale } = plotMetrics.value;
-  const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
+  const windowSize = Math.max(1, timeWindowSec.value * currentSampleRate.value);
   const baseX = (pos: number) => left + (plotWidth * pos) / (windowSize - 1 || 1);
   const useAuto = centerEnabled.value && autoGainEnabled.value;
   const targetHalfHeight = (channelSpacing * 0.5) / 1.1;
 
   for (let ch = 0; ch < channelCount; ch++) {
     waveCtx.strokeStyle = colors[ch];
-    waveCtx.lineWidth = 1;
+    waveCtx.lineWidth = 1.5;
     waveCtx.beginPath();
     let started = false;
 
@@ -828,7 +814,7 @@ const drawSamples = (
 
 const drawFullWindow = () => {
   if (!waveCtx) return;
-  const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
+  const windowSize = Math.max(1, timeWindowSec.value * currentSampleRate.value);
   const statsCurrent = buildChannelStats(statsCurrentRunning);
   const statsPrev = isWrapped.value ? buildChannelStats(statsPrevRunning) : buildChannelStats(createEmptyRunningStats());
 
@@ -845,7 +831,7 @@ const drawFullWindow = () => {
 
   for (let ch = 0; ch < channelCount; ch++) {
     waveCtx.strokeStyle = colors[ch];
-    waveCtx.lineWidth = 1;
+    waveCtx.lineWidth = 1.5;
     waveCtx.beginPath();
     let started = false;
 
@@ -899,7 +885,6 @@ const redrawAllSamples = () => {
   drawFullWindow();
   lastRenderedCycle = scanCycle;
   lastRenderedPosition = scanPosition.value;
-  drawScanLine();
 };
 
 const renderFrame = () => {
@@ -913,15 +898,52 @@ const renderFrame = () => {
     drawFullWindow();
   }
 
+  const { left, top, width: plotWidth, height: plotHeight } = plotMetrics.value;
+  const sr = currentSampleRate.value;
+  const windowSize = Math.max(1, timeWindowSec.value * sr);
+  const baseX = (pos: number) => left + (plotWidth * pos) / (windowSize - 1 || 1);
+
   const targetPosition = scanPosition.value;
   if (targetPosition > lastRenderedPosition) {
     syncAutoGainDisplay(statsCurrent, plotMetrics.value.channelSpacing);
     channelAbsDisplay.value = statsCurrent.maxAbs.slice();
-    drawSamples(lastRenderedPosition, targetPosition, samplesCurrent, statsCurrent);
+    
+    // 清除即将绘制的区域，防止与旧周期数据重叠
+    if (waveCtx) {
+      const x1 = baseX(lastRenderedPosition);
+      const x2 = baseX(targetPosition);
+      // 仅清除目标区域，不带额外边距，避免破坏已绘制的数据
+      waveCtx.clearRect(x1, top, x2 - x1, plotHeight);
+    }
+
+    // 增加回溯点，确保新旧线段完美衔接，并修复刚才可能因 clearRect 被微量擦除的边缘
+    const lookback = Math.min(lastRenderedPosition, 5);
+    drawSamples(lastRenderedPosition - lookback, targetPosition, samplesCurrent, statsCurrent);
     lastRenderedPosition = targetPosition;
   }
 
-  drawScanLine();
+  // 清除扫描线周围的间隙，确保视觉上不会有新旧交替的重叠感
+  if (waveCtx) {
+    const elapsedSec = (performance.now() - latestDataWallTime) / 1000;
+    const estimatedDataTime = (latestDataTimestamp / 1000) + elapsedSec;
+    const displayPos = Math.floor((estimatedDataTime * sr) % windowSize);
+    
+    // 清除从当前数据末尾到预测扫描线位置后方的一段距离
+    const gapSamples = Math.max(sr * 0.1, Math.floor(windowSize * 0.02)); 
+    const clearStart = targetPosition;
+    const clearEnd = (displayPos + gapSamples) % windowSize;
+    
+    const xStart = baseX(clearStart);
+    const xEnd = baseX(clearEnd);
+    
+    if (xEnd > xStart) {
+      waveCtx.clearRect(xStart, top, xEnd - xStart, plotHeight);
+    } else if (xEnd < xStart) {
+      waveCtx.clearRect(xStart, top, (left + plotWidth) - xStart, plotHeight);
+      waveCtx.clearRect(left, top, xEnd - left, plotHeight);
+    }
+  }
+
 };
 
 // WebSocket 数据处理器
@@ -932,63 +954,103 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   if (!selectedId || packetNodeId !== selectedId) return;
 
-  const packetTs = Number(packet.timestamp || 0);
-  if (Number.isFinite(packetTs) && packetTs > 0) {
-    const lagMs = Date.now() - packetTs;
-    if (lagMs > MAX_DISPLAY_LAG_MS) {
-      return;
-    }
+  // 如果包中带有采样率信息，则更新
+  if (packet.sampleRate && packet.sampleRate > 0 && packet.sampleRate !== currentSampleRate.value) {
+    currentSampleRate.value = packet.sampleRate;
+    resetAllData();
   }
 
-  const windowSize = Math.max(1, timeWindowSec.value * SAMPLE_RATE);
+  const sr = currentSampleRate.value;
+  const windowSize = Math.max(1, timeWindowSec.value * sr);
+  
+  // 核心逻辑：基于时间戳确定扫描位置，确保时间流速一致且优先绘制最新数据
+  // 如果没有时间戳，则使用当前现实时间
+  const timestamp = packet.timestamp || Date.now();
+  
+  // 更新最新数据时间点，用于扫描线平滑估计
+  latestDataTimestamp = timestamp;
+  latestDataWallTime = performance.now();
+  
+  // 计算基于时间戳的全局偏移量
+  const globalSampleIndex = Math.floor((timestamp / 1000) * sr);
+  const targetCycle = Math.floor(globalSampleIndex / windowSize);
+  const targetPos = globalSampleIndex % windowSize;
 
-  const pushSample = (channels: number[]) => {
-    packetCount.value++;
-
-    for (let ch = 0; ch < channelCount; ch++) {
-      if (!samplesCurrent[ch]) continue;
-      const value = channels[ch] ?? 0;
-      samplesCurrent[ch][scanPosition.value] = value;
-
-      statsCurrentRunning.sum[ch] += value;
-      if (value > statsCurrentRunning.rawMax[ch]) statsCurrentRunning.rawMax[ch] = value;
-      if (value < statsCurrentRunning.rawMin[ch]) statsCurrentRunning.rawMin[ch] = value;
-    }
-    statsCurrentRunning.count += 1;
-
-    scanPosition.value++;
-    totalReceivedSamples.value++;
-
-    if (scanPosition.value >= windowSize) {
-      scanPosition.value = 0;
+  // 1. 处理周期同步（Sweep/Wrap 逻辑）
+  if (targetCycle > scanCycle) {
+    // 数据进入了新的周期，执行缓冲区切换
+    // 如果跳过了多个周期，我们也只保留最新的
+    const gap = targetCycle - scanCycle;
+    for (let i = 0; i < Math.min(gap, 2); i++) {
       isWrapped.value = true;
       scanCycle += 1;
       const prev = samplesPrev;
       samplesPrev = samplesCurrent;
       samplesCurrent = prev;
 
-      const prevStats = statsPrevRunning;
-      statsPrevRunning = statsCurrentRunning;
-      statsCurrentRunning = prevStats;
-      statsCurrentRunning.count = 0;
-      statsCurrentRunning.sum.fill(0);
-      statsCurrentRunning.rawMax.fill(-Infinity);
-      statsCurrentRunning.rawMin.fill(Infinity);
-
+      // 为新的一轮清理数据
       for (let ch = 0; ch < channelCount; ch++) {
         samplesCurrent[ch]?.fill(0);
       }
+
+      // 同步统计信息
+      statsPrevRunning = { ...statsCurrentRunning };
+      statsCurrentRunning = createEmptyRunningStats();
     }
+    scanCycle = targetCycle;
+  } else if (targetCycle < scanCycle) {
+    // 丢弃过旧的包（属于过去的某个扫描周期）
+    return;
+  }
+
+  // 2. 将数据插入到基于时间戳确定的准确索引处
+  const pushSampleAt = (channels: number[], pos: number) => {
+    packetCount.value++;
+    const idx = pos % windowSize;
+
+    for (let ch = 0; ch < channelCount; ch++) {
+      if (!samplesCurrent[ch]) continue;
+      const value = channels[ch] ?? 0;
+      samplesCurrent[ch][idx] = value;
+
+      statsCurrentRunning.sum[ch] += value;
+      if (value > statsCurrentRunning.rawMax[ch]) statsCurrentRunning.rawMax[ch] = value;
+      if (value < statsCurrentRunning.rawMin[ch]) statsCurrentRunning.rawMin[ch] = value;
+    }
+    statsCurrentRunning.count += 1;
+    totalReceivedSamples.value++;
   };
 
-  if (packet.samples && packet.samples.length > 0) {
-    const maxBatches = Math.max(1, Math.round((SAMPLE_RATE / TARGET_FPS) * 2));
-    const start = Math.max(0, packet.samples.length - maxBatches);
-    for (let i = start; i < packet.samples.length; i += 1) {
-      pushSample(packet.samples[i]);
+  // 填充丢包导致的间隙，避免图像显示“稀薄”或出现 0 值闪烁
+  const lastPos = scanPosition.value;
+  if (targetCycle === scanCycle && targetPos > lastPos && targetPos - lastPos < sr * 0.2) {
+    // 对于短时间（<200ms）的抖动或落后，填充上一个采样值以保持连贯
+    for (let p = lastPos; p < targetPos; p++) {
+      const prevIdx = (p > 0 ? p - 1 : 0) % windowSize;
+      const fillChannels = samplesCurrent.map(ch => ch[prevIdx] || 0);
+      pushSampleAt(fillChannels, p);
     }
+  }
+
+  if (packet.samples && packet.samples.length > 0) {
+    // 批量模式：顺序从起始 targetPos 开始填充
+    for (let i = 0; i < packet.samples.length; i++) {
+      pushSampleAt(packet.samples[i], targetPos + i);
+    }
+    // 扫描线位置更新为这批数据的末尾
+    scanPosition.value = (targetPos + packet.samples.length) % windowSize;
   } else if (packet.channels?.length) {
-    pushSample(packet.channels);
+    // 单样点模式
+    pushSampleAt(packet.channels, targetPos);
+    scanPosition.value = (targetPos + 1) % windowSize;
+  }
+
+  // 积压检查：如果计算出的位置落后现实太多，说明渲染压力大，强制刷新扫描线位置
+  const wallClockPos = Math.floor(((Date.now() / 1000) % timeWindowSec.value) * sr);
+  // 如果差异超过 200ms
+  if (Math.abs(wallClockPos - scanPosition.value) > sr * 0.2) {
+    // 仅在数据正常流动时，才考虑强制同步扫描线到现实时间
+    // 但为了避免抖动，通常还是以最新数据的 timestamp 为主
   }
 
   requestRenderFrame();
@@ -1035,7 +1097,7 @@ console.log('[Oscilloscope] Component code loaded - v5 scan sweep mode');
 // 生命周期
 onMounted(async () => {
   try {
-    createSamplesBuffer(DEFAULT_WINDOW_SEC * SAMPLE_RATE);
+    createSamplesBuffer(DEFAULT_WINDOW_SEC * currentSampleRate.value);
     initCanvas();
 
     await updateGraphState();
@@ -1099,7 +1161,7 @@ watch(selectedNodeId, (newId, oldId) => {
 // 监听时间窗口变化
 watch(timeWindowSec, () => {
   normalizeTimeWindow();
-  createSamplesBuffer(timeWindowSec.value * SAMPLE_RATE);
+  createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
   // 窗口大小改变时重置扫描
   scanPosition.value = 0;
   isWrapped.value = false;
@@ -1158,7 +1220,9 @@ const resetAllData = () => {
   scanCycle = 0;
   lastRenderedCycle = 0;
   lastRenderedPosition = 0;
-  createSamplesBuffer(timeWindowSec.value * SAMPLE_RATE);
+  latestDataTimestamp = 0;
+  latestDataWallTime = 0;
+  createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
   packetCount.value = 0;
   autoGainDisplay.value = gainFineByCh.value.map((fine, ch) => fine * Math.pow(10, gainExpByCh.value[ch] || 0));
   channelRanges.value = Array.from({ length: channelCount }, () => ({ max: 0, min: 0 }));
