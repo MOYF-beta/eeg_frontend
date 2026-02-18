@@ -1,5 +1,48 @@
 import type { GraphNode, GraphEdge } from './graph';
 
+// 信号类型枚举
+export type SignalType = 'sine' | 'square' | 'triangle' | 'pulse' | 'multi_sine';
+
+// 噪声类型枚举
+export type NoiseType = 'none' | 'white' | 'pink' | 'brownian' | 'gaussian';
+
+// 信号配置接口
+export interface SignalConfig {
+  type: SignalType;
+  frequency: number; // 频率 (Hz)
+  amplitude: number; // 幅度
+  phase?: number; // 相位 (弧度)
+  dutyCycle?: number; // 占空比 (0-1，用于方波和脉冲)
+  pulseWidth?: number; // 脉冲宽度 (秒，用于脉冲)
+  sineComponents?: { // 多个正弦波叠加配置
+    frequency: number;
+    amplitude: number;
+    phase: number;
+  }[];
+}
+
+// 噪声配置接口
+export interface NoiseConfig {
+  type: NoiseType;
+  amplitude: number; // 噪声幅度
+  seed?: number; // 随机种子
+  cutoffFrequency?: number; // 截止频率 (Hz)
+}
+
+// 通道配置接口
+export interface ChannelConfig {
+  index: number;
+  signal: SignalConfig;
+  noise?: NoiseConfig;
+  enabled: boolean;
+}
+
+// 模拟设备配置接口
+export interface SimulatedDeviceConfig {
+  channels: ChannelConfig[];
+  globalNoise?: NoiseConfig; // 全局噪声
+}
+
 // 设备接口
 export interface Device {
   id: string;
@@ -8,6 +51,8 @@ export interface Device {
   sampleRate: number;
   channels: number;
   port?: string; // 串口或其他连接信息
+  type?: 'simulated' | 'physical'; // 设备类型
+  config?: SimulatedDeviceConfig; // 模拟设备配置
 }
 
 // 示波器实例接口

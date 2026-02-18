@@ -144,6 +144,25 @@
           variant="outlined"
           class="mb-3"
         />
+
+        <!-- 模拟设备配置 -->
+        <div v-if="deviceForm.type === 'simulated'">
+          <v-expansion-panels class="mb-3">
+            <v-expansion-panel>
+              <v-expansion-panel-title>
+                <v-icon left>mdi-cog</v-icon>
+                模拟设备配置
+              </v-expansion-panel-title>
+              <v-expansion-panel-text>
+                <simulated-device-config-component
+                  v-model="deviceForm.simulatedConfig"
+                  :channel-count="deviceForm.channels"
+                  :show-global-noise="true"
+                />
+              </v-expansion-panel-text>
+            </v-expansion-panel>
+          </v-expansion-panels>
+        </div>
       </v-card-text>
       <v-divider />
       <v-card-actions>
@@ -157,9 +176,11 @@
 
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
-import { sessionStore, type Device } from '../services/sessionStore';
+import { sessionStore, type Device, type SimulatedDeviceConfig } from '../services/sessionStore';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
+import SimulatedDeviceConfigComponent from './SimulatedDeviceConfig.vue';
+import { deviceApi } from '../services/deviceApi';
 
 // 本地状态
 const devices = ref<Device[]>([]);
@@ -173,6 +194,13 @@ const deviceForm = ref({
   address: '',
   sampleRate: 1000,
   channels: 8,
+  simulatedConfig: {
+    channels: [],
+    globalNoise: {
+      type: 'none',
+      amplitude: 0
+    }
+  } as SimulatedDeviceConfig
 });
 
 // 计算属性：获取绑定到此设备的节点
@@ -184,13 +212,47 @@ const getBoundNode = (deviceId: string): GraphNode | undefined => {
 
 // 刷新设备列表
 async function refreshDevices() {
-  // 从 sessionStore 获取设备列表
-  const storedDevices = sessionStore.getDevices();
-  if (storedDevices.length > 0) {
-    devices.value = storedDevices;
-  } else {
-    // 如果没有存储的设备，使用默认模拟设备
-    loadDefaultDevices();
+  try {
+    // 从后端API获取设备列表
+    const apiDevices = await deviceApi.getDevices();
+    
+    // 转换API设备格式为前端格式
+    const convertedDevices: Device[] = apiDevices.map(apiDevice => {
+      const device: Device = {
+        id: apiDevice.id,
+        name: apiDevice.name,
+        status: 'online', // 默认在线状态
+        sampleRate: apiDevice.sampling_rate || 1000,
+        channels: apiDevice.channel_count || 8,
+        port: apiDevice.address,
+        address: apiDevice.address,
+        type: apiDevice.type as 'simulated' | 'physical'
+      };
+      
+      // 如果有配置，转换配置格式
+      if (apiDevice.config) {
+        device.config = deviceApi.convertFromApiConfig(apiDevice.config);
+      }
+      
+      return device;
+    });
+    
+    if (convertedDevices.length > 0) {
+      devices.value = convertedDevices;
+      sessionStore.setDevices(convertedDevices);
+    } else {
+      // 如果没有设备，使用默认模拟设备
+      loadDefaultDevices();
+    }
+  } catch (error) {
+    console.error('Failed to fetch devices from API:', error);
+    // 如果API失败，回退到本地存储
+    const storedDevices = sessionStore.getDevices();
+    if (storedDevices.length > 0) {
+      devices.value = storedDevices;
+    } else {
+      loadDefaultDevices();
+    }
   }
   
   // 同时刷新计算图节点
@@ -221,6 +283,28 @@ function loadDefaultDevices() {
       sampleRate: 1000,
       channels: 8,
       port: 'COM3',
+      address: 'SIM-001',
+      type: 'simulated',
+      config: {
+        channels: Array.from({ length: 8 }, (_, index) => ({
+          index,
+          enabled: true,
+          signal: {
+            type: 'sine',
+            frequency: 10 + index * 2, // 不同频率
+            amplitude: 100,
+            phase: 0
+          },
+          noise: {
+            type: 'white',
+            amplitude: 5
+          }
+        })),
+        globalNoise: {
+          type: 'none',
+          amplitude: 0
+        }
+      }
     },
   ];
   
@@ -237,16 +321,29 @@ function editDevice(device: Device) {
     address: device.port || device.address || '',
     sampleRate: device.sampleRate,
     channels: device.channels,
+    simulatedConfig: device.config || {
+      channels: [],
+      globalNoise: {
+        type: 'none',
+        amplitude: 0
+      }
+    }
   };
   showAddDialog.value = true;
 }
 
 // 删除设备
-function deleteDevice(deviceId: string) {
+async function deleteDevice(deviceId: string) {
   if (!confirm('确定要删除此设备吗？')) return;
   
-  devices.value = devices.value.filter(d => d.id !== deviceId);
-  sessionStore.setDevices(devices.value);
+  try {
+    await deviceApi.deleteDevice(deviceId);
+    devices.value = devices.value.filter(d => d.id !== deviceId);
+    sessionStore.setDevices(devices.value);
+  } catch (error) {
+    console.error('Failed to delete device:', error);
+    alert(`删除设备失败: ${error instanceof Error ? error.message : '未知错误'}`);
+  }
 }
 
 // 关闭对话框
@@ -259,41 +356,70 @@ function closeDialog() {
     address: '',
     sampleRate: 1000,
     channels: 8,
+    simulatedConfig: {
+      channels: [],
+      globalNoise: {
+        type: 'none',
+        amplitude: 0
+      }
+    }
   };
 }
 
 // 保存设备
-function saveDevice() {
-  if (editingDevice.value) {
-    // 编辑现有设备
-    const index = devices.value.findIndex(d => d.id === editingDevice.value!.id);
-    if (index !== -1) {
-      devices.value[index] = {
-        ...editingDevice.value,
+async function saveDevice() {
+  try {
+    if (editingDevice.value) {
+      // 编辑现有设备
+      const updates = {
         name: deviceForm.value.name,
-        sampleRate: deviceForm.value.sampleRate,
-        channels: deviceForm.value.channels,
-        port: deviceForm.value.address,
+        sampling_rate: deviceForm.value.sampleRate,
+        channel_count: deviceForm.value.channels,
         address: deviceForm.value.address,
+        config: deviceForm.value.type === 'simulated' ? 
+          deviceApi.convertToApiConfig(deviceForm.value.simulatedConfig) : undefined
       };
+      
+      const updatedDevice = await deviceApi.updateDevice(editingDevice.value.id, updates);
+      
+      // 更新本地设备列表
+      const index = devices.value.findIndex(d => d.id === editingDevice.value!.id);
+      if (index !== -1) {
+        devices.value[index] = {
+          ...devices.value[index],
+          ...updatedDevice,
+          config: deviceForm.value.type === 'simulated' ? deviceForm.value.simulatedConfig : undefined
+        };
+      }
+    } else {
+      // 添加新设备
+      const deviceData = {
+        type: deviceForm.value.type as 'simulated' | 'physical',
+        name: deviceForm.value.name || `设备 ${devices.value.length + 1}`,
+        address: deviceForm.value.address || 'SIM-001',
+        sampling_rate: deviceForm.value.sampleRate,
+        channel_count: deviceForm.value.channels,
+        config: deviceForm.value.type === 'simulated' ? 
+          deviceApi.convertToApiConfig(deviceForm.value.simulatedConfig) : undefined
+      };
+      
+      const newDevice = await deviceApi.createDevice(deviceData);
+      
+      // 添加配置到新设备
+      const deviceWithConfig: Device = {
+        ...newDevice,
+        config: deviceForm.value.type === 'simulated' ? deviceForm.value.simulatedConfig : undefined
+      };
+      
+      devices.value.push(deviceWithConfig);
     }
-  } else {
-    // 添加新设备
-    const newId = `dev-${Date.now()}`;
-    const newDevice: Device = {
-      id: newId,
-      name: deviceForm.value.name || `设备 ${devices.value.length + 1}`,
-      status: 'online',
-      sampleRate: deviceForm.value.sampleRate,
-      channels: deviceForm.value.channels,
-      port: deviceForm.value.address,
-      address: deviceForm.value.address,
-    };
-    devices.value.push(newDevice);
+    
+    sessionStore.setDevices(devices.value);
+    closeDialog();
+  } catch (error) {
+    console.error('Failed to save device:', error);
+    alert(`保存设备失败: ${error instanceof Error ? error.message : '未知错误'}`);
   }
-  
-  sessionStore.setDevices(devices.value);
-  closeDialog();
 }
 
 // 监听 sessionStore 变化

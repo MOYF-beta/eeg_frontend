@@ -4,6 +4,7 @@ from . import views
 urlpatterns = [
     path('health/', views.health),
     path('devices/', views.devices),
+    path('devices/<str:device_id>/', views.devices),
     path('graph/', views.graph),
     path('graph/python/prototype/', views.graph_python_prototype),
     path('graph/python/library/', views.graph_python_library),
