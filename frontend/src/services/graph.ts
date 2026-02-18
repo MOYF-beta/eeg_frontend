@@ -75,7 +75,11 @@ export async function saveGraph(payload: GraphPayload) {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data?.errors?.[0] || 'Failed to save graph');
+    // 检查是否是运行时错误
+    if (res.status === 500 && data?.detail?.includes('running')) {
+      throw new Error('计算图正在运行中，无法保存。请先停止运行再保存。');
+    }
+    throw new Error(data?.errors?.[0] || data?.detail || 'Failed to save graph');
   }
   return res.json();
 }
@@ -86,7 +90,14 @@ export async function setGraphFrozen(frozen: boolean) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ frozen }),
   });
-  if (!res.ok) throw new Error('Failed to update freeze');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    // 检查是否是运行时错误
+    if (res.status === 500 && data?.detail?.includes('running')) {
+      throw new Error('计算图正在运行中，无法冻结/解冻。请先停止运行再操作。');
+    }
+    throw new Error(data?.errors?.[0] || data?.detail || 'Failed to update freeze');
+  }
   return res.json();
 }
 

@@ -4,12 +4,28 @@
       <v-toolbar-title>计算图编辑器</v-toolbar-title>
       <v-spacer />
       <div class="d-flex align-center ga-2">
-        <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
+        <!-- 状态提示 -->
+        <v-chip size="small" :color="isRunning ? 'warning' : (frozen ? 'info' : 'default')">
+          <v-icon size="small" class="mr-1">
+            {{ isRunning ? 'mdi-play' : (frozen ? 'mdi-lock' : 'mdi-pencil') }}
+          </v-icon>
+          {{ statusDescription }}
+        </v-chip>
+        
+        <v-switch 
+          v-model="frozen" 
+          density="compact" 
+          hide-details 
+          label="冻结"
+          :disabled="isRunning"
+          :title="isRunning ? '运行中无法修改冻结状态' : '冻结/解冻计算图'"
+        />
         <v-btn
           size="small"
           color="success"
           @click="runByMode('live')"
-          :disabled="!frozen || isRunning"
+          :disabled="!canRunGraph"
+          :title="!canRunGraph ? '计算图必须冻结才能运行' : 'Live运行计算图'"
         >
           <v-icon left size="small" class="mr-1">mdi-play</v-icon>
           Live运行
@@ -18,7 +34,8 @@
           size="small"
           color="secondary"
           @click="runByMode('offline')"
-          :disabled="!frozen || isRunning"
+          :disabled="!canRunGraph"
+          :title="!canRunGraph ? '计算图必须冻结才能运行' : '离线运行计算图'"
         >
           <v-icon left size="small" class="mr-1">mdi-file-sync</v-icon>
           离线运行
@@ -28,6 +45,7 @@
           color="error"
           @click="stopRun"
           :disabled="!isRunning"
+          :title="!isRunning ? '计算图未运行' : '停止运行计算图'"
         >
           <v-icon left size="small" class="mr-1">mdi-stop</v-icon>
           停止
@@ -48,9 +66,33 @@
           非实时
         </v-chip>
         <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
-        <v-btn size="small" variant="tonal" @click="triggerFileLoad">加载</v-btn>
-        <v-btn size="small" color="secondary" @click="loadMockData">加载Mock</v-btn>
-        <v-btn size="small" color="info" @click="clear">清空</v-btn>
+        <v-btn 
+          size="small" 
+          variant="tonal" 
+          @click="triggerFileLoad"
+          :disabled="!canEditGraph"
+          :title="!canEditGraph ? `当前状态不允许加载计算图: ${statusDescription}` : '从文件加载计算图'"
+        >
+          加载
+        </v-btn>
+        <v-btn 
+          size="small" 
+          color="secondary" 
+          @click="loadMockData"
+          :disabled="!canEditGraph"
+          :title="!canEditGraph ? `当前状态不允许加载Mock数据: ${statusDescription}` : '加载Mock数据'"
+        >
+          加载Mock
+        </v-btn>
+        <v-btn 
+          size="small" 
+          color="info" 
+          @click="clear"
+          :disabled="!canEditGraph"
+          :title="!canEditGraph ? `当前状态不允许清空计算图: ${statusDescription}` : '清空计算图'"
+        >
+          清空
+        </v-btn>
       </div>
     </v-toolbar>
 
@@ -84,8 +126,10 @@
               v-for="node in sourceNodes"
               :key="node.type"
               class="palette-item"
-              draggable="true"
+              :class="{ 'palette-item-disabled': !canEditGraph }"
+              :draggable="canEditGraph"
               @dragstart="onDragStart($event, node.type)"
+              :title="!canEditGraph ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -100,8 +144,10 @@
               v-for="node in processNodes"
               :key="node.type"
               class="palette-item"
-              draggable="true"
+              :class="{ 'palette-item-disabled': !canEditGraph }"
+              :draggable="canEditGraph"
               @dragstart="onDragStart($event, node.type)"
+              :title="!canEditGraph ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -116,8 +162,10 @@
               v-for="node in outputNodes"
               :key="node.type"
               class="palette-item"
-              draggable="true"
+              :class="{ 'palette-item-disabled': !canEditGraph }"
+              :draggable="canEditGraph"
               @dragstart="onDragStart($event, node.type)"
+              :title="!canEditGraph ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -274,7 +322,15 @@
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="editDialog.open = false">{{ frozen ? '关闭' : '取消' }}</v-btn>
-        <v-btn v-if="!frozen" color="primary" @click="saveNodeEdit">保存</v-btn>
+        <v-btn 
+          v-if="!frozen" 
+          color="primary" 
+          @click="saveNodeEdit"
+          :disabled="!canEditGraph"
+          :title="!canEditGraph ? `当前状态不允许保存节点: ${statusDescription}` : '保存节点配置'"
+        >
+          保存
+        </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -309,6 +365,9 @@ import { eegWebSocket } from '../services/websocket';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
 
+// 会话存储键名
+const SESSION_STORAGE_KEY = 'eeg_graph_editor_state';
+
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
@@ -341,6 +400,21 @@ const sidebarIconColor = computed(() => {
   if (!editingNode.value) return 'primary';
   const typeInfo = nodeTypes[editingNode.value.type];
   return typeInfo?.color || 'primary';
+});
+
+// 计算属性：检查是否允许编辑计算图
+const canEditGraph = computed(() => {
+  return sessionStore.canEditGraph() && !isRunning.value;
+});
+
+// 计算属性：检查是否允许运行计算图
+const canRunGraph = computed(() => {
+  return sessionStore.canRunGraph() && !isRunning.value;
+});
+
+// 计算属性：当前状态描述
+const statusDescription = computed(() => {
+  return sessionStore.getStatusDescription(isRunning.value);
 });
 
 let runtimeStateTimer: number | null = null;
@@ -550,6 +624,9 @@ async function stopRun() {
     stopEdgeAnimations();
     
     console.log('[GraphEditor] Graph stopped');
+    
+    // 保存状态到会话存储
+    saveStateToSessionStorage();
   } catch (err) {
     console.error('[GraphEditor] Failed to stop graph:', err);
     alert('停止失败: ' + (err as Error).message);
@@ -745,9 +822,10 @@ function openNodeEditDialog(nodeId: string) {
 
 // 处理节点保存
 function handleNodeSave({ name, params, deviceId }: { name: string; params: Record<string, unknown>; deviceId?: string | null }) {
-  // 冻结状态下禁止保存
-  if (frozen.value) {
-    console.log('[GraphEditor] 冻结状态下禁止保存节点更改');
+  // 检查编辑权限
+  if (!canEditGraph.value) {
+    console.log(`[GraphEditor] 当前状态不允许保存节点: ${statusDescription.value}`);
+    alert(`当前状态不允许保存节点: ${statusDescription.value}`);
     return;
   }
   
@@ -1472,6 +1550,13 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
 
 // 拖拽开始
 function onDragStart(e: DragEvent, type: GraphNodeType) {
+  // 检查编辑权限
+  if (!canEditGraph.value) {
+    e.preventDefault();
+    alert(`当前状态不允许添加节点: ${statusDescription.value}`);
+    return;
+  }
+  
   e.dataTransfer?.setData('node-type', type);
   e.dataTransfer!.effectAllowed = 'copy';
 }
@@ -1482,14 +1567,97 @@ async function loadFromBackend() {
   if (!graph) return;
 
   try {
-    const payload = await fetchGraph();
-    frozen.value = payload.frozen;
+    console.log('[GraphEditor] Loading graph from backend...');
+    
+    // 首先检查会话存储中是否有状态
+    const hasSessionState = loadStateFromSessionStorage();
+    
+    // 从后端获取最新数据
+    const backendPayload = await fetchGraph();
+    console.log('[GraphEditor] Loaded graph from backend:', { 
+      nodeCount: backendPayload.nodes?.length || 0, 
+      edgeCount: backendPayload.edges?.length || 0,
+      frozen: backendPayload.frozen 
+    });
+    
+    // 立即获取运行时状态
+    try {
+      await pollRuntimeState();
+    } catch (e) {
+      console.warn('[GraphEditor] Failed to poll runtime state on load:', e);
+    }
+    
+    let finalPayload = backendPayload;
+    
+    // 如果后端返回空数据但会话存储有状态，使用会话存储状态
+    if ((!backendPayload.nodes || backendPayload.nodes.length === 0) && hasSessionState) {
+      console.log('[GraphEditor] Backend returned empty data but session storage has state, checking...');
+      const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
+      if (stateJson) {
+        try {
+          const state = JSON.parse(stateJson);
+          if (state.payload && state.payload.nodes && state.payload.nodes.length > 0) {
+            console.log('[GraphEditor] Using state from session storage');
+            finalPayload = state.payload;
+            
+            // 同步运行时状态
+            if (state.isRunning) {
+              isRunning.value = state.isRunning;
+              runtimeMode.value = state.runtimeMode;
+            }
+          }
+        } catch (err) {
+          console.error('[GraphEditor] Failed to parse session storage state:', err);
+        }
+      }
+    }
+    
+    // 如果计算图正在运行但后端返回空数据，使用会话存储状态
+    if (isRunning.value && (!backendPayload.nodes || backendPayload.nodes.length === 0)) {
+      console.error('[GraphEditor] Graph is running but backend returned empty graph data!');
+      
+      // 尝试从会话存储恢复状态
+      if (hasSessionState) {
+        console.log('[GraphEditor] Attempting to restore state from session storage...');
+        const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
+        if (stateJson) {
+          try {
+            const state = JSON.parse(stateJson);
+            if (state.payload && state.payload.nodes && state.payload.nodes.length > 0) {
+              console.log('[GraphEditor] Restoring state from session storage');
+              finalPayload = state.payload;
+              
+              // 同步运行时状态
+              if (state.isRunning) {
+                isRunning.value = state.isRunning;
+                runtimeMode.value = state.runtimeMode;
+              }
+            }
+          } catch (err) {
+            console.error('[GraphEditor] Failed to parse session storage state:', err);
+          }
+        }
+      } else {
+        console.log('[GraphEditor] No session storage state available, keeping current canvas state');
+        return; // 不更新画布，保持当前状态
+      }
+    }
+    
+    frozen.value = finalPayload.frozen;
+
+    // 如果计算图正在运行，但前端显示为冻结状态，需要同步状态
+    if (isRunning.value && frozen.value) {
+      console.log('[GraphEditor] Graph is running but marked as frozen, syncing state...');
+      // 计算图正在运行时不能保持冻结状态
+      frozen.value = false;
+    }
 
     // 先清空画布
+    console.log('[GraphEditor] Clearing canvas before loading...');
     graph.clearCells();
 
     // 加载节点
-    payload.nodes.forEach((node: GraphNode) => {
+    finalPayload.nodes.forEach((node: GraphNode) => {
       if (!node.id) {
         console.warn('Node without id:', node);
         node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
@@ -1498,7 +1666,7 @@ async function loadFromBackend() {
     });
 
     // 加载边 - 确保节点存在后再连接
-    payload.edges.forEach((edge) => {
+    finalPayload.edges.forEach((edge) => {
       const sourceNode = graph.getCellById(edge.source);
       const targetNode = graph.getCellById(edge.target);
       if (sourceNode && targetNode) {
@@ -1513,20 +1681,32 @@ async function loadFromBackend() {
       }
     });
 
-    hasNodes.value = graph.getNodes().length > 0;
+    const finalNodeCount = graph.getNodes().length;
+    const finalEdgeCount = graph.getEdges().length;
+    hasNodes.value = finalNodeCount > 0;
+    console.log(`[GraphEditor] Load completed - Canvas has ${finalNodeCount} nodes, ${finalEdgeCount} edges`);
+    
     updateAllEdgeLabels();
     setGraphInteracting(graph, !frozen.value);
   } catch (err) {
     console.error('Failed to load graph:', err);
-    // 加载失败时显示空白画布，不阻塞用户操作
-    hasNodes.value = false;
+    
+    // 加载失败时尝试从会话存储恢复状态
+    console.log('[GraphEditor] Backend load failed, attempting to restore from session storage...');
+    const restored = restoreStateFromSessionStorage();
+    if (!restored) {
+      // 恢复失败时显示空白画布，不阻塞用户操作
+      hasNodes.value = false;
+    }
   }
 }
 
 function setGraphInteracting(graph: Graph, enabled: boolean) {
   // X6 2.x: 使用 options 配置交互状态
   if (graph) {
-    graph.options.interacting = enabled ? {
+    // 考虑编辑权限
+    const actuallyEnabled = enabled && canEditGraph.value;
+    graph.options.interacting = actuallyEnabled ? {
       nodeMovable: true,
       edgeMovable: true,
       edgeLabelMovable: true,
@@ -1535,6 +1715,11 @@ function setGraphInteracting(graph: Graph, enabled: boolean) {
       vertexAddable: true,
       vertexDeletable: true,
     } : false;
+    
+    // 更新界面提示
+    if (!actuallyEnabled && enabled) {
+      console.log('[GraphEditor] Graph editing disabled due to permissions');
+    }
   }
 }
 
@@ -1549,6 +1734,14 @@ async function applyFrozen() {
 
   if (frozen.value) {
     console.log('[GraphEditor] Freezing graph...');
+    
+    // 检查计算图是否正在运行
+    if (isRunning.value) {
+      console.log('[GraphEditor] Graph is running, cannot freeze');
+      alert('计算图正在运行中，无法冻结。请先停止运行再冻结。');
+      frozen.value = false;
+      return;
+    }
     
     // 先保存当前计算图到 SessionStore
     const payload = buildPayload();
@@ -1573,15 +1766,30 @@ async function applyFrozen() {
     }
 
     // 验证通过，先自动保存到后端
-    try {
-      console.log('[GraphEditor] Auto-saving graph before freeze...');
-      await saveGraph(payload);
-      console.log('[GraphEditor] Auto-save successful');
-    } catch (err) {
-      console.error('[GraphEditor] Auto-save failed:', err);
-      alert('自动保存失败，无法冻结计算图');
-      frozen.value = false;
-      return;
+    // 检查计算图是否正在运行，如果正在运行则跳过保存
+    if (isRunning.value) {
+      console.log('[GraphEditor] Graph is running, skipping auto-save');
+    } else {
+      try {
+        console.log('[GraphEditor] Auto-saving graph before freeze...');
+        await saveGraph(payload);
+        console.log('[GraphEditor] Auto-save successful');
+      } catch (err) {
+        console.error('[GraphEditor] Auto-save failed:', err);
+        // 检查是否是运行时错误
+        if (err instanceof Error && err.message.includes('running')) {
+          console.log('[GraphEditor] Graph is running, cannot save');
+          // 计算图正在运行，继续冻结流程但不保存
+        } else {
+          alert('自动保存失败，无法冻结计算图');
+          // 使用临时变量避免触发watch循环
+          const tempFrozen = false;
+          setTimeout(() => {
+            frozen.value = tempFrozen;
+          }, 0);
+          return;
+        }
+      }
     }
 
     // 然后冻结并启动 WebSocket
@@ -1595,13 +1803,22 @@ async function applyFrozen() {
       eegWebSocket.connect();
       
       console.log('[GraphEditor] 计算图已冻结，WebSocket连接已建立');
+      
+      // 保存状态到会话存储
+      saveStateToSessionStorage();
     } catch (err) {
       console.error('[GraphEditor] Failed to freeze graph:', err);
       alert('冻结计算图失败，请检查后端连接');
       frozen.value = false;
     }
   } else {
-    // 解冻
+    // 解冻前检查计算图是否正在运行
+    if (isRunning.value) {
+      alert('计算图正在运行中，请先停止运行再解冻');
+      frozen.value = true; // 保持冻结状态
+      return;
+    }
+    
     console.log('[GraphEditor] Unfreezing graph...');
     try {
       await setGraphFrozen(false);
@@ -1611,8 +1828,20 @@ async function applyFrozen() {
       eegWebSocket.disconnect();
       
       console.log('[GraphEditor] 计算图已解冻');
+      
+      // 保存状态到会话存储
+      saveStateToSessionStorage();
     } catch (err) {
       console.error('[GraphEditor] Failed to unfreeze graph:', err);
+      // 如果后端也检查运行时状态，这里可能会收到错误
+      if (err instanceof Error && err.message.includes('running')) {
+        alert('计算图正在运行中，无法解冻');
+        // 使用临时变量避免触发watch循环
+        const tempFrozen = true;
+        setTimeout(() => {
+          frozen.value = tempFrozen;
+        }, 0);
+      }
     }
   }
 }
@@ -1638,13 +1867,159 @@ function buildPayload(): GraphPayload {
   return { nodes, edges, frozen: frozen.value };
 }
 
+// 保存状态到会话存储
+function saveStateToSessionStorage() {
+  try {
+    const graph = graphRef.value;
+    if (!graph) return;
+
+    const payload = buildPayload();
+    
+    // 只保存有效的状态（有节点或计算图正在运行）
+    const isValidState = payload.nodes.length > 0 || isRunning.value;
+    if (!isValidState) {
+      console.log('[GraphEditor] Skipping session storage save - empty graph and not running');
+      return;
+    }
+    
+    const state = {
+      payload,
+      isRunning: isRunning.value,
+      runtimeMode: runtimeMode.value,
+      timestamp: Date.now()
+    };
+    
+    sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state));
+    console.log('[GraphEditor] State saved to session storage:', {
+      nodes: payload.nodes.length,
+      edges: payload.edges.length,
+      frozen: payload.frozen,
+      isRunning: isRunning.value
+    });
+  } catch (err) {
+    console.error('[GraphEditor] Failed to save state to session storage:', err);
+  }
+}
+
+// 从会话存储恢复状态到画布
+function restoreStateFromSessionStorage(): boolean {
+  try {
+    const graph = graphRef.value;
+    if (!graph) return false;
+
+    const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stateJson) return false;
+
+    const state = JSON.parse(stateJson);
+    if (!state.payload || !state.payload.nodes || state.payload.nodes.length === 0) {
+      return false;
+    }
+
+    console.log('[GraphEditor] Restoring state from session storage to canvas:', {
+      nodes: state.payload.nodes.length,
+      edges: state.payload.edges.length,
+      frozen: state.payload.frozen,
+      isRunning: state.isRunning
+    });
+
+    // 清空画布
+    graph.clearCells();
+
+    // 恢复节点
+    state.payload.nodes.forEach((node: GraphNode) => {
+      if (!node.id) {
+        console.warn('Node without id:', node);
+        node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+      }
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
+    });
+
+    // 恢复边
+    state.payload.edges.forEach((edge: any) => {
+      const sourceNode = graph.getCellById(edge.source);
+      const targetNode = graph.getCellById(edge.target);
+      if (sourceNode && targetNode) {
+        graph.addEdge({
+          id: edge.id,
+          source: { cell: edge.source, port: edge.sourcePort || getDefaultNodeOutputPort(edge.source) },
+          target: { cell: edge.target, port: edge.targetPort || getDefaultNodeInputPort(edge.target) },
+          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+        });
+      } else {
+        console.warn('Skipping edge with missing nodes:', edge);
+      }
+    });
+
+    // 恢复状态
+    frozen.value = state.payload.frozen;
+    if (state.isRunning) {
+      isRunning.value = state.isRunning;
+      runtimeMode.value = state.runtimeMode;
+    }
+
+    const finalNodeCount = graph.getNodes().length;
+    const finalEdgeCount = graph.getEdges().length;
+    hasNodes.value = finalNodeCount > 0;
+    
+    updateAllEdgeLabels();
+    setGraphInteracting(graph, !frozen.value);
+    
+    console.log(`[GraphEditor] State restored - Canvas has ${finalNodeCount} nodes, ${finalEdgeCount} edges`);
+    return true;
+  } catch (err) {
+    console.error('[GraphEditor] Failed to restore state from session storage:', err);
+    return false;
+  }
+}
+
+// 从会话存储加载状态
+function loadStateFromSessionStorage(): boolean {
+  try {
+    const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
+    if (!stateJson) return false;
+
+    const state = JSON.parse(stateJson);
+    console.log('[GraphEditor] Loaded state from session storage:', state);
+    
+    // 检查状态是否过期（超过5分钟）
+    const isExpired = Date.now() - state.timestamp > 5 * 60 * 1000;
+    if (isExpired) {
+      console.log('[GraphEditor] Session storage state expired, clearing');
+      sessionStorage.removeItem(SESSION_STORAGE_KEY);
+      return false;
+    }
+    
+    return true;
+  } catch (err) {
+    console.error('[GraphEditor] Failed to load state from session storage:', err);
+    return false;
+  }
+}
+
+// 清除会话存储状态
+function clearSessionStorage() {
+  sessionStorage.removeItem(SESSION_STORAGE_KEY);
+  console.log('[GraphEditor] Cleared session storage');
+}
+
 async function save() {
   console.log('[GraphEditor] Save button clicked, frozen:', frozen.value);
+  
+  // 检查计算图是否正在运行
+  if (isRunning.value) {
+    console.log('[GraphEditor] Graph is running, skipping save');
+    alert('计算图正在运行中，无法保存。请先停止运行再保存。');
+    return;
+  }
+  
   try {
     const payload = buildPayload();
     console.log('[GraphEditor] Saving graph with payload:', payload);
     await saveGraph(payload);
     console.log('[GraphEditor] Graph saved successfully');
+    
+    // 保存状态到会话存储
+    saveStateToSessionStorage();
   } catch (err) {
     console.error('[GraphEditor] Failed to save graph:', err);
     alert('保存失败: ' + (err as Error).message);
@@ -1679,6 +2054,15 @@ function triggerFileLoad() {
 
 // 从文件加载计算图
 async function loadGraphFromFile(event: Event) {
+  // 检查编辑权限
+  if (!canEditGraph.value) {
+    alert(`当前状态不允许加载计算图: ${statusDescription.value}`);
+    // 清空input以便可以再次选择同一文件
+    const input = event.target as HTMLInputElement;
+    input.value = '';
+    return;
+  }
+  
   const input = event.target as HTMLInputElement;
   const file = input.files?.[0];
   if (!file) return;
@@ -1743,7 +2127,13 @@ async function loadGraphFromFile(event: Event) {
 }
 
 async function run(mode: 'live' | 'offline' = 'live') {
-  console.log('[GraphEditor] Run button clicked, mode:', mode, 'frozen:', frozen.value);
+  console.log('[GraphEditor] Run button clicked, mode:', mode, 'frozen:', frozen.value, 'hasNodes:', hasNodes.value);
+  
+  // 检查计算图是否已经在运行
+  if (isRunning.value) {
+    console.log('[GraphEditor] Graph is already running');
+    return;
+  }
   
   // 启动 runtime（会验证冻结状态并连接 WebSocket）
   const success = await graphRuntime.start();
@@ -1757,7 +2147,7 @@ async function run(mode: 'live' | 'offline' = 'live') {
   // 调用后端API
   try {
     const res = await runGraph(mode);
-    console.log('[GraphEditor] Graph run API called successfully');
+    console.log('[GraphEditor] Graph run API called successfully, response:', res);
     if (res.ok) {
       isRunning.value = true;
       runtimeMode.value = mode;
@@ -1766,6 +2156,17 @@ async function run(mode: 'live' | 'offline' = 'live') {
       
       // 启动边动画（live和offline模式都有动画，但效果不同）
       startEdgeAnimations();
+      
+      // 调试：记录当前画布状态
+      const graph = graphRef.value;
+      if (graph) {
+        const nodeCount = graph.getNodes().length;
+        const edgeCount = graph.getEdges().length;
+        console.log(`[GraphEditor] After run - Canvas has ${nodeCount} nodes, ${edgeCount} edges`);
+      }
+      
+      // 保存状态到会话存储
+      saveStateToSessionStorage();
     }
   } catch (err) {
     console.error('[GraphEditor] Failed to run graph:', err);
@@ -1773,12 +2174,43 @@ async function run(mode: 'live' | 'offline' = 'live') {
     return;
   }
   
-  // 如果没有WebSocket连接，使用模拟数据流（测试模式）
-  if (!eegWebSocket.isConnected()) {
-    console.log('[GraphEditor] WebSocket not connected, using mock data stream');
-    console.log('WebSocket未连接，使用模拟数据流');
-    startMockDataStream();
-  }
+  // 监听WebSocket连接状态变化
+  const checkWebSocketConnection = () => {
+    if (eegWebSocket.isConnected()) {
+      console.log('[GraphEditor] WebSocket connected successfully');
+      console.log('WebSocket连接成功，使用真实后端数据');
+    } else {
+      console.log('[GraphEditor] WebSocket not connected yet, waiting for connection...');
+      console.log('WebSocket尚未连接，等待连接...');
+      // 设置一个超时检查，如果5秒后仍未连接，提示用户
+      setTimeout(() => {
+        if (!eegWebSocket.isConnected()) {
+          console.warn('[GraphEditor] WebSocket still not connected after 5 seconds');
+          console.warn('WebSocket连接超时，请检查后端服务是否运行');
+        }
+      }, 5000);
+    }
+  };
+  
+  // 立即检查一次
+  checkWebSocketConnection();
+  
+  // 监听WebSocket状态变化
+  const unsubscribe = eegWebSocket.onStatusChange((status) => {
+    console.log('[GraphEditor] WebSocket status changed:', status);
+    if (status === 'connected') {
+      console.log('[GraphEditor] WebSocket connected, using real backend data');
+      console.log('WebSocket已连接，使用真实后端数据');
+    } else if (status === 'error') {
+      console.error('[GraphEditor] WebSocket connection error');
+      console.error('WebSocket连接错误，请检查后端服务');
+    }
+  });
+  
+  // 在组件卸载时取消监听
+  onUnmounted(() => {
+    unsubscribe();
+  });
 }
 
 // 模拟数据流（用于测试）
@@ -1833,6 +2265,14 @@ function stopMockDataStream() {
 }
 
 function clear() {
+  // 检查编辑权限
+  if (!canEditGraph.value) {
+    alert(`当前状态不允许清空计算图: ${statusDescription.value}`);
+    return;
+  }
+  
+  if (!confirm('确定要清空计算图吗？所有节点和边将被删除。')) return;
+  
   const graph = graphRef.value;
   if (!graph) return;
   
@@ -1849,9 +2289,18 @@ function clear() {
   
   graph.clearCells();
   hasNodes.value = false;
+  
+  // 清除会话存储
+  clearSessionStorage();
 }
 
 async function loadMockData() {
+  // 检查编辑权限
+  if (!canEditGraph.value) {
+    alert(`当前状态不允许加载Mock数据: ${statusDescription.value}`);
+    return;
+  }
+  
   const graph = graphRef.value;
   if (!graph) return;
 
@@ -1891,7 +2340,13 @@ async function loadMockData() {
 
   updateAllEdgeLabels();
 
-  await saveGraph(buildPayload());
+  // 只在计算图未运行时保存
+  if (!isRunning.value) {
+    await saveGraph(buildPayload());
+  }
+  
+  // 保存状态到会话存储
+  saveStateToSessionStorage();
 }
 
 onMounted(async () => {
@@ -2077,6 +2532,18 @@ onUnmounted(() => {
   stopMockDataStream();
   stopRuntimeStatePolling();
   stopEdgeAnimations();
+  
+  // 保存当前状态到会话存储
+  saveStateToSessionStorage();
+  
+  // 如果计算图正在运行，停止后端计算图
+  if (isRunning.value) {
+    console.log('[GraphEditor] Component unmounting while graph is running, stopping backend graph...');
+    stopGraph().catch(err => {
+      console.error('[GraphEditor] Failed to stop graph on unmount:', err);
+    });
+  }
+  
   graphRuntime.dispose();
   graphRef.value?.dispose();
   // 取消订阅
@@ -2164,6 +2631,16 @@ onUnmounted(() => {
 
 .palette-item:active {
   cursor: grabbing;
+}
+
+.palette-item-disabled {
+  opacity: 0.5;
+  cursor: not-allowed !important;
+  background: #f9f9f9 !important;
+}
+
+.palette-item-disabled:hover {
+  background: #f9f9f9 !important;
 }
 
 .item-icon {

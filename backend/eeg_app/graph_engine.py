@@ -143,13 +143,19 @@ class GraphWorker:
 
         channels: List[float] = []
         for i in range(channels_count):
-            freq = 25
+            # 清晰的方波信号，不同通道有不同频率
+            freq = 5 + i * 0.5  # 5-8.5Hz，易于观察
             square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-            square_signal = square * 30
+            square_signal = square * 100  # 增加方波幅度
+            
+            # 减少高频噪声，让方波更明显
             high_freq1 = 50 + i * 10
             high_freq2 = 120 + i * 5
-            noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + math.sin(2 * math.pi * high_freq2 * t) * 15
-            random_noise = random.uniform(-5, 5)
+            noise = math.sin(2 * math.pi * high_freq1 * t) * 5 + math.sin(2 * math.pi * high_freq2 * t) * 3  # 减少噪声幅度
+            
+            # 减少随机噪声
+            random_noise = random.uniform(-2, 2)
+            
             channels.append(square_signal + noise + random_noise)
 
         state['t'] = t + dt

@@ -119,10 +119,10 @@ class SessionStore {
     this.listeners = new Set();
   }
 
-  // 从SessionStorage加载
+  // 从localStorage加载
   private loadFromStorage(): EegSessionState {
     try {
-      const stored = sessionStorage.getItem(STORAGE_KEY);
+      const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const parsed = JSON.parse(stored);
         // 确保嵌套对象有默认值
@@ -145,11 +145,11 @@ class SessionStore {
     return { ...defaultState };
   }
 
-  // 保存到SessionStorage
+  // 保存到localStorage
   private saveToStorage() {
     try {
       this.state.lastUpdated = Date.now();
-      sessionStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
     } catch (e) {
       console.error('Failed to save session state:', e);
     }
@@ -436,6 +436,46 @@ class SessionStore {
       console.error('Failed to import state:', e);
       return false;
     }
+  }
+
+  // ========== 状态权限检查 ==========
+
+  // 检查是否允许编辑计算图
+  canEditGraph(): boolean {
+    return !this.state.graph.frozen;
+  }
+
+  // 检查是否允许编辑设备（冻结时允许，运行时禁止）
+  canEditDevices(isRunning: boolean = false): boolean {
+    // 如果正在运行，禁止编辑设备
+    if (isRunning) {
+      return false;
+    }
+    // 冻结状态允许编辑设备
+    return true;
+  }
+
+  // 检查是否允许运行计算图
+  canRunGraph(): boolean {
+    return this.state.graph.frozen;
+  }
+
+  // 获取当前状态描述
+  getStatusDescription(isRunning: boolean = false): string {
+    if (isRunning) {
+      return '运行中 - 禁止修改设备和计算图';
+    } else if (this.state.graph.frozen) {
+      return '已冻结 - 可编辑设备，不可编辑计算图';
+    } else {
+      return '编辑中 - 可编辑设备和计算图';
+    }
+  }
+
+  // 设置计算图冻结状态（内部使用，外部通过API调用）
+  setGraphFrozenInternal(frozen: boolean) {
+    this.state.graph.frozen = frozen;
+    this.saveToStorage();
+    this.notify();
   }
 }
 

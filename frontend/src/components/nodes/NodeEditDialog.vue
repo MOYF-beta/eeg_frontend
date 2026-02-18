@@ -178,6 +178,7 @@ const props = defineProps<{
   allNodes?: GraphNode[];
   allEdges?: GraphEdge[];
   mode?: 'dialog' | 'sidebar'; // 新增：显示模式
+  isReadOnly?: boolean; // 新增：只读模式
 }>();
 
 const emit = defineEmits<{
@@ -823,9 +824,21 @@ const close = () => {
   show.value = false;
 };
 
+// 通道相关方法
+const addChannelName = () => {
+  const newIndex = channelNames.value.length + 1;
+  channelNames.value.push(`CH${newIndex}`);
+};
+
+const removeChannelName = (index: number) => {
+  if (channelNames.value.length > 1) {
+    channelNames.value.splice(index, 1);
+  }
+};
+
 const save = async () => {
   // 只读模式下禁止保存
-  if (isReadOnly.value) {
+  if (props.isReadOnly) {
     console.log('[NodeEditDialog] 只读模式下禁止保存');
     return;
   }

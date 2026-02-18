@@ -1,11 +1,135 @@
 import asyncio
 import json
+import math
+import random
 import time
 from collections import deque
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Optional
 
 import numpy as np
 from channels.generic.websocket import AsyncWebsocketConsumer
+
+from .device_store import get_device_config
+
+
+def generate_signal_from_config(channel_config: Dict, t: float, sample_rate: float = 1000.0) -> float:
+    """根据通道配置生成信号值
+    
+    Args:
+        channel_config: 通道配置字典
+        t: 时间（秒）
+        sample_rate: 采样率（Hz）
+    
+    Returns:
+        信号值
+    """
+    if not channel_config.get('enabled', True):
+        return 0.0
+    
+    wave_type = channel_config.get('wave_type', 'sine')
+    frequency = float(channel_config.get('frequency', 10.0))
+    amplitude = float(channel_config.get('amplitude', 100.0))
+    phase = float(channel_config.get('phase', 0.0)) * math.pi / 180.0  # 转换为弧度
+    
+    # 基础信号
+    base_signal = 0.0
+    
+    if wave_type == 'sine':
+        # 正弦波
+        base_signal = amplitude * math.sin(2 * math.pi * frequency * t + phase)
+    
+    elif wave_type == 'square':
+        # 方波
+        duty_cycle = float(channel_config.get('duty_cycle', 0.5))
+        phase_rad = 2 * math.pi * frequency * t + phase
+        phase_mod = phase_rad % (2 * math.pi)
+        if phase_mod < 2 * math.pi * duty_cycle:
+            base_signal = amplitude
+        else:
+            base_signal = -amplitude
+    
+    elif wave_type == 'triangle':
+        # 三角波
+        phase_rad = 2 * math.pi * frequency * t + phase
+        phase_mod = phase_rad % (2 * math.pi)
+        if phase_mod < math.pi:
+            base_signal = amplitude * (2 * phase_mod / math.pi - 1)
+        else:
+            base_signal = amplitude * (3 - 2 * phase_mod / math.pi)
+    
+    elif wave_type == 'pulse':
+        # 脉冲
+        pulse_width = float(channel_config.get('pulse_width', 0.01))
+        duty_cycle = float(channel_config.get('duty_cycle', 0.1))
+        period = 1.0 / frequency
+        pulse_time = t % period
+        
+        if pulse_time < pulse_width:
+            base_signal = amplitude
+        else:
+            base_signal = 0.0
+    
+    elif wave_type == 'multi_sine':
+        # 多个正弦波叠加
+        sine_components = channel_config.get('sine_components', [])
+        if not sine_components:
+            # 如果没有分量，使用默认正弦波
+            base_signal = amplitude * math.sin(2 * math.pi * frequency * t + phase)
+        else:
+            base_signal = 0.0
+            for comp in sine_components:
+                comp_freq = float(comp.get('frequency', frequency))
+                comp_amp = float(comp.get('amplitude', amplitude))
+                comp_phase = float(comp.get('phase', 0.0)) * math.pi / 180.0
+                base_signal += comp_amp * math.sin(2 * math.pi * comp_freq * t + comp_phase)
+    
+    else:
+        # 默认正弦波
+        base_signal = amplitude * math.sin(2 * math.pi * frequency * t + phase)
+    
+    # 添加通道噪声
+    noise_type = channel_config.get('noise_type', 'none')
+    noise_amplitude = float(channel_config.get('noise_amplitude', 0.0))
+    
+    if noise_type == 'white' and noise_amplitude > 0:
+        # 白噪声
+        base_signal += random.uniform(-noise_amplitude, noise_amplitude)
+    elif noise_type == 'gaussian' and noise_amplitude > 0:
+        # 高斯噪声
+        base_signal += random.gauss(0, noise_amplitude / 3.0)  # 3σ原则
+    
+    return base_signal
+
+
+def get_device_channels(device_id: str, t: float, sample_rate: float = 1000.0) -> Optional[List[float]]:
+    """根据设备配置生成所有通道的信号
+    
+    Args:
+        device_id: 设备ID
+        t: 时间（秒）
+        sample_rate: 采样率（Hz）
+    
+    Returns:
+        通道信号列表，如果设备不存在则返回None
+    """
+    device_config = get_device_config(device_id)
+    if not device_config:
+        return None
+    
+    channels_config = device_config.get('channels', [])
+    if not channels_config:
+        return None
+    
+    # 按索引排序通道配置
+    sorted_channels = sorted(channels_config, key=lambda x: x.get('index', 0))
+    
+    # 生成每个通道的信号
+    channels = []
+    for channel_config in sorted_channels:
+        signal_value = generate_signal_from_config(channel_config, t, sample_rate)
+        channels.append(signal_value)
+    
+    return channels
 
 
 class EegGraphConsumer(AsyncWebsocketConsumer):
@@ -554,24 +678,40 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                     # 使用回放数据
                     raw_channels = replay_channels
                 else:
-                    # 生成模拟数据（方波 + 噪声，25Hz方波用于测试）
-                    raw_channels = []
-                    for i in range(8):
-                        # 方波信号 - 25Hz
-                        freq = 25
-                        square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-                        square_signal = square * 30
+                    # 获取SOURCE节点绑定的设备配置
+                    source_nodes = [node for node in nodes if node.get('type') == 'SOURCE']
+                    device_channels = None
+                    
+                    if source_nodes:
+                        # 使用第一个SOURCE节点的设备配置
+                        source_node = source_nodes[0]
+                        device_id = source_node.get('params', {}).get('deviceId')
+                        if device_id:
+                            # 根据设备配置生成信号
+                            device_channels = get_device_channels(device_id, t, float(sample_rate))
+                    
+                    if device_channels is not None:
+                        # 使用设备配置生成的信号
+                        raw_channels = device_channels
+                    else:
+                        # 如果没有设备配置，使用默认模拟数据（方波 + 噪声，25Hz方波用于测试）
+                        raw_channels = []
+                        for i in range(8):
+                            # 方波信号 - 25Hz
+                            freq = 25
+                            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
+                            square_signal = square * 30
 
-                        # 高频噪声
-                        high_freq1 = 50 + i * 10
-                        high_freq2 = 120 + i * 5
-                        noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
-                                math.sin(2 * math.pi * high_freq2 * t) * 15
+                            # 高频噪声
+                            high_freq1 = 50 + i * 10
+                            high_freq2 = 120 + i * 5
+                            noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
+                                    math.sin(2 * math.pi * high_freq2 * t) * 15
 
-                        # 随机噪声
-                        random_noise = random.uniform(-5, 5)
+                            # 随机噪声
+                            random_noise = random.uniform(-5, 5)
 
-                        raw_channels.append(square_signal + noise + random_noise)
+                            raw_channels.append(square_signal + noise + random_noise)
 
                 # 应用50Hz低通滤波器
                 channels = []

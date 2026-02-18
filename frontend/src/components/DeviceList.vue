@@ -7,13 +7,26 @@
           <v-icon left>mdi-refresh</v-icon>
           刷新
         </v-btn>
-        <v-btn color="secondary" size="small" @click="showAddDialog = true">
+        <v-btn 
+          color="secondary" 
+          size="small" 
+          @click="showAddDialog = true"
+          :disabled="!canEditDevices"
+          :title="!canEditDevices ? statusDescription : '添加新设备'"
+        >
           <v-icon left>mdi-plus</v-icon>
           添加设备
         </v-btn>
       </div>
     </v-card-title>
     <v-divider />
+    <!-- 状态提示 -->
+    <v-alert v-if="!canEditDevices" type="info" density="compact" variant="tonal" class="ma-2">
+      <div class="d-flex align-center">
+        <v-icon class="mr-2">mdi-information</v-icon>
+        <span>{{ statusDescription }}</span>
+      </div>
+    </v-alert>
     <v-card-text>
       <v-row>
         <v-col
@@ -63,7 +76,13 @@
               </div>
             </v-card-text>
             <v-card-actions>
-              <v-btn size="small" variant="text" @click="editDevice(device)">
+              <v-btn 
+                size="small" 
+                variant="text" 
+                @click="editDevice(device)"
+                :disabled="!canEditDevices"
+                :title="!canEditDevices ? statusDescription : '编辑设备'"
+              >
                 编辑
               </v-btn>
               <v-spacer />
@@ -72,6 +91,8 @@
                 color="error" 
                 variant="text"
                 @click="deleteDevice(device.id)"
+                :disabled="!canEditDevices"
+                :title="!canEditDevices ? statusDescription : '删除设备'"
               >
                 删除
               </v-btn>
@@ -105,12 +126,21 @@
       <v-card-title>{{ editingDevice ? '编辑设备' : '添加设备' }}</v-card-title>
       <v-divider />
       <v-card-text class="pt-4">
+        <!-- 状态提示 -->
+        <v-alert v-if="!canEditDevices" type="warning" density="compact" class="mb-3">
+          <div class="d-flex align-center">
+            <v-icon class="mr-2">mdi-alert</v-icon>
+            <span>当前状态不允许编辑设备: {{ statusDescription }}</span>
+          </div>
+        </v-alert>
+        
         <v-text-field
           v-model="deviceForm.name"
           label="设备名称"
           density="compact"
           variant="outlined"
           class="mb-3"
+          :disabled="!canEditDevices"
         />
         <v-select
           v-model="deviceForm.type"
@@ -119,6 +149,7 @@
           density="compact"
           variant="outlined"
           class="mb-3"
+          :disabled="!canEditDevices || editingDevice"
         />
         <v-text-field
           v-model="deviceForm.address"
@@ -127,6 +158,7 @@
           variant="outlined"
           class="mb-3"
           placeholder="如: COM3 或 192.168.1.100:8080"
+          :disabled="!canEditDevices"
         />
         <v-text-field
           v-model.number="deviceForm.sampleRate"
@@ -135,6 +167,7 @@
           density="compact"
           variant="outlined"
           class="mb-3"
+          :disabled="!canEditDevices"
         />
         <v-text-field
           v-model.number="deviceForm.channels"
@@ -143,6 +176,9 @@
           density="compact"
           variant="outlined"
           class="mb-3"
+          :disabled="!canEditDevices || editingDevice"
+          :hint="editingDevice ? '设备创建后通道数量不可修改' : ''"
+          persistent-hint
         />
 
         <!-- 模拟设备配置 -->
@@ -177,7 +213,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { sessionStore, type Device, type SimulatedDeviceConfig } from '../services/sessionStore';
-import { fetchGraph } from '../services/graph';
+import { fetchGraph, getGraphRuntimeState } from '../services/graph';
 import type { GraphNode } from '../services/graph';
 import SimulatedDeviceConfigComponent from './SimulatedDeviceConfig.vue';
 import { deviceApi } from '../services/deviceApi';
@@ -209,6 +245,46 @@ const getBoundNode = (deviceId: string): GraphNode | undefined => {
     node.type === 'SOURCE' && (node.deviceId === deviceId || node.params?.deviceId === deviceId)
   );
 };
+
+// 运行时状态
+const isRunning = ref(false);
+
+// 轮询运行时状态
+let runtimePollingTimer: number | null = null;
+
+async function pollRuntimeState() {
+  try {
+    const res = await getGraphRuntimeState();
+    if (res.ok) {
+      isRunning.value = res.state.running;
+    }
+  } catch (e) {
+    console.error('Failed to poll runtime state:', e);
+  }
+}
+
+function startRuntimePolling() {
+  if (runtimePollingTimer) return;
+  pollRuntimeState();
+  runtimePollingTimer = window.setInterval(pollRuntimeState, 2000);
+}
+
+function stopRuntimePolling() {
+  if (runtimePollingTimer) {
+    clearInterval(runtimePollingTimer);
+    runtimePollingTimer = null;
+  }
+}
+
+// 计算属性：检查是否允许编辑设备
+const canEditDevices = computed(() => {
+  return sessionStore.canEditDevices(isRunning.value);
+});
+
+// 计算属性：当前状态描述
+const statusDescription = computed(() => {
+  return sessionStore.getStatusDescription(isRunning.value);
+});
 
 // 刷新设备列表
 async function refreshDevices() {
@@ -334,6 +410,12 @@ function editDevice(device: Device) {
 
 // 删除设备
 async function deleteDevice(deviceId: string) {
+  // 检查权限
+  if (!canEditDevices.value) {
+    alert(`当前状态不允许删除设备: ${statusDescription.value}`);
+    return;
+  }
+  
   if (!confirm('确定要删除此设备吗？')) return;
   
   try {
@@ -368,13 +450,19 @@ function closeDialog() {
 
 // 保存设备
 async function saveDevice() {
+  // 检查权限
+  if (!canEditDevices.value) {
+    alert(`当前状态不允许编辑设备: ${statusDescription.value}`);
+    return;
+  }
+  
   try {
     if (editingDevice.value) {
       // 编辑现有设备
       const updates = {
         name: deviceForm.value.name,
         sampling_rate: deviceForm.value.sampleRate,
-        channel_count: deviceForm.value.channels,
+        // 注意：channel_count 在编辑时不应该发送，后端会拒绝修改
         address: deviceForm.value.address,
         config: deviceForm.value.type === 'simulated' ? 
           deviceApi.convertToApiConfig(deviceForm.value.simulatedConfig) : undefined
@@ -437,6 +525,9 @@ onMounted(() => {
       graphNodes.value = state.graph.nodes;
     }
   });
+  
+  // 启动运行时状态轮询
+  startRuntimePolling();
 });
 
 // 清理
@@ -444,6 +535,7 @@ onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
   }
+  stopRuntimePolling();
 });
 </script>
 

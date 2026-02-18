@@ -1,0 +1,105 @@
+{
+  "devices": [
+    {
+      "id": "mock-1",
+      "name": "模拟设备 1",
+      "type": "simulated",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "channels": [
+          {
+            "index": 0,
+            "wave_type": "square",
+            "frequency": 10,
+            "amplitude": 100,
+            "phase": 0,
+            "sine_components": [
+              {
+                "frequency": 10,
+                "amplitude": 100,
+                "phase": 0
+              }
+            ],
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 1,
+            "wave_type": "sine",
+            "frequency": 15,
+            "amplitude": 80,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 2,
+            "wave_type": "square",
+            "frequency": 5,
+            "amplitude": 120,
+            "phase": 0,
+            "duty_cycle": 0.5,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 3,
+            "wave_type": "triangle",
+            "frequency": 8,
+            "amplitude": 90,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 4,
+            "wave_type": "sine",
+            "frequency": 20,
+            "amplitude": 70,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 5,
+            "wave_type": "sine",
+            "frequency": 25,
+            "amplitude": 110,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 6,
+            "wave_type": "sine",
+            "frequency": 30,
+            "amplitude": 85,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          },
+          {
+            "index": 7,
+            "wave_type": "sine",
+            "frequency": 35,
+            "amplitude": 95,
+            "phase": 0,
+            "noise_type": "white",
+            "noise_amplitude": 5,
+            "enabled": true
+          }
+        ]
+      },
+      "created_at": 1771443258.009588,
+      "updated_at": 1771446813.6006408
+    }
+  ]
+}

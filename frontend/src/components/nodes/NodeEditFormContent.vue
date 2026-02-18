@@ -108,7 +108,7 @@
             v-if="!isReadOnly"
             size="x-small"
             variant="text"
-            @click="addChannelName"
+            @click="handleAddChannelName"
           >
             添加
           </v-btn>
@@ -131,7 +131,7 @@
             size="x-small"
             variant="text"
             color="error"
-            @click="removeChannelName(index)"
+            @click="handleRemoveChannelName(index)"
           >
             <v-icon size="small">mdi-close</v-icon>
           </v-btn>
@@ -200,7 +200,7 @@
             v-if="!isReadOnly"
             size="x-small"
             variant="text"
-            @click="addSumInput"
+            @click="handleAddSumInput"
           >
             添加输入
           </v-btn>
@@ -237,7 +237,7 @@
             size="x-small"
             variant="text"
             color="error"
-            @click="removeSumInput(index)"
+            @click="handleRemoveSumInput(index)"
           >
             <v-icon size="small">mdi-close</v-icon>
           </v-btn>
@@ -254,7 +254,7 @@
             v-if="!isReadOnly"
             size="x-small"
             variant="text"
-            @click="addSplitOutput"
+            @click="handleAddSplitOutput"
           >
             添加输出
           </v-btn>
@@ -290,7 +290,7 @@
             size="x-small"
             variant="text"
             color="error"
-            @click="removeSplitOutput(index)"
+            @click="handleRemoveSplitOutput(index)"
           >
             <v-icon size="small">mdi-close</v-icon>
           </v-btn>
@@ -320,7 +320,7 @@
             v-if="!isReadOnly"
             size="x-small"
             variant="text"
-            @click="addMergeInput"
+            @click="handleAddMergeInput"
           >
             添加输入
           </v-btn>
@@ -357,7 +357,7 @@
             size="x-small"
             variant="text"
             color="error"
-            @click="removeMergeInput(index)"
+            @click="handleRemoveMergeInput(index)"
           >
             <v-icon size="small">mdi-close</v-icon>
           </v-btn>
@@ -785,11 +785,17 @@ const emit = defineEmits<{
 
 // 计算属性
 const availableDevices = computed(() => {
-  return sessionStore.getDevices();
+  return sessionStore.getDevices().map(device => ({
+    ...device,
+    displayName: device.name || device.id
+  }));
 });
 
 const availableOscilloscopes = computed(() => {
-  return sessionStore.getOscilloscopes();
+  return sessionStore.getOscilloscopes().map(osc => ({
+    ...osc,
+    displayName: osc.name || osc.id
+  }));
 });
 
 // 方法

@@ -113,11 +113,22 @@ export const deviceApi = {
         body: JSON.stringify(updates),
       });
       
+      const result: ApiResponse<Device> = await response.json();
+      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // 尝试获取更详细的错误信息
+        let errorMessage = result.message || `HTTP error! status: ${response.status}`;
+        
+        // 特殊处理权限错误
+        if (response.status === 403) {
+          errorMessage = '计算图正在运行中，无法修改设备';
+        } else if (response.status === 400) {
+          errorMessage = result.message || '请求参数错误';
+        }
+        
+        throw new Error(errorMessage);
       }
       
-      const result: ApiResponse<Device> = await response.json();
       if (result.code !== 0) {
         throw new Error(result.message);
       }
@@ -136,11 +147,22 @@ export const deviceApi = {
         method: 'DELETE',
       });
       
+      const result: ApiResponse<void> = await response.json();
+      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        // 尝试获取更详细的错误信息
+        let errorMessage = result.message || `HTTP error! status: ${response.status}`;
+        
+        // 特殊处理权限错误
+        if (response.status === 403) {
+          errorMessage = '计算图正在运行中，无法删除设备';
+        } else if (response.status === 400) {
+          errorMessage = result.message || '请求参数错误';
+        }
+        
+        throw new Error(errorMessage);
       }
       
-      const result: ApiResponse<void> = await response.json();
       if (result.code !== 0) {
         throw new Error(result.message);
       }

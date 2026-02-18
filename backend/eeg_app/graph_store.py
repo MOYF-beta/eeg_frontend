@@ -194,6 +194,10 @@ def get_graph() -> GraphPayload:
 
 def set_graph(payload: GraphPayload) -> None:
     """设置图数据并保存到文件"""
+    # 检查计算图是否正在运行
+    if _RUNTIME_STATE['running']:
+        raise RuntimeError('Cannot modify graph while it is running')
+    
     _GRAPH['nodes'] = payload.get('nodes', [])
     _GRAPH['edges'] = payload.get('edges', [])
     _GRAPH['frozen'] = payload.get('frozen', False)
@@ -202,6 +206,10 @@ def set_graph(payload: GraphPayload) -> None:
 
 def set_frozen(value: bool) -> None:
     """设置冻结状态并保存"""
+    # 检查计算图是否正在运行
+    if _RUNTIME_STATE['running']:
+        raise RuntimeError('Cannot freeze/unfreeze graph while it is running')
+    
     _GRAPH['frozen'] = value
     _save_to_file(_GRAPH)
 

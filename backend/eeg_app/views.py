@@ -1,4 +1,5 @@
 import json
+import time
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -7,6 +8,7 @@ from .graph_store import get_graph, run_graph, stop_graph, get_runtime_state, se
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
+from .device_store import get_all_devices, create_device, update_device, delete_device, get_device_config
 
 
 def health(request):
@@ -25,42 +27,11 @@ def devices(request, device_id=None):
     - DELETE /api/devices/{device_id}/ - 删除设备
     """
     
-    # 内存中存储设备（简化实现，实际项目应使用数据库）
-    if not hasattr(devices, '_storage'):
-        devices._storage = {
-            'mock-1': {
-                'id': 'mock-1',
-                'name': '模拟设备 1',
-                'alias': 'Test-1',
-                'address': 'SIM-001',
-                'type': 'simulated',
-                'status': 'ready',
-                'battery': 100,
-                'sampling_rate': 1000,
-                'channel_count': 8,
-                'channels': ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8'],
-                'config': {
-                    'channels': [
-                        {
-                            'index': 0,
-                            'wave_type': 'sine',
-                            'frequency': 10,
-                            'amplitude': 100,
-                            'alias': 'CH1',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        }
-                    ]
-                },
-                'created_at': '2026-02-19T10:00:00Z',
-                'updated_at': '2026-02-19T10:00:00Z'
-            }
-        }
-    
     if request.method == 'GET':
         if device_id:
             # 获取单个设备
-            device = devices._storage.get(device_id)
+            devices_list = get_all_devices()
+            device = next((d for d in devices_list if d['id'] == device_id), None)
             if not device:
                 return JsonResponse({
                     'code': 404,
@@ -74,10 +45,11 @@ def devices(request, device_id=None):
             })
         else:
             # 获取所有设备
+            devices_list = get_all_devices()
             return JsonResponse({
                 'code': 0,
                 'message': 'success',
-                'data': list(devices._storage.values())
+                'data': devices_list
             })
     
     elif request.method == 'POST':
@@ -85,35 +57,15 @@ def devices(request, device_id=None):
         try:
             data = json.loads(request.body)
             
-            # 生成设备ID
-            import time
-            device_id = f'dev-{int(time.time() * 1000)}'
-            
-            # 创建设备对象
-            new_device = {
-                'id': device_id,
-                'name': data.get('name', f'设备 {len(devices._storage) + 1}'),
-                'alias': data.get('alias', ''),
-                'address': data.get('address', 'SIM-001'),
-                'type': data.get('type', 'simulated'),
-                'status': 'ready',
-                'battery': 100,
-                'sampling_rate': data.get('sampling_rate', 250),
-                'channel_count': data.get('channel_count', 8),
-                'config': data.get('config', {}),
-                'created_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-                'updated_at': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-            }
-            
-            # 保存设备
-            devices._storage[device_id] = new_device
+            # 创建设备
+            device = create_device(data)
             
             return JsonResponse({
                 'code': 0,
                 'message': 'Device created successfully',
                 'data': {
-                    'id': device_id,
-                    'name': new_device['name'],
+                    'id': device['id'],
+                    'name': device['name'],
                     'status': 'ready'
                 }
             }, status=201)
@@ -137,25 +89,24 @@ def devices(request, device_id=None):
                 'message': 'Device ID is required'
             }, status=400)
         
-        device = devices._storage.get(device_id)
-        if not device:
-            return JsonResponse({
-                'code': 404,
-                'message': f'Device {device_id} not found'
-            }, status=404)
-        
         try:
             data = json.loads(request.body)
             
-            # 更新设备字段
-            updatable_fields = ['name', 'alias', 'address', 'sampling_rate', 'channel_count', 'config']
-            for field in updatable_fields:
-                if field in data:
-                    device[field] = data[field]
+            # 检查计算图是否正在运行
+            runtime_state = get_runtime_state()
+            if runtime_state.get('running'):
+                return JsonResponse({
+                    'code': 403,
+                    'message': 'Cannot modify devices while graph is running'
+                }, status=403)
             
-            # 更新更新时间
-            import time
-            device['updated_at'] = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+            # 更新设备
+            device = update_device(device_id, data)
+            if not device:
+                return JsonResponse({
+                    'code': 404,
+                    'message': f'Device {device_id} not found'
+                }, status=404)
             
             return JsonResponse({
                 'code': 0,
@@ -167,6 +118,12 @@ def devices(request, device_id=None):
             return JsonResponse({
                 'code': 400,
                 'message': 'Invalid JSON data'
+            }, status=400)
+        except ValueError as e:
+            # 通道数量修改错误
+            return JsonResponse({
+                'code': 400,
+                'message': str(e)
             }, status=400)
         except Exception as e:
             return JsonResponse({
@@ -181,20 +138,32 @@ def devices(request, device_id=None):
                 'code': 400,
                 'message': 'Device ID is required'
             }, status=400)
-        
-        if device_id not in devices._storage:
+        try:
+            # 检查计算图是否正在运行
+            runtime_state = get_runtime_state()
+            if runtime_state.get('running'):
+                return JsonResponse({
+                    'code': 403,
+                    'message': 'Cannot delete devices while graph is running'
+                }, status=403)
+            
+            # 删除设备
+            success = delete_device(device_id)
+            if not success:
+                return JsonResponse({
+                    'code': 404,
+                    'message': f'Device {device_id} not found'
+                }, status=404)
+            
             return JsonResponse({
-                'code': 404,
-                'message': f'Device {device_id} not found'
-            }, status=404)
-        
-        # 删除设备
-        del devices._storage[device_id]
-        
-        return JsonResponse({
-            'code': 0,
-            'message': 'Device deleted successfully'
-        })
+                'code': 0,
+                'message': 'Device deleted successfully'
+            })
+        except Exception as e:
+            return JsonResponse({
+                'code': 500,
+                'message': f'Failed to delete device: {str(e)}'
+            }, status=500)
     
     else:
         return JsonResponse({
@@ -227,12 +196,26 @@ def graph(request):
         return JsonResponse(get_graph())
 
     if request.method == 'POST':
-        payload = json.loads(request.body or '{}')
-        errors = validate_graph(payload)
-        if errors:
-            return JsonResponse({'ok': False, 'errors': errors}, status=400)
-        set_graph(payload)
-        return JsonResponse({'ok': True})
+        try:
+            payload = json.loads(request.body or '{}')
+            errors = validate_graph(payload)
+            if errors:
+                return JsonResponse({'ok': False, 'errors': errors}, status=400)
+            
+            # 检查计算图是否正在运行
+            runtime_state = get_runtime_state()
+            if runtime_state.get('running'):
+                return JsonResponse({
+                    'ok': False, 
+                    'errors': ['Cannot save graph while it is running']
+                }, status=403)
+            
+            set_graph(payload)
+            return JsonResponse({'ok': True})
+        except json.JSONDecodeError:
+            return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
+        except RuntimeError as e:
+            return JsonResponse({'ok': False, 'errors': [str(e)]}, status=403)
 
     return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 

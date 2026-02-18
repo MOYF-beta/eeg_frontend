@@ -48,6 +48,7 @@ class EegWebSocket {
   private reconnectAttempts = 0;
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
+  private isManualDisconnect = false; // 标记是否是主动断开
   private listeners: {
     onData: Set<(packet: EegDataPacket) => void>;
     onStatusChange: Set<(status: WsStatus) => void>;
@@ -77,6 +78,7 @@ class EegWebSocket {
     }
 
     this.setStatus('connecting');
+    this.isManualDisconnect = false; // 重置主动断开标志
     console.log('Connecting to WebSocket:', this.config.url);
 
     try {
@@ -106,7 +108,14 @@ class EegWebSocket {
         console.log('WebSocket closed');
         this.setStatus('disconnected');
         this.stopHeartbeat();
-        this.attemptReconnect();
+        
+        // 只有非主动断开时才尝试重连
+        if (!this.isManualDisconnect) {
+          this.attemptReconnect();
+        } else {
+          console.log('Manual disconnect, skipping reconnect');
+          this.isManualDisconnect = false; // 重置标志
+        }
       };
     } catch (error) {
       console.error('Failed to create WebSocket:', error);
@@ -117,6 +126,7 @@ class EegWebSocket {
 
   disconnect() {
     console.log('Disconnecting WebSocket...');
+    this.isManualDisconnect = true; // 标记为主动断开
     this.stopReconnect();
     this.stopHeartbeat();
 

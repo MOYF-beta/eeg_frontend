@@ -7,6 +7,10 @@
         "sampleRate": 1000,
         "channels": 8,
         "deviceId": "mock-1",
+        "sourceMode": "live",
+        "filePath": "",
+        "loop": false,
+        "channelCount": 8,
         "channelNames": [
           "CH1",
           "CH2",
@@ -16,26 +20,25 @@
           "CH6",
           "CH7",
           "CH8"
-        ],
-        "sourceMode": "live",
-        "filePath": "",
-        "loop": false
+        ]
       },
-      "id": "node-1771072109663-775",
-      "x": 20,
-      "y": 110
+      "id": "node-1771445485853-981",
+      "x": 50,
+      "y": 100
     },
     {
       "type": "FILTER",
       "name": "低通滤波器",
       "params": {
-        "type": "低通",
-        "cutoff": 20,
-        "order": 4
+        "type": "lowpass",
+        "cutoff": 50,
+        "order": 4,
+        "filterType": "lowpass",
+        "cutoffFreq": 123
       },
-      "id": "node-1771072109667-217",
-      "x": 540,
-      "y": 270
+      "id": "node-1771445485867-620",
+      "x": 280,
+      "y": 30
     },
     {
       "type": "SPLIT",
@@ -45,16 +48,12 @@
           {
             "label": "输出1",
             "channelIndices": "0,1,2,3"
-          },
-          {
-            "label": "输出2",
-            "channelIndices": "4,5,6,7"
           }
         ]
       },
-      "id": "node-1771072109669-612",
-      "x": 330,
-      "y": 110
+      "id": "node-1771445485869-406",
+      "x": 550,
+      "y": 10
     },
     {
       "type": "OSC",
@@ -63,6 +62,9 @@
         "timeWindow": 5,
         "yScale": 1,
         "mode": "scroll",
+        "saveEnabled": false,
+        "filename": "",
+        "format": "CSV",
         "selectedChannels": [
           0,
           1,
@@ -74,74 +76,33 @@
           "CH2",
           "CH3",
           "CH4"
-        ],
-        "saveEnabled": false,
-        "filename": "",
-        "format": "CSV"
+        ]
       },
-      "id": "node-1771072109669-111",
-      "x": 850,
-      "y": 80
-    },
-    {
-      "type": "OSC",
-      "name": "示波器",
-      "params": {
-        "timeWindow": 5,
-        "yScale": 1,
-        "mode": "scroll",
-        "selectedChannels": [
-          0,
-          1,
-          2,
-          3
-        ],
-        "availableChannels": [
-          "CH1",
-          "CH2",
-          "CH3",
-          "CH4",
-          "CH5",
-          "CH6",
-          "CH7",
-          "CH8"
-        ],
-        "saveEnabled": false,
-        "filename": "",
-        "format": "CSV"
-      },
-      "id": "node-1771409666522-919",
-      "x": 860,
-      "y": 270
+      "id": "node-1771445485871-602",
+      "x": 800,
+      "y": 100
     }
   ],
   "edges": [
     {
-      "id": "0985795e-50d5-49cc-a57b-45fc824c5b98",
-      "source": "node-1771072109663-775",
-      "target": "node-1771072109669-612",
+      "id": "9fc92117-75c2-4250-af88-a7e21230851e",
+      "source": "node-1771445485853-981",
+      "target": "node-1771445485867-620",
       "sourcePort": "out",
       "targetPort": "in"
     },
     {
-      "id": "7440e803-d1dc-4c6b-b21e-65c34977c956",
-      "source": "node-1771072109669-612",
-      "target": "node-1771072109669-111",
+      "id": "6848536e-a51e-4c29-a061-e46ad2df15ee",
+      "source": "node-1771445485867-620",
+      "target": "node-1771445485869-406",
+      "sourcePort": "out",
+      "targetPort": "in"
+    },
+    {
+      "id": "9db6aae8-220b-4ce3-adad-aa75d213fa96",
+      "source": "node-1771445485869-406",
+      "target": "node-1771445485871-602",
       "sourcePort": "out-1",
-      "targetPort": "in"
-    },
-    {
-      "id": "0e602758-8503-4951-9141-32b321d2b2b0",
-      "source": "node-1771072109669-612",
-      "target": "node-1771072109667-217",
-      "sourcePort": "out-2",
-      "targetPort": "in"
-    },
-    {
-      "id": "82e2f0a9-84f3-4a5a-a647-5c6bcea10e1e",
-      "source": "node-1771072109667-217",
-      "target": "node-1771409666522-919",
-      "sourcePort": "out",
       "targetPort": "in"
     }
   ],
