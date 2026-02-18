@@ -1,7 +1,8 @@
 <template>
-  <v-card class="mb-4" variant="tonal">
-    <v-card-title class="d-flex align-center justify-space-between">
-      计算图编辑器
+  <div class="fullscreen-graph-editor">
+    <v-toolbar density="compact" color="surface" class="graph-toolbar">
+      <v-toolbar-title>计算图编辑器</v-toolbar-title>
+      <v-spacer />
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
         <v-btn
@@ -51,9 +52,9 @@
         <v-btn size="small" color="secondary" @click="loadMockData">加载Mock</v-btn>
         <v-btn size="small" color="info" @click="clear">清空</v-btn>
       </div>
-    </v-card-title>
-    <v-divider />
-    <v-card-text>
+    </v-toolbar>
+
+    <div class="graph-content">
       <v-alert
         v-if="runtimeWarning"
         type="warning"
@@ -134,16 +135,52 @@
             <div class="hint-sub">双击节点可编辑参数<br>连接节点创建数据处理流程</div>
           </div>
         </div>
+
+        <!-- 右侧编辑边栏 -->
+        <div class="sidebar" :class="{ 'sidebar-collapsed': !sidebarExpanded }">
+          <!-- 边栏头部：折叠按钮和标题 -->
+          <div class="sidebar-header">
+            <v-btn
+              icon
+              size="small"
+              variant="text"
+              @click="sidebarExpanded = !sidebarExpanded"
+              class="sidebar-toggle"
+            >
+              <v-icon v-if="sidebarExpanded">mdi-chevron-right</v-icon>
+              <v-icon v-else>mdi-chevron-left</v-icon>
+            </v-btn>
+            <div v-if="sidebarExpanded" class="sidebar-title">
+              <v-icon :color="sidebarIconColor" class="mr-2">{{ sidebarIcon }}</v-icon>
+              {{ sidebarTitle }}
+            </div>
+          </div>
+
+          <!-- 边栏内容 -->
+          <div v-if="sidebarExpanded" class="sidebar-content">
+            <!-- 节点编辑内容 -->
+            <NodeEditDialog
+              v-model="nodeEditDialogOpen"
+              :node-data="editingNode"
+              :all-nodes="allNodes"
+              :all-edges="allEdges"
+              mode="sidebar"
+              @save="handleNodeSave"
+              @bindOscilloscope="handleBindOscilloscope"
+              class="sidebar-node-edit"
+            />
+          </div>
+        </div>
       </div>
-    </v-card-text>
-  </v-card>
+    </div>
+  </div>
 
   <!-- 节点编辑对话框 -->
   <v-dialog v-model="editDialog.open" max-width="500">
     <v-card>
       <v-card-title class="d-flex align-center">
         <v-icon class="mr-2" :color="editDialog.config?.color">mdi-cog</v-icon>
-        编辑节点: {{ editDialog.nodeName }}
+        {{ frozen ? '查看节点' : '编辑节点' }}: {{ editDialog.nodeName }}
       </v-card-title>
       <v-divider />
       <v-card-text class="pt-4">
@@ -154,6 +191,8 @@
           variant="outlined"
           density="compact"
           class="mb-4"
+          :readonly="frozen"
+          :disabled="frozen"
         />
 
         <!-- 动态参数表单 -->
@@ -168,6 +207,8 @@
             variant="outlined"
             density="compact"
             persistent-hint
+            :readonly="frozen"
+            :disabled="frozen"
           />
 
           <!-- 文本输入 -->
@@ -179,6 +220,8 @@
             variant="outlined"
             density="compact"
             persistent-hint
+            :readonly="frozen"
+            :disabled="frozen"
           />
 
           <!-- 选择器 -->
@@ -191,6 +234,8 @@
             variant="outlined"
             density="compact"
             persistent-hint
+            :readonly="frozen"
+            :disabled="frozen"
           />
 
           <!-- 滑块 -->
@@ -206,6 +251,8 @@
               :step="field.step || 1"
               density="compact"
               hide-details
+              :readonly="frozen"
+              :disabled="frozen"
             />
             <div class="text-caption text-grey mt-1">{{ field.hint }}</div>
           </div>
@@ -218,27 +265,19 @@
             :hint="field.hint"
             density="compact"
             hide-details
+            :readonly="frozen"
+            :disabled="frozen"
           />
         </div>
       </v-card-text>
       <v-divider />
       <v-card-actions>
         <v-spacer />
-        <v-btn variant="text" @click="editDialog.open = false">取消</v-btn>
-        <v-btn color="primary" @click="saveNodeEdit">保存</v-btn>
+        <v-btn variant="text" @click="editDialog.open = false">{{ frozen ? '关闭' : '取消' }}</v-btn>
+        <v-btn v-if="!frozen" color="primary" @click="saveNodeEdit">保存</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
-
-  <!-- 使用新的 NodeEditDialog 组件 -->
-  <NodeEditDialog
-    v-model="nodeEditDialogOpen"
-    :node-data="editingNode"
-    :all-nodes="allNodes"
-    :all-edges="allEdges"
-    @save="handleNodeSave"
-    @bind-oscilloscope="handleBindOscilloscope"
-  />
 
   <!-- 隐藏的文件输入用于加载计算图 -->
   <input
@@ -251,7 +290,7 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref, nextTick, watch } from 'vue';
+import { onMounted, onUnmounted, ref, nextTick, watch, computed } from 'vue';
 import { Graph, Snapline } from '@antv/x6';
 import {
   fetchGraph,
@@ -280,7 +319,33 @@ const offlineProgress = ref(0);
 const processingDelayMs = ref(0);
 const nonRealtime = ref(false);
 const runtimeWarning = ref<string | null>(null);
+
+// 右侧边栏状态
+const sidebarExpanded = ref(true);
+const selectedNodeId = ref<string | null>(null);
+
+// 计算属性：边栏标题、图标和颜色
+const sidebarTitle = computed(() => {
+  if (!editingNode.value) return '节点编辑';
+  const typeInfo = nodeTypes[editingNode.value.type];
+  return `${typeInfo?.name || '节点'} - ${editingNode.value.name || '未命名'}`;
+});
+
+const sidebarIcon = computed(() => {
+  if (!editingNode.value) return 'mdi-cog';
+  const typeInfo = nodeTypes[editingNode.value.type];
+  return typeInfo?.icon || 'mdi-cog';
+});
+
+const sidebarIconColor = computed(() => {
+  if (!editingNode.value) return 'primary';
+  const typeInfo = nodeTypes[editingNode.value.type];
+  return typeInfo?.color || 'primary';
+});
+
 let runtimeStateTimer: number | null = null;
+let edgeAnimationTimer: number | null = null;
+const edgeAnimationStates = ref<Map<string, { active: boolean; progress: number }>>(new Map());
 
 // 运行时状态轮询
 async function pollRuntimeState() {
@@ -312,6 +377,164 @@ function stopRuntimeStatePolling() {
   }
 }
 
+// 边动画管理
+function startEdgeAnimations() {
+  if (edgeAnimationTimer) return;
+  
+  edgeAnimationTimer = window.setInterval(() => {
+    const graph = graphRef.value;
+    if (!graph || !isRunning.value) return;
+    
+    // 更新所有边的动画状态
+    graph.getEdges().forEach((edge) => {
+      const edgeId = edge.id;
+      const currentState = edgeAnimationStates.value.get(edgeId) || { active: false, progress: 0 };
+      
+      // 根据运行状态决定动画类型
+      const shouldBeActive = isRunning.value;
+      const isLiveMode = runtimeMode.value === 'live';
+      
+      if (shouldBeActive !== currentState.active) {
+        currentState.active = shouldBeActive;
+        currentState.progress = 0;
+        edgeAnimationStates.value.set(edgeId, currentState);
+      }
+      
+      if (currentState.active) {
+        // 更新动画进度
+        currentState.progress = (currentState.progress + (isLiveMode ? 0.05 : 0.02)) % 1;
+        edgeAnimationStates.value.set(edgeId, currentState);
+        
+        // 应用动画效果
+        if (isLiveMode) {
+          applyLiveEdgeAnimation(edge, currentState.progress);
+        } else {
+          applyOfflineEdgeAnimation(edge, currentState.progress);
+        }
+      } else {
+        // 清除动画效果
+        clearEdgeAnimation(edge);
+      }
+    });
+  }, 50); // 20fps 动画
+}
+
+function stopEdgeAnimations() {
+  if (edgeAnimationTimer) {
+    clearInterval(edgeAnimationTimer);
+    edgeAnimationTimer = null;
+  }
+  
+  // 清除所有边的动画效果
+  const graph = graphRef.value;
+  if (graph) {
+    graph.getEdges().forEach((edge) => {
+      clearEdgeAnimation(edge);
+    });
+  }
+  
+  edgeAnimationStates.value.clear();
+}
+
+function applyLiveEdgeAnimation(edge: import('@antv/x6').Edge, progress: number) {
+  // Live模式：快速流动动画效果
+  const strokeDasharray = '10, 5';
+  const strokeDashoffset = -progress * 15; // 流动效果
+  
+  edge.attr({
+    line: {
+      strokeDasharray,
+      strokeDashoffset,
+      stroke: '#5F95FF',
+      strokeWidth: 2,
+      style: {
+        animation: 'none',
+      },
+    },
+    sourceMarker: {
+      fill: '#5F95FF',
+      stroke: '#5F95FF',
+    },
+    targetMarker: {
+      fill: '#5F95FF',
+      stroke: '#5F95FF',
+    },
+  });
+  
+  // 添加发光效果
+  edge.addTools({
+    name: 'segments',
+    args: {
+      snapRadius: 20,
+      attrs: {
+        fill: '#5F95FF',
+        stroke: '#5F95FF',
+        'stroke-width': 4,
+        opacity: 0.3,
+      },
+    },
+  });
+}
+
+function applyOfflineEdgeAnimation(edge: import('@antv/x6').Edge, progress: number) {
+  // 离线模式：缓慢脉冲动画效果
+  const pulseIntensity = 0.5 + 0.5 * Math.sin(progress * Math.PI * 2);
+  const strokeWidth = 1 + pulseIntensity; // 1-2px 脉动
+  
+  edge.attr({
+    line: {
+      stroke: '#9C27B0', // 紫色表示离线处理
+      strokeWidth,
+      strokeDasharray: '5, 3',
+      strokeDashoffset: -progress * 8,
+    },
+    sourceMarker: {
+      fill: '#9C27B0',
+      stroke: '#9C27B0',
+    },
+    targetMarker: {
+      fill: '#9C27B0',
+      stroke: '#9C27B0',
+    },
+  });
+  
+  // 添加脉冲效果
+  edge.addTools({
+    name: 'segments',
+    args: {
+      snapRadius: 20,
+      attrs: {
+        fill: '#9C27B0',
+        stroke: '#9C27B0',
+        'stroke-width': 2 + pulseIntensity * 2,
+        opacity: 0.2 + pulseIntensity * 0.2,
+      },
+    },
+  });
+}
+
+function clearEdgeAnimation(edge: import('@antv/x6').Edge) {
+  edge.attr({
+    line: {
+      strokeDasharray: '',
+      strokeDashoffset: 0,
+      stroke: '#5F95FF',
+      strokeWidth: 2,
+    },
+    sourceMarker: {
+      fill: '#5F95FF',
+      stroke: '#5F95FF',
+    },
+    targetMarker: {
+      fill: '#5F95FF',
+      stroke: '#5F95FF',
+    },
+  });
+  
+  // 移除工具
+  edge.removeTools();
+}
+
 async function stopRun() {
   try {
     await stopGraph();
@@ -322,6 +545,10 @@ async function stopRun() {
     processingDelayMs.value = 0;
     nonRealtime.value = false;
     runtimeWarning.value = null;
+    
+    // 停止边动画
+    stopEdgeAnimations();
+    
     console.log('[GraphEditor] Graph stopped');
   } catch (err) {
     console.error('[GraphEditor] Failed to stop graph:', err);
@@ -477,6 +704,12 @@ const outputNodes = [
   { type: 'SPECTRUM' as GraphNodeType, name: '频谱', icon: 'FFT', color: '#3F51B5', bg: '#E8EAF6' },
 ];
 
+// 选择节点并在右侧边栏显示
+function selectNode(nodeId: string) {
+  selectedNodeId.value = nodeId;
+  openNodeEditDialog(nodeId);
+}
+
 // 打开节点编辑对话框
 function openNodeEditDialog(nodeId: string) {
   const graph = graphRef.value;
@@ -502,13 +735,22 @@ function openNodeEditDialog(nodeId: string) {
     targetPort: e.getTargetPortId() || undefined,
   }));
 
-  // 使用新的对话框
+  // 更新编辑节点数据
   editingNode.value = { ...data, id: nodeId, x, y };
-  nodeEditDialogOpen.value = true;
+  // 传递冻结状态给对话框
+  editingNode.value.frozen = frozen.value;
+  // 在右侧边栏中显示节点编辑内容
+  // nodeEditDialogOpen.value = true; // 不再需要，因为内容直接显示在边栏中
 }
 
 // 处理节点保存
 function handleNodeSave({ name, params, deviceId }: { name: string; params: Record<string, unknown>; deviceId?: string | null }) {
+  // 冻结状态下禁止保存
+  if (frozen.value) {
+    console.log('[GraphEditor] 冻结状态下禁止保存节点更改');
+    return;
+  }
+  
   const graph = graphRef.value;
   if (!graph || !editingNode.value) return;
 
@@ -537,6 +779,12 @@ function handleNodeSave({ name, params, deviceId }: { name: string; params: Reco
 
 // 处理示波器绑定
 function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: string | null }) {
+  // 冻结状态下禁止绑定/解绑
+  if (frozen.value) {
+    console.log('[GraphEditor] 冻结状态下禁止绑定/解绑示波器');
+    return;
+  }
+  
   if (oscId) {
     sessionStore.bindOutputNode(nodeId, oscId);
   } else {
@@ -546,6 +794,12 @@ function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: stri
 
 // 保存节点编辑（旧版，保留兼容性）
 function saveNodeEdit() {
+  // 冻结状态下禁止编辑
+  if (frozen.value) {
+    console.log('[GraphEditor] 冻结状态下禁止编辑节点');
+    return;
+  }
+  
   const graph = graphRef.value;
   if (!graph || !editDialog.value.nodeId) return;
 
@@ -826,8 +1080,13 @@ function formatEdgeChannelLabel(channelNames: string[], sampleRate?: number | nu
     ? `\n${Math.round(sampleRate || 0)} sps`
     : '';
   if (channelNames.length === 0) return '无通道';
-  if (channelNames.length <= 4) return `${channelNames.join(', ')}${rateText}`;
-  return `${channelNames.slice(0, 4).join(', ')} … (${channelNames.length})${rateText}`;
+  return `${channelNames.length}ch${rateText}`;
+}
+
+function getEdgeTooltipText(channelNames: string[]): string {
+  if (channelNames.length === 0) return '无通道';
+  if (channelNames.length <= 8) return channelNames.join('\n');
+  return `${channelNames.slice(0, 8).join('\n')}\n... (共${channelNames.length}个通道)`;
 }
 
 function parsePortIndex(portId: string | undefined, fallback = 0) {
@@ -972,7 +1231,7 @@ function inferNodeOutputSampleRate(nodeId: string, sourcePort?: string, visited 
   if (data.type === 'CUSTOM_PYFUNC') {
     const inRate = upstreamRate || 1000;
     const hopMode = String(params.hopMode || 'points').toLowerCase();
-    if (hopMode === 'targetrate') {
+    if (hopMode === 'targetRate') {
       return Math.max(1, Number(params.outputSampleRate || inRate));
     }
     if (hopMode === 'milliseconds') {
@@ -1030,6 +1289,8 @@ function applyEdgeLabel(edge: import('@antv/x6').Edge) {
   const sourcePort = edge.getSourcePortId() || undefined;
   const sampleRate = sourceNodeId ? inferNodeOutputSampleRate(sourceNodeId, sourcePort) : null;
   const label = formatEdgeChannelLabel(channelNames, sampleRate);
+  const tooltipText = getEdgeTooltipText(channelNames);
+  
   edge.setLabels([
     {
       position: {
@@ -1046,6 +1307,7 @@ function applyEdgeLabel(edge: import('@antv/x6').Edge) {
           fontSize: 11,
           textAnchor: 'middle',
           textVerticalAnchor: 'middle',
+          cursor: 'help',
         },
         rect: {
           fill: '#ffffff',
@@ -1057,10 +1319,15 @@ function applyEdgeLabel(edge: import('@antv/x6').Edge) {
           refHeight: '140%',
           refX: '-10%',
           refY: '-20%',
+          cursor: 'help',
         },
       },
     },
   ]);
+  
+  // 添加tooltip
+  edge.setAttrByPath('label/title', tooltipText);
+  edge.setAttrByPath('labelContainer/title', tooltipText);
 }
 
 function updateAllEdgeLabels() {
@@ -1496,6 +1763,9 @@ async function run(mode: 'live' | 'offline' = 'live') {
       runtimeMode.value = mode;
       offlineProgress.value = 0;
       startRuntimeStatePolling();
+      
+      // 启动边动画（live和offline模式都有动画，但效果不同）
+      startEdgeAnimations();
     }
   } catch (err) {
     console.error('[GraphEditor] Failed to run graph:', err);
@@ -1570,6 +1840,7 @@ function clear() {
   graphRuntime.stop();
   stopMockDataStream();
   stopRuntimeStatePolling();
+  stopEdgeAnimations();
   isRunning.value = false;
   offlineProgress.value = 0;
   processingDelayMs.value = 0;
@@ -1639,6 +1910,15 @@ onMounted(async () => {
       allowLoop: false,
       allowEdge: false,
       highlight: true,
+      router: {
+        name: 'metro',
+        args: {
+          startDirections: ['top', 'right', 'bottom', 'left'],
+          endDirections: ['top', 'right', 'bottom', 'left'],
+          padding: 10,
+          step: 10,
+        },
+      },
       createEdge() {
         return graph.createEdge({
           attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
@@ -1717,6 +1997,25 @@ onMounted(async () => {
     edge.removeTools();
   });
 
+  // 节点悬停显示删除按钮
+  graph.on('node:mouseenter', ({ node }) => {
+    node.addTools({
+      name: 'button-remove',
+      args: {
+        x: '100%',
+        y: 0,
+        offset: { x: -10, y: 10 },
+        onClick({ cell }: { cell: any }) {
+          graph.removeCell(cell);
+        }
+      }
+    });
+  });
+
+  graph.on('node:mouseleave', ({ node }) => {
+    node.removeTools();
+  });
+
   // 连接成功高亮
   graph.on('edge:connected', ({ edge, currentCell, currentPort }) => {
     if (currentCell && currentPort) {
@@ -1740,9 +2039,16 @@ onMounted(async () => {
     if (edge) applyEdgeLabel(edge);
   });
 
-  // 节点双击编辑
+  // 节点双击编辑（冻结状态下可以查看但不能更改）
+  // 节点单击：选择节点并在右侧边栏显示
+  graph.on('node:click', ({ node }) => {
+    selectNode(node.id);
+  });
+
+  // 节点双击：选择节点并自动展开右侧边栏
   graph.on('node:dblclick', ({ node }) => {
-    openNodeEditDialog(node.id);
+    selectNode(node.id);
+    sidebarExpanded.value = true;
   });
 
   // 订阅 sessionStore 变化，更新节点绑定状态显示
@@ -1770,6 +2076,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopMockDataStream();
   stopRuntimeStatePolling();
+  stopEdgeAnimations();
   graphRuntime.dispose();
   graphRef.value?.dispose();
   // 取消订阅
@@ -1778,20 +2085,47 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.fullscreen-graph-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background: #fafafa;
+  min-height: 0; /* 确保flex容器可以收缩 */
+}
+
+.graph-toolbar {
+  flex-shrink: 0;
+  border-bottom: 1px solid #e0e0e0;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.graph-content {
+  flex: 1;
+  padding: 16px;
+  overflow: auto;
+  min-height: 0; /* 确保flex容器可以收缩 */
+}
+
 .graph-wrapper {
   display: flex;
-  height: 600px;
+  flex: 1;
+  min-height: 0; /* 确保flex容器可以收缩 */
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   overflow: hidden;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
 
 .palette {
   width: 220px;
-  height: 100%;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid #e0e0e0;
   background: #fff;
-  overflow-y: auto;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .palette-title {
@@ -1851,7 +2185,9 @@ onUnmounted(() => {
 
 .graph-container {
   flex: 1;
-  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   background: #fafafa;
   position: relative;
 }
@@ -1875,5 +2211,142 @@ onUnmounted(() => {
 .hint-sub {
   font-size: 13px;
   margin-top: 4px;
+}
+
+/* 右侧边栏样式 */
+.sidebar {
+  width: 400px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid #e0e0e0;
+  background: #fff;
+  transition: width 0.3s ease;
+  overflow: hidden;
+  min-height: 0; /* 确保flex容器可以收缩 */
+}
+
+.sidebar-collapsed {
+  width: 40px;
+}
+
+.sidebar-header {
+  display: flex;
+  align-items: center;
+  padding: 12px;
+  border-bottom: 1px solid #e0e0e0;
+  background: #fafafa;
+  min-height: 56px;
+}
+
+.sidebar-toggle {
+  margin-right: 8px;
+}
+
+.sidebar-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: #333;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.sidebar-node-edit {
+  height: 100%;
+}
+
+/* NodeEditDialog 边栏模式样式 */
+.node-edit-sidebar {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.node-edit-sidebar .sidebar-header {
+  padding: 16px;
+  background: #fff;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.node-edit-sidebar .sidebar-title {
+  font-size: 16px;
+  font-weight: 600;
+}
+
+.node-edit-sidebar .sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.node-edit-sidebar .sidebar-actions {
+  padding: 16px;
+  background: #fafafa;
+  border-top: 1px solid #e0e0e0;
+}
+
+.node-edit-content {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 确保表单内容可滚动 */
+.node-edit-content .v-card-text {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px !important;
+}
+
+/* 调整画布容器宽度 */
+.graph-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0; /* 确保flex容器可以收缩 */
+  background: #fafafa;
+  position: relative;
+  transition: width 0.3s ease;
+}
+
+/* 确保X6画布充分利用空间 */
+.x6-graph {
+  flex: 1;
+  min-height: 0;
+}
+
+.x6-graph-scroller {
+  height: 100% !important;
+}
+
+.x6-graph-background {
+  height: 100% !important;
+}
+
+/* 响应式调整 */
+@media (max-width: 1200px) {
+  .sidebar {
+    width: 350px;
+  }
+  
+  .sidebar-collapsed {
+    width: 40px;
+  }
+}
+
+@media (max-width: 960px) {
+  .sidebar {
+    width: 300px;
+  }
+  
+  .palette {
+    width: 180px;
+  }
 }
 </style>

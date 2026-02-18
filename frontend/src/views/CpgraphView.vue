@@ -1,10 +1,10 @@
 <template>
-  <v-container class="py-6">
-    <h1 class="text-h4 mb-6">计算图</h1>
+  <ViewContainer>
     <GraphEditor />
-  </v-container>
+  </ViewContainer>
 </template>
 
 <script setup lang="ts">
+import ViewContainer from '../components/ViewContainer.vue';
 import GraphEditor from '../components/GraphEditor.vue';
 </script>

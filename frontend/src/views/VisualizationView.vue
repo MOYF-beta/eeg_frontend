@@ -1,5 +1,6 @@
 <template>
-  <v-container fluid class="py-4">
+  <ViewContainer>
+    <v-container fluid class="py-4">
     <div class="d-flex align-center justify-space-between mb-4">
       <h1 class="text-h5">波形可视化</h1>
       
@@ -67,9 +68,11 @@
       </div>
     </v-card>
   </v-container>
+  </ViewContainer>
 </template>
 
 <script setup lang="ts">
+import ViewContainer from '../components/ViewContainer.vue';
 import { ref, computed, onMounted } from 'vue';
 import Oscilloscope from '../components/Oscilloscope.vue';
 import FrequencyView from '../components/FrequencyView.vue';

@@ -1,9 +1,10 @@
 <template>
-  <v-dialog v-model="show" max-width="600" persistent>
+  <!-- 对话框模式 -->
+  <v-dialog v-if="!isSidebarMode" v-model="show" max-width="600" persistent>
     <v-card>
       <v-card-title class="d-flex align-center">
         <v-icon :color="iconColor" class="mr-2">{{ icon }}</v-icon>
-        编辑节点 - {{ nodeTypeName }}
+        {{ isReadOnly ? '查看节点' : '编辑节点' }} - {{ nodeTypeName }}
         <v-spacer />
         <v-btn icon variant="text" size="small" @click="close">
           <v-icon>mdi-close</v-icon>
@@ -13,6 +14,80 @@
       <v-divider />
       
       <v-card-text class="pt-4">
+        <!-- 节点编辑内容 -->
+        <div class="node-edit-content">
+          <!-- 通用字段：名称 -->
+          <v-text-field
+            v-model="form.name"
+            label="节点名称"
+            density="compact"
+            variant="outlined"
+            class="mb-4"
+            :readonly="isReadOnly"
+            :disabled="isReadOnly"
+          />
+          
+          <!-- 动态表单内容 -->
+          <NodeEditFormContent
+            :node-type="nodeType"
+            :form="form"
+            :is-read-only="isReadOnly"
+            :selected-device-id="selectedDeviceId"
+            :bound-oscilloscope-id="boundOscilloscopeId"
+            :channel-names="channelNames"
+            :sum-inputs="sumInputs"
+            :split-outputs="splitOutputs"
+            :merge-inputs="mergeInputs"
+            :input-names-text="inputNamesText"
+            :output-names-text="outputNamesText"
+            :kernel-text="kernelText"
+            :params-json="paramsJson"
+            :json-error="jsonError"
+            @update:selected-device-id="selectedDeviceId = $event"
+            @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
+            @update:channel-names="channelNames = $event"
+            @update:sum-inputs="sumInputs = $event"
+            @update:split-outputs="splitOutputs = $event"
+            @update:merge-inputs="mergeInputs = $event"
+            @update:input-names-text="inputNamesText = $event"
+            @update:output-names-text="outputNamesText = $event"
+            @update:kernel-text="kernelText = $event"
+            @update:params-json="paramsJson = $event"
+            @add-channel-name="addChannelName"
+            @remove-channel-name="removeChannelName"
+            @add-sum-input="addSumInput"
+            @remove-sum-input="removeSumInput"
+            @add-split-output="addSplitOutput"
+            @remove-split-output="removeSplitOutput"
+            @add-merge-input="addMergeInput"
+            @remove-merge-input="removeMergeInput"
+            @import-python-file="importPythonFile"
+          />
+        </div>
+      </v-card-text>
+      
+      <v-divider />
+      
+      <v-card-actions>
+        <v-btn variant="text" @click="close">{{ isReadOnly ? '关闭' : '取消' }}</v-btn>
+        <v-spacer />
+        <v-btn v-if="!isReadOnly" color="primary" @click="save">保存</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+  
+  <!-- 边栏模式 -->
+  <div v-else class="node-edit-sidebar">
+    <div class="sidebar-header">
+      <v-icon :color="iconColor" class="mr-2">{{ icon }}</v-icon>
+      <span class="sidebar-title">{{ isReadOnly ? '查看节点' : '编辑节点' }} - {{ nodeTypeName }}</span>
+    </div>
+    
+    <v-divider />
+    
+    <div class="sidebar-content">
+      <!-- 节点编辑内容 -->
+      <div class="node-edit-content">
         <!-- 通用字段：名称 -->
         <v-text-field
           v-model="form.name"
@@ -20,692 +95,55 @@
           density="compact"
           variant="outlined"
           class="mb-4"
+          :readonly="isReadOnly"
+          :disabled="isReadOnly"
         />
         
-        <!-- 数据源专用表单 -->
-        <template v-if="nodeType === 'SOURCE'">
-          <v-select
-            v-model="form.params.sourceMode"
-            :items="[{ title: '实时', value: 'live' }, { title: '回放', value: 'replay' }]"
-            item-title="title"
-            item-value="value"
-            label="输入模式"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-
-          <!-- 设备选择器 -->
-          <v-select
-            v-if="form.params.sourceMode !== 'replay'"
-            v-model="selectedDeviceId"
-            :items="availableDevices"
-            item-title="displayName"
-            item-value="id"
-            label="选择设备"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            clearable
-            :hint="selectedDeviceId ? `已绑定设备: ${selectedDeviceId}` : '未绑定设备'"
-            persistent-hint
-          >
-            <template #item="{ props, item }">
-              <v-list-item v-bind="props">
-                <template #append>
-                  <v-chip
-                    v-if="isDeviceBoundToOtherNode(item.raw.id)"
-                    size="x-small"
-                    color="warning"
-                  >
-                    已绑定到其他节点
-                  </v-chip>
-                  <v-chip
-                    v-else-if="item.raw.id === selectedDeviceId"
-                    size="x-small"
-                    color="success"
-                  >
-                    当前选择
-                  </v-chip>
-                </template>
-              </v-list-item>
-            </template>
-          </v-select>
-
-          <v-divider class="my-3" />
-
-          <template v-if="form.params.sourceMode === 'replay'">
-            <v-text-field
-              v-model="form.params.filePath"
-              label="回放文件名/路径"
-              density="compact"
-              variant="outlined"
-              class="mb-3"
-            />
-            <v-checkbox
-              v-model="form.params.loop"
-              label="循环播放"
-              density="compact"
-              hide-details
-              class="mb-3"
-            />
-          </template>
-          
-          <v-text-field
-            v-model.number="form.params.sampleRate"
-            label="采样率 (Hz)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-text-field
-            v-model.number="form.params.channels"
-            label="通道数"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          
-          <!-- 通道命名 -->
-          <v-expansion-panels>
-            <v-expansion-panel>
-              <v-expansion-panel-title>通道命名</v-expansion-panel-title>
-              <v-expansion-panel-text>
-                <div v-for="(ch, idx) in channelNames" :key="idx" class="d-flex align-center mb-2">
-                  <span class="mr-2 text-caption">CH{{ idx + 1 }}:</span>
-                  <v-text-field
-                    v-model="channelNames[idx]"
-                    density="compact"
-                    variant="outlined"
-                    hide-details
-                    style="width: 120px"
-                  />
-                </div>
-              </v-expansion-panel-text>
-            </v-expansion-panel>
-          </v-expansion-panels>
-        </template>
-        
-        <!-- 示波器专用表单 -->
-        <template v-else-if="nodeType === 'OSC'">
-          <v-text-field
-            v-model.number="form.params.timeWindow"
-            label="时间窗口 (秒)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-select
-            v-model="form.params.mode"
-            :items="[{title: '扫描', value: 'scan'}, {title: '滚动', value: 'scroll'}]"
-            item-title="title"
-            item-value="value"
-            label="显示模式"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          
-          <!-- 通道选择 -->
-          <v-card variant="outlined" class="mb-3">
-            <v-card-title class="text-subtitle-2">通道来源（自动）</v-card-title>
-            <v-card-text>
-              <div class="d-flex align-center mb-2">
-                <v-icon size="small" class="mr-2" color="info">mdi-source-branch</v-icon>
-                <span class="text-caption">通道由输入连接自动决定，共 {{ availableChannels.length }} 路</span>
-              </div>
-              <div class="d-flex flex-wrap ga-1">
-                <v-chip
-                  v-for="(ch, idx) in availableChannels"
-                  :key="idx"
-                  size="small"
-                  variant="tonal"
-                  color="primary"
-                >
-                  {{ ch }}
-                </v-chip>
-              </div>
-              <v-alert v-if="availableChannels.length === 0" type="info" density="compact" class="mt-2">
-                未连接数据源，请先连接上游节点
-              </v-alert>
-            </v-card-text>
-          </v-card>
-          
-          <!-- 绑定的示波器实例 -->
-          <v-card variant="outlined">
-            <v-card-title class="text-subtitle-2">显示绑定</v-card-title>
-            <v-card-text>
-              <v-select
-                v-model="boundOscilloscopeId"
-                :items="availableOscilloscopes"
-                item-title="name"
-                item-value="id"
-                label="绑定到示波器实例"
-                density="compact"
-                variant="outlined"
-                clearable
-                :hint="boundOscilloscopeId ? '已绑定' : '未绑定'"
-                persistent-hint
-              />
-
-              <v-divider class="my-3" />
-
-              <v-checkbox
-                v-model="form.params.saveEnabled"
-                label="同时保存到文件"
-                density="compact"
-                hide-details
-                class="mb-2"
-              />
-              <v-text-field
-                v-if="form.params.saveEnabled"
-                v-model="form.params.filename"
-                label="输出文件名"
-                density="compact"
-                variant="outlined"
-                class="mb-2"
-                placeholder="eeg_output.csv"
-              />
-              <v-select
-                v-if="form.params.saveEnabled"
-                v-model="form.params.format"
-                :items="['CSV', 'EDF', 'NPY']"
-                label="保存格式"
-                density="compact"
-                variant="outlined"
-              />
-            </v-card-text>
-          </v-card>
-        </template>
-        
-        <!-- 频谱专用表单 -->
-        <template v-else-if="nodeType === 'SPECTRUM'">
-          <v-text-field
-            v-model.number="form.params.windowSize"
-            label="窗口大小 (秒)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-text-field
-            v-model.number="form.params.fftSize"
-            label="FFT点数"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-select
-            v-model="form.params.displayMode"
-            :items="[{title: '通道平均', value: 'average'}, {title: '分通道', value: 'channels'}]"
-            item-title="title"
-            item-value="value"
-            label="显示模式"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          
-          <!-- 通道选择（分通道模式） -->
-          <template v-if="form.params.displayMode === 'channels'">
-            <v-card variant="outlined" class="mb-3">
-              <v-card-title class="text-subtitle-2">通道选择</v-card-title>
-              <v-card-text>
-                <div class="d-flex align-center mb-2">
-                  <v-btn size="small" variant="text" @click="selectAllChannels">全选</v-btn>
-                  <v-btn size="small" variant="text" @click="clearAllChannels">清空</v-btn>
-                </div>
-                <v-checkbox
-                  v-for="(ch, idx) in availableChannels"
-                  :key="idx"
-                  v-model="selectedChannels"
-                  :value="idx"
-                  :label="ch"
-                  density="compact"
-                  hide-details
-                />
-              </v-card-text>
-            </v-card>
-          </template>
-        </template>
-        
-        <!-- 滤波器专用表单 -->
-        <template v-else-if="nodeType === 'FILTER'">
-          <v-select
-            v-model="form.params.type"
-            :items="['低通', '高通', '带通', '陷波']"
-            label="滤波器类型"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-text-field
-            v-model.number="form.params.cutoff"
-            label="截止频率 (Hz)"
-            type="number"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-slider
-            v-model="form.params.order"
-            :min="1"
-            :max="8"
-            :step="1"
-            label="阶数"
-            thumb-label
-            class="mb-3"
-          />
-        </template>
-
-        <!-- 求和器专用表单 -->
-        <template v-else-if="nodeType === 'SUM'">
-          <v-card variant="outlined" class="mb-3">
-            <v-card-title class="text-subtitle-2 d-flex align-center">
-              输入配置
-              <v-spacer />
-              <v-btn size="small" variant="text" @click="addSumInput">新增输入</v-btn>
-            </v-card-title>
-            <v-card-text>
-              <div
-                v-for="(input, idx) in sumInputs"
-                :key="`sum-${idx}`"
-                class="d-flex align-center ga-2 mb-2"
-              >
-                <v-text-field
-                  v-model="input.label"
-                  :label="`输入 ${idx + 1} 标签`"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-text-field
-                  v-model.number="input.weight"
-                  label="权重"
-                  type="number"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  style="max-width: 120px"
-                />
-                <v-btn
-                  icon="mdi-delete"
-                  size="small"
-                  variant="text"
-                  :disabled="sumInputs.length <= 1"
-                  @click="removeSumInput(idx)"
-                />
-              </div>
-            </v-card-text>
-          </v-card>
-        </template>
-
-        <!-- 合并器专用表单 -->
-        <template v-else-if="nodeType === 'MERGE'">
-          <v-card variant="outlined" class="mb-3">
-            <v-card-title class="text-subtitle-2 d-flex align-center">
-              输入配置
-              <v-spacer />
-              <v-btn size="small" variant="text" @click="addMergeInput">新增输入</v-btn>
-            </v-card-title>
-            <v-card-text>
-              <div
-                v-for="(input, idx) in mergeInputs"
-                :key="`merge-${idx}`"
-                class="d-flex align-center ga-2 mb-2"
-              >
-                <v-text-field
-                  v-model="input.label"
-                  :label="`输入 ${idx + 1} 标签`"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-text-field
-                  v-model.number="input.gain"
-                  label="增益"
-                  type="number"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  style="max-width: 120px"
-                />
-                <v-btn
-                  icon="mdi-delete"
-                  size="small"
-                  variant="text"
-                  :disabled="mergeInputs.length <= 1"
-                  @click="removeMergeInput(idx)"
-                />
-              </div>
-            </v-card-text>
-          </v-card>
-          <v-select
-            v-model="form.params.strategy"
-            :items="['interleave', 'concatenate']"
-            label="合并策略"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-        </template>
-        
-        <!-- 回放专用表单 -->
-        <template v-else-if="nodeType === 'REPLAY'">
-          <v-file-input
-            v-model="form.params.file"
-            label="选择数据文件"
-            accept=".csv,.edf,.bdf"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-          <v-checkbox
-            v-model="form.params.loop"
-            label="循环播放"
-            density="compact"
-          />
-        </template>
-        
-        <!-- 保存专用表单 -->
-        <template v-else-if="nodeType === 'SAVE'">
-          <v-text-field
-            v-model="form.params.filename"
-            label="文件名"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            placeholder="data_YYYYMMDD.csv"
-          />
-          <v-select
-            v-model="form.params.format"
-            :items="['CSV', 'EDF', 'NPY']"
-            label="保存格式"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-          />
-        </template>
-        
-        <!-- 分离器专用表单 -->
-        <template v-else-if="nodeType === 'SPLIT'">
-          <v-card variant="outlined" class="mb-3">
-            <v-card-title class="text-subtitle-2 d-flex align-center">
-              输出配置
-              <v-spacer />
-              <v-btn size="small" variant="text" @click="addSplitOutput">新增输出</v-btn>
-            </v-card-title>
-            <v-card-text>
-              <div
-                v-for="(output, idx) in splitOutputs"
-                :key="`split-${idx}`"
-                class="d-flex align-center ga-2 mb-2"
-              >
-                <v-text-field
-                  v-model="output.label"
-                  :label="`输出 ${idx + 1} 标签`"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                />
-                <v-text-field
-                  v-model="output.channelIndices"
-                  label="通道索引"
-                  density="compact"
-                  variant="outlined"
-                  hide-details
-                  placeholder="0,1,2"
-                />
-                <v-btn
-                  icon="mdi-delete"
-                  size="small"
-                  variant="text"
-                  :disabled="splitOutputs.length <= 1"
-                  @click="removeSplitOutput(idx)"
-                />
-              </div>
-            </v-card-text>
-          </v-card>
-        </template>
-
-        <!-- 自定义 Python 节点 -->
-        <template v-else-if="nodeType === 'CUSTOM_PYFUNC' || nodeType === 'CUSTOM_CONV'">
-          <v-card variant="outlined" class="mb-3" v-if="nodeType === 'CUSTOM_PYFUNC'">
-            <v-card-title class="text-subtitle-2">输入输出配置</v-card-title>
-            <v-card-text>
-              <v-select
-                v-model="form.params.portMode"
-                :items="['fixed', 'adaptive']"
-                label="端口模式"
-                density="compact"
-                variant="outlined"
-                class="mb-3"
-              />
-              <v-row>
-                <v-col cols="6">
-                  <v-text-field
-                    v-model.number="form.params.inputCount"
-                    label="输入数量"
-                    type="number"
-                    density="compact"
-                    variant="outlined"
-                    :disabled="form.params.portMode === 'adaptive'"
-                  />
-                </v-col>
-                <v-col cols="6">
-                  <v-text-field
-                    v-model.number="form.params.outputCount"
-                    label="输出数量"
-                    type="number"
-                    density="compact"
-                    variant="outlined"
-                    :disabled="form.params.portMode === 'adaptive'"
-                  />
-                </v-col>
-              </v-row>
-
-              <v-row>
-                <v-col cols="12" md="6">
-                  <v-text-field
-                    v-model="form.params.functionName"
-                    label="函数名（自动签名）"
-                    density="compact"
-                    variant="outlined"
-                    hint="仅支持字母数字下划线"
-                    persistent-hint
-                  />
-                </v-col>
-                <v-col cols="12" md="6">
-                  <v-select
-                    v-model="form.params.windowMode"
-                    :items="[{title: '秒', value: 'seconds'}, {title: '数据点', value: 'points'}]"
-                    item-title="title"
-                    item-value="value"
-                    label="滑动窗口单位"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6">
-                  <v-select
-                    v-model="form.params.hopMode"
-                    :items="[
-                      { title: '滑动点数', value: 'points' },
-                      { title: '滑动毫秒', value: 'milliseconds' },
-                      { title: '目标输出频率', value: 'targetRate' }
-                    ]"
-                    item-title="title"
-                    item-value="value"
-                    label="滑动间隔模式"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6" v-if="form.params.windowMode !== 'points'">
-                  <v-text-field
-                    v-model.number="form.params.windowSeconds"
-                    label="窗口秒数"
-                    type="number"
-                    min="0.01"
-                    step="0.1"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6" v-else>
-                  <v-text-field
-                    v-model.number="form.params.windowPoints"
-                    label="窗口数据点"
-                    type="number"
-                    min="1"
-                    step="1"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6" v-if="form.params.hopMode === 'points'">
-                  <v-text-field
-                    v-model.number="form.params.hopPoints"
-                    label="滑动间隔点数"
-                    type="number"
-                    min="1"
-                    step="1"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6" v-else-if="form.params.hopMode === 'milliseconds'">
-                  <v-text-field
-                    v-model.number="form.params.hopMs"
-                    label="滑动间隔毫秒"
-                    type="number"
-                    min="1"
-                    step="1"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6" v-else>
-                  <v-text-field
-                    v-model.number="form.params.outputSampleRate"
-                    label="目标输出频率 (Hz)"
-                    type="number"
-                    min="1"
-                    step="1"
-                    density="compact"
-                    variant="outlined"
-                  />
-                </v-col>
-                <v-col cols="12" md="6">
-                  <v-text-field
-                    v-model="inputNamesText"
-                    label="输入变量名（逗号分隔）"
-                    density="compact"
-                    variant="outlined"
-                    hint="顺序对应前端输入连接桩"
-                    persistent-hint
-                  />
-                </v-col>
-                <v-col cols="12" md="6">
-                  <v-text-field
-                    v-model="outputNamesText"
-                    label="输出变量名（逗号分隔）"
-                    density="compact"
-                    variant="outlined"
-                    hint="顺序对应前端输出连接桩"
-                    persistent-hint
-                  />
-                </v-col>
-              </v-row>
-            </v-card-text>
-          </v-card>
-
-          <v-card variant="outlined" class="mb-3" v-if="nodeType === 'CUSTOM_CONV'">
-            <v-card-title class="text-subtitle-2">卷积配置</v-card-title>
-            <v-card-text>
-              <v-text-field
-                v-model="kernelText"
-                label="卷积核 (逗号分隔)"
-                density="compact"
-                variant="outlined"
-                hint="示例: 0.25,0.5,0.25"
-                persistent-hint
-              />
-            </v-card-text>
-          </v-card>
-
-          <v-card variant="outlined">
-            <v-card-title class="text-subtitle-2 d-flex align-center">
-              Python 代码
-              <v-spacer />
-              <v-btn size="small" variant="text" @click="generatePrototype" v-if="nodeType === 'CUSTOM_PYFUNC'">后端生成原型</v-btn>
-              <v-btn size="small" variant="text" @click="resetPythonCode">恢复默认</v-btn>
-              <v-btn size="small" variant="text" @click="triggerPythonImport">导入 .py</v-btn>
-              <v-btn size="small" variant="text" @click="exportPythonCode">导出 .py</v-btn>
-            </v-card-title>
-            <v-card-text>
-              <v-textarea
-                v-if="nodeType === 'CUSTOM_PYFUNC'"
-                :model-value="pythonHeaderCode"
-                label="自动生成（不可编辑）：声明 + 参数读取"
-                rows="8"
-                density="compact"
-                variant="outlined"
-                readonly
-                class="mb-2"
-              />
-
-              <div ref="codeEditorHost" class="code-editor-host" />
-
-              <v-textarea
-                v-if="nodeType === 'CUSTOM_PYFUNC'"
-                :model-value="pythonFooterCode"
-                label="自动生成（不可编辑）：输出检查 + return"
-                rows="8"
-                density="compact"
-                variant="outlined"
-                readonly
-                class="mt-2"
-              />
-            </v-card-text>
-          </v-card>
-        </template>
-        
-        <!-- 其他节点通用参数 -->
-        <template v-else>
-          <v-textarea
-            v-model="paramsJson"
-            label="参数 (JSON)"
-            rows="4"
-            density="compact"
-            variant="outlined"
-            :error="!!jsonError"
-            :error-messages="jsonError"
-          />
-        </template>
-      </v-card-text>
-      
-      <v-divider />
-      
-      <v-card-actions>
-        <v-btn variant="text" @click="close">取消</v-btn>
-        <v-spacer />
-        <v-btn color="primary" @click="save">保存</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <input
-    ref="pythonFileInput"
-    type="file"
-    accept=".py,text/x-python"
-    style="display: none"
-    @change="importPythonFile"
-  />
+        <!-- 动态表单内容 -->
+        <NodeEditFormContent
+          :node-type="nodeType"
+          :form="form"
+          :is-read-only="isReadOnly"
+          :selected-device-id="selectedDeviceId"
+          :bound-oscilloscope-id="boundOscilloscopeId"
+          :channel-names="channelNames"
+          :sum-inputs="sumInputs"
+          :split-outputs="splitOutputs"
+          :merge-inputs="mergeInputs"
+          :input-names-text="inputNamesText"
+          :output-names-text="outputNamesText"
+          :kernel-text="kernelText"
+          :params-json="paramsJson"
+          :json-error="jsonError"
+          @update:selected-device-id="selectedDeviceId = $event"
+          @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
+          @update:channel-names="channelNames = $event"
+          @update:sum-inputs="sumInputs = $event"
+          @update:split-outputs="splitOutputs = $event"
+          @update:merge-inputs="mergeInputs = $event"
+          @update:input-names-text="inputNamesText = $event"
+          @update:output-names-text="outputNamesText = $event"
+          @update:kernel-text="kernelText = $event"
+          @update:params-json="paramsJson = $event"
+          @add-channel-name="addChannelName"
+          @remove-channel-name="removeChannelName"
+          @add-sum-input="addSumInput"
+          @remove-sum-input="removeSumInput"
+          @add-split-output="addSplitOutput"
+          @remove-split-output="removeSplitOutput"
+          @add-merge-input="addMergeInput"
+          @remove-merge-input="removeMergeInput"
+          @import-python-file="importPythonFile"
+        />
+      </div>
+    </div>
+    
+    <v-divider v-if="!isReadOnly" />
+    
+    <div v-if="!isReadOnly" class="sidebar-actions">
+      <v-btn color="primary" @click="save" block>保存</v-btn>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -714,6 +152,7 @@ import { basicSetup, EditorView } from 'codemirror';
 import { javascript } from '@codemirror/lang-javascript';
 import { sessionStore } from '../../services/sessionStore';
 import { fetchGraphPythonLibrary, generateGraphPythonPrototype } from '../../services/graph';
+import NodeEditFormContent from './NodeEditFormContent.vue';
 
 interface GraphNode {
   id: string;
@@ -738,6 +177,7 @@ const props = defineProps<{
   nodeData: GraphNode | null;
   allNodes?: GraphNode[];
   allEdges?: GraphEdge[];
+  mode?: 'dialog' | 'sidebar'; // 新增：显示模式
 }>();
 
 const emit = defineEmits<{
@@ -746,9 +186,17 @@ const emit = defineEmits<{
   (e: 'bindOscilloscope', data: { nodeId: string; oscId: string | null }): void;
 }>();
 
+// 模式检测
+const isSidebarMode = computed(() => props.mode === 'sidebar');
+
+// 在边栏模式下，始终显示内容；在对话框模式下，使用modelValue控制显示
 const show = computed({
-  get: () => props.modelValue,
-  set: (val) => emit('update:modelValue', val),
+  get: () => isSidebarMode.value ? true : props.modelValue,
+  set: (val) => {
+    if (!isSidebarMode.value) {
+      emit('update:modelValue', val);
+    }
+  },
 });
 
 const nodeType = computed(() => props.nodeData?.type || '');
@@ -1376,6 +824,12 @@ const close = () => {
 };
 
 const save = async () => {
+  // 只读模式下禁止保存
+  if (isReadOnly.value) {
+    console.log('[NodeEditDialog] 只读模式下禁止保存');
+    return;
+  }
+  
   if (jsonError.value) return;
 
   if (nodeType.value === 'SUM') {
