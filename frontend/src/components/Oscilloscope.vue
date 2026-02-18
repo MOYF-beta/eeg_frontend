@@ -93,6 +93,13 @@
             <div class="osc-status-label">采样率</div>
             <div class="osc-status-text">{{ currentSampleRate }}Hz</div>
           </div>
+          <div class="osc-status-section">
+            <div class="osc-status-label">处理延迟</div>
+            <div class="osc-status-text" :style="{ color: isNonRealtime ? '#FB8C00' : undefined }">
+              {{ processingDelayMs }}ms
+            </div>
+            <div v-if="isNonRealtime" class="osc-status-text">非实时</div>
+          </div>
           <div class="osc-status-section osc-status-close">
             <v-btn
               v-if="!fullscreen"
@@ -347,6 +354,8 @@ const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
 const packetCount = ref(0);
+const processingDelayMs = ref(0);
+const isNonRealtime = ref(false);
 
 // WebSocket 状态
 const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -1011,6 +1020,9 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   if (!selectedId || packetNodeId !== selectedId) return;
 
+  processingDelayMs.value = Math.max(0, Number(packet.processingDelayMs || 0));
+  isNonRealtime.value = Boolean(packet.nonRealtime || processingDelayMs.value > 10000);
+
   const inferredCount = Math.max(
     Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,
     Array.isArray(packet.channels) ? packet.channels.length : 0,
@@ -1032,7 +1044,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   // 核心逻辑：基于时间戳确定扫描位置，确保时间流速一致且优先绘制最新数据
   // 如果没有时间戳，则使用当前现实时间
-  const timestamp = packet.timestamp || Date.now();
+  const timestamp = packet.utcFirstFrameMs || packet.timestamp || Date.now();
   
   // 更新最新数据时间点，用于扫描线平滑估计
   latestDataTimestamp = timestamp;
@@ -1301,6 +1313,8 @@ const resetAllData = () => {
   latestDataWallTime = 0;
   createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
   packetCount.value = 0;
+  processingDelayMs.value = 0;
+  isNonRealtime.value = false;
   autoGainDisplay.value = gainFineByCh.value.map((fine, ch) => fine * Math.pow(10, gainExpByCh.value[ch] || 0));
   channelRanges.value = Array.from({ length: channelCount.value }, () => ({ max: 0, min: 0 }));
   clearWaveCanvas();

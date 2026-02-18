@@ -56,9 +56,7 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
         if format == 'CSV':
             f = open(filepath, 'w', newline='', encoding='utf-8')
             writer = csv.writer(f)
-            # 写入表头
-            writer.writerow(['timestamp', 'sample_idx'] + [f'ch{i+1}' for i in range(8)])
-            
+
             _active_writers[node_id] = {
                 'file': f,
                 'writer': writer,
@@ -66,6 +64,8 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
                 'filepath': str(filepath),
                 'start_time': time.time(),
                 'sample_count': 0,
+                'channel_count': None,
+                'header_written': False,
             }
         else:
             # TODO: 实现EDF和NPY格式
@@ -104,6 +104,12 @@ def write_sample(node_id: str, timestamp: float, channels: List[float]) -> bool:
     
     try:
         if writer_info['format'] == 'CSV':
+            if not writer_info.get('header_written'):
+                channel_count = len(channels)
+                writer_info['channel_count'] = channel_count
+                writer_info['writer'].writerow(['timestamp', 'sample_idx'] + [f'ch{i+1}' for i in range(channel_count)])
+                writer_info['header_written'] = True
+
             writer_info['writer'].writerow([
                 int(timestamp),
                 writer_info['sample_count'],

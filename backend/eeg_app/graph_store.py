@@ -5,6 +5,8 @@ import os
 import time
 from typing import Dict, List, TypedDict
 
+from .graph_nodes import get_registered_node_types
+
 # 数据文件路径
 DATA_FILE = os.path.join(os.path.dirname(__file__), 'graph_data.json')
 
@@ -32,10 +34,12 @@ class GraphPayload(TypedDict):
     frozen: bool
 
 
-NODE_TYPES = {
+BUILTIN_NODE_TYPES = {
     'SOURCE',
     'REPLAY',
     'FILTER',
+    'DOWNSAMPLE',
+    'UPSAMPLE',
     'SUM',
     'SPLIT',
     'MERGE',
@@ -46,6 +50,14 @@ NODE_TYPES = {
 
 _NO_INPUT_NODE_TYPES = {'SOURCE', 'REPLAY'}
 _NO_OUTPUT_NODE_TYPES = {'OSC', 'SPECTRUM', 'SAVE'}
+
+
+def _safe_positive_int(raw: object, default: int = 1) -> int:
+    try:
+        value = int(raw)
+    except Exception:
+        value = default
+    return max(1, value)
 
 
 def _node_input_ports(node: Dict) -> List[str]:
@@ -60,6 +72,15 @@ def _node_input_ports(node: Dict) -> List[str]:
         count = len(inputs) if isinstance(inputs, list) else 1
         count = max(1, count)
         return [f'in-{i + 1}' for i in range(count)]
+
+    port_mode = str(params.get('portMode') or 'fixed').lower()
+    if port_mode == 'adaptive':
+        return ['in']
+
+    count = _safe_positive_int(params.get('inputCount'), 1)
+    if count == 1:
+        return ['in']
+    return [f'in-{i + 1}' for i in range(count)]
 
     return ['in']
 
@@ -76,6 +97,15 @@ def _node_output_ports(node: Dict) -> List[str]:
         count = len(outputs) if isinstance(outputs, list) else 1
         count = max(1, count)
         return [f'out-{i + 1}' for i in range(count)]
+
+    port_mode = str(params.get('portMode') or 'fixed').lower()
+    if port_mode == 'adaptive':
+        return ['out']
+
+    count = _safe_positive_int(params.get('outputCount'), 1)
+    if count == 1:
+        return ['out']
+    return [f'out-{i + 1}' for i in range(count)]
 
     return ['out']
 
@@ -96,9 +126,36 @@ _GRAPH: GraphPayload = {
 # 运行时状态
 _RUNTIME_STATE = {
     'running': False,
+    'mode': 'live',
     'startedAt': None,
     'stoppedAt': None,
+    'progress': None,
+    'processingDelayMs': 0,
+    'nonRealtime': False,
+    'warning': None,
 }
+
+
+def _is_live_input_node(node: Dict) -> bool:
+    node_type = str(node.get('type') or '').upper()
+    params = node.get('params') or {}
+    if node_type == 'REPLAY':
+        return False
+    if node_type == 'SOURCE':
+        source_mode = str(params.get('sourceMode') or 'live').lower()
+        return source_mode != 'replay'
+    return False
+
+
+def _has_offline_input_node(node: Dict) -> bool:
+    node_type = str(node.get('type') or '').upper()
+    params = node.get('params') or {}
+    if node_type == 'REPLAY':
+        return True
+    if node_type == 'SOURCE':
+        source_mode = str(params.get('sourceMode') or 'live').lower()
+        return source_mode == 'replay'
+    return False
 
 
 def _load_from_file() -> GraphPayload:
@@ -152,6 +209,7 @@ def set_frozen(value: bool) -> None:
 def validate_graph(payload: GraphPayload) -> List[str]:
     """验证图数据"""
     errors: List[str] = []
+    valid_node_types = set(BUILTIN_NODE_TYPES) | set(get_registered_node_types())
     node_ids = set()
     nodes_by_id = {}
     for node in payload.get('nodes', []):
@@ -159,7 +217,7 @@ def validate_graph(payload: GraphPayload) -> List[str]:
         node_type = node.get('type')
         if not node_id:
             errors.append('node.id is required')
-        if node_type not in NODE_TYPES:
+        if node_type not in valid_node_types:
             errors.append(f"invalid node type: {node_type}")
         if node_id in node_ids:
             errors.append(f"duplicate node id: {node_id}")
@@ -202,14 +260,40 @@ def validate_graph(payload: GraphPayload) -> List[str]:
     return errors
 
 
-def run_graph() -> Dict:
+def run_graph(mode: str = 'live') -> Dict:
     """运行计算图"""
     global _RUNTIME_STATE
+
+    normalized_mode = str(mode or 'live').lower()
+    if normalized_mode not in {'live', 'offline'}:
+        normalized_mode = 'live'
+
+    nodes = _GRAPH.get('nodes', []) or []
+    if normalized_mode == 'offline':
+        has_live = any(_is_live_input_node(node) for node in nodes)
+        has_offline = any(_has_offline_input_node(node) for node in nodes)
+        if has_live:
+            return {
+                'status': 'error',
+                'error': 'offline mode does not allow realtime source nodes',
+            }
+        if not has_offline:
+            return {
+                'status': 'error',
+                'error': 'offline mode requires at least one replay source',
+            }
+
     _RUNTIME_STATE['running'] = True
+    _RUNTIME_STATE['mode'] = normalized_mode
     _RUNTIME_STATE['startedAt'] = time.time()
     _RUNTIME_STATE['stoppedAt'] = None
+    _RUNTIME_STATE['progress'] = 0 if normalized_mode == 'offline' else None
+    _RUNTIME_STATE['processingDelayMs'] = 0
+    _RUNTIME_STATE['nonRealtime'] = False
+    _RUNTIME_STATE['warning'] = None
     return {
         'status': 'running',
+        'mode': normalized_mode,
         'startedAt': _RUNTIME_STATE['startedAt'],
         'nodeCount': len(_GRAPH['nodes']),
         'edgeCount': len(_GRAPH['edges']),
@@ -223,17 +307,45 @@ def stop_graph() -> Dict:
     _RUNTIME_STATE['stoppedAt'] = time.time()
     return {
         'status': 'stopped',
+        'mode': _RUNTIME_STATE['mode'],
         'startedAt': _RUNTIME_STATE['startedAt'],
         'stoppedAt': _RUNTIME_STATE['stoppedAt'],
     }
+
+
+def set_runtime_metrics(
+    processing_delay_ms: float | int | None = None,
+    progress: float | None = None,
+    non_realtime: bool | None = None,
+    warning: str | None = None,
+) -> None:
+    if processing_delay_ms is not None:
+        try:
+            _RUNTIME_STATE['processingDelayMs'] = max(0, int(float(processing_delay_ms)))
+        except Exception:
+            pass
+    if progress is not None:
+        try:
+            _RUNTIME_STATE['progress'] = max(0.0, min(100.0, float(progress)))
+        except Exception:
+            pass
+    if non_realtime is not None:
+        _RUNTIME_STATE['nonRealtime'] = bool(non_realtime)
+    if warning is not None:
+        _RUNTIME_STATE['warning'] = warning
 
 
 def get_runtime_state() -> Dict:
     """获取运行时状态"""
     return {
         'running': _RUNTIME_STATE['running'],
+        'mode': _RUNTIME_STATE['mode'],
         'startedAt': _RUNTIME_STATE['startedAt'],
         'stoppedAt': _RUNTIME_STATE['stoppedAt'],
+        'progress': _RUNTIME_STATE['progress'],
+        'processingDelayMs': _RUNTIME_STATE['processingDelayMs'],
+        'nonRealtime': _RUNTIME_STATE['nonRealtime'],
+        'warning': _RUNTIME_STATE['warning'],
     }
 
 

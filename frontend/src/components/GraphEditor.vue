@@ -4,20 +4,47 @@
       计算图编辑器
       <div class="d-flex align-center ga-2">
         <v-switch v-model="frozen" density="compact" hide-details label="冻结" />
-        <v-btn 
-          size="small" 
-          :color="isRunning ? 'error' : 'primary'" 
-          @click="toggleRun" 
-          :disabled="!frozen"
+        <v-btn
+          size="small"
+          color="success"
+          @click="runByMode('live')"
+          :disabled="!frozen || isRunning"
         >
-          <v-icon left size="small" class="mr-1">
-            {{ isRunning ? 'mdi-stop' : 'mdi-play' }}
-          </v-icon>
-          {{ isRunning ? '停止' : '运行' }}
+          <v-icon left size="small" class="mr-1">mdi-play</v-icon>
+          Live运行
+        </v-btn>
+        <v-btn
+          size="small"
+          color="secondary"
+          @click="runByMode('offline')"
+          :disabled="!frozen || isRunning"
+        >
+          <v-icon left size="small" class="mr-1">mdi-file-sync</v-icon>
+          离线运行
+        </v-btn>
+        <v-btn
+          size="small"
+          color="error"
+          @click="stopRun"
+          :disabled="!isRunning"
+        >
+          <v-icon left size="small" class="mr-1">mdi-stop</v-icon>
+          停止
         </v-btn>
         <v-chip v-if="isRunning" size="small" color="success" class="ml-1">
           <v-icon size="small" class="mr-1">mdi-check-circle</v-icon>
-          运行中
+          {{ runtimeMode === 'offline' ? '离线运行中' : 'Live运行中' }}
+        </v-chip>
+        <v-chip
+          v-if="processingDelayMs > 0"
+          size="small"
+          :color="nonRealtime ? 'warning' : 'info'"
+          class="ml-1"
+        >
+          延迟 {{ processingDelayMs }}ms
+        </v-chip>
+        <v-chip v-if="nonRealtime" size="small" color="warning" class="ml-1">
+          非实时
         </v-chip>
         <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
         <v-btn size="small" variant="tonal" @click="triggerFileLoad">加载</v-btn>
@@ -27,6 +54,24 @@
     </v-card-title>
     <v-divider />
     <v-card-text>
+      <v-alert
+        v-if="runtimeWarning"
+        type="warning"
+        density="compact"
+        variant="tonal"
+        class="mb-3"
+      >
+        {{ runtimeWarning }}
+      </v-alert>
+
+      <div v-if="isRunning && runtimeMode === 'offline'" class="mb-3">
+        <div class="d-flex justify-space-between text-caption mb-1">
+          <span>离线处理进度</span>
+          <span>{{ offlineProgress.toFixed(1) }}%</span>
+        </div>
+        <v-progress-linear :model-value="offlineProgress" color="secondary" height="8" rounded />
+      </div>
+
       <div class="graph-wrapper">
         <!-- 左侧节点库 -->
         <div class="palette">
@@ -230,6 +275,11 @@ const graphRef = ref<Graph | null>(null);
 const frozen = ref(false);
 const hasNodes = ref(false);
 const isRunning = ref(false);
+const runtimeMode = ref<'live' | 'offline'>('live');
+const offlineProgress = ref(0);
+const processingDelayMs = ref(0);
+const nonRealtime = ref(false);
+const runtimeWarning = ref<string | null>(null);
 let runtimeStateTimer: number | null = null;
 
 // 运行时状态轮询
@@ -238,6 +288,11 @@ async function pollRuntimeState() {
     const res = await getGraphRuntimeState();
     if (res.ok) {
       isRunning.value = res.state.running;
+      runtimeMode.value = (res.state.mode || 'live') as 'live' | 'offline';
+      offlineProgress.value = Number(res.state.progress || 0);
+      processingDelayMs.value = Number(res.state.processingDelayMs || 0);
+      nonRealtime.value = Boolean(res.state.nonRealtime);
+      runtimeWarning.value = res.state.warning ? String(res.state.warning) : null;
     }
   } catch (e) {
     console.error('[GraphEditor] Failed to poll runtime state:', e);
@@ -257,24 +312,26 @@ function stopRuntimeStatePolling() {
   }
 }
 
-// 切换运行/停止
-async function toggleRun() {
-  if (isRunning.value) {
-    // 停止
-    try {
-      await stopGraph();
-      graphRuntime.stop();
-      stopMockDataStream();
-      isRunning.value = false;
-      console.log('[GraphEditor] Graph stopped');
-    } catch (err) {
-      console.error('[GraphEditor] Failed to stop graph:', err);
-      alert('停止失败: ' + (err as Error).message);
-    }
-  } else {
-    // 启动
-    await run();
+async function stopRun() {
+  try {
+    await stopGraph();
+    graphRuntime.stop();
+    stopMockDataStream();
+    isRunning.value = false;
+    offlineProgress.value = 0;
+    processingDelayMs.value = 0;
+    nonRealtime.value = false;
+    runtimeWarning.value = null;
+    console.log('[GraphEditor] Graph stopped');
+  } catch (err) {
+    console.error('[GraphEditor] Failed to stop graph:', err);
+    alert('停止失败: ' + (err as Error).message);
   }
+}
+
+async function runByMode(mode: 'live' | 'offline') {
+  runtimeMode.value = mode;
+  await run(mode);
 }
 
 // 存储 sessionStore 取消订阅函数
@@ -335,6 +392,16 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
     { key: 'cutoff', label: '截止频率', type: 'number', hint: 'Hz', default: 50 },
     { key: 'order', label: '阶数', type: 'slider', min: 1, max: 8, hint: '滤波器阶数', default: 4 },
   ],
+  DOWNSAMPLE: [
+    { key: 'mode', label: '模式', type: 'select', options: ['targetRate', 'factor'], hint: '目标频率或倍率', default: 'targetRate' },
+    { key: 'targetRate', label: '目标频率', type: 'number', hint: 'Hz', default: 250 },
+    { key: 'factor', label: '降采样倍率', type: 'number', hint: 'factor>=1', default: 2 },
+  ],
+  UPSAMPLE: [
+    { key: 'mode', label: '模式', type: 'select', options: ['targetRate', 'factor'], hint: '目标频率或倍率', default: 'targetRate' },
+    { key: 'targetRate', label: '目标频率', type: 'number', hint: 'Hz', default: 1000 },
+    { key: 'factor', label: '升采样倍率', type: 'number', hint: 'factor>=1', default: 2 },
+  ],
   SUM: [
     { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立权重', default: [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }] },
   ],
@@ -359,6 +426,18 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
     { key: 'filePath', label: '保存路径', type: 'text', hint: '文件保存路径', default: './data/output.edf' },
     { key: 'bufferSize', label: '缓冲区大小', type: 'number', hint: '样本数', default: 10000 },
   ],
+  CUSTOM_PYFUNC: [
+    { key: 'portMode', label: '端口模式', type: 'select', options: ['fixed', 'adaptive'], hint: 'fixed=固定数量，adaptive=自适应', default: 'fixed' },
+    { key: 'inputCount', label: '输入数量', type: 'number', hint: '固定模式生效', default: 2 },
+    { key: 'outputCount', label: '输出数量', type: 'number', hint: '固定模式生效', default: 1 },
+    { key: 'hopMode', label: '滑动间隔模式', type: 'select', options: ['points', 'milliseconds', 'targetRate'], hint: '决定输出频率', default: 'points' },
+    { key: 'hopPoints', label: '滑动点数', type: 'number', hint: 'points模式', default: 1 },
+    { key: 'hopMs', label: '滑动毫秒', type: 'number', hint: 'milliseconds模式', default: 10 },
+    { key: 'outputSampleRate', label: '目标输出频率', type: 'number', hint: 'targetRate模式', default: 100 },
+  ],
+  CUSTOM_CONV: [
+    { key: 'kernel', label: '卷积核', type: 'text', hint: '例如: 0.25,0.5,0.25', default: '0.25,0.5,0.25' },
+  ],
 };
 
 // 节点类型配置
@@ -366,30 +445,36 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
   SOURCE: { name: '数据源', color: '#1976D2', bg: '#E3F2FD', icon: 'SRC', hasInput: false, hasOutput: true },
   REPLAY: { name: '回放', color: '#1976D2', bg: '#E3F2FD', icon: 'RPL', hasInput: false, hasOutput: true },
   FILTER: { name: '滤波器', color: '#388E3C', bg: '#E8F5E9', icon: 'FIL', hasInput: true, hasOutput: true },
+  DOWNSAMPLE: { name: '降采样', color: '#6D4C41', bg: '#EFEBE9', icon: 'DS', hasInput: true, hasOutput: true },
+  UPSAMPLE: { name: '升采样', color: '#455A64', bg: '#ECEFF1', icon: 'US', hasInput: true, hasOutput: true },
   SUM: { name: '求和器', color: '#7B1FA2', bg: '#F3E5F5', icon: 'SUM', hasInput: true, hasOutput: true },
   SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
   MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
   OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
   SPECTRUM: { name: '频谱', color: '#3F51B5', bg: '#E8EAF6', icon: 'FFT', hasInput: true, hasOutput: false },
   SAVE: { name: '保存', color: '#C2185B', bg: '#FCE4EC', icon: 'SAV', hasInput: true, hasOutput: false },
+  CUSTOM_PYFUNC: { name: 'Python函数', color: '#5E35B1', bg: '#EDE7F6', icon: 'PY', hasInput: true, hasOutput: true },
+  CUSTOM_CONV: { name: '卷积节点', color: '#00897B', bg: '#E0F2F1', icon: 'CNV', hasInput: true, hasOutput: true },
 };
 
 const sourceNodes = [
   { type: 'SOURCE' as GraphNodeType, name: '数据源', icon: 'SRC', color: '#1976D2', bg: '#E3F2FD' },
-  { type: 'REPLAY' as GraphNodeType, name: '回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD' },
 ];
 
 const processNodes = [
   { type: 'FILTER' as GraphNodeType, name: '滤波器', icon: 'FIL', color: '#388E3C', bg: '#E8F5E9' },
+  { type: 'DOWNSAMPLE' as GraphNodeType, name: '降采样', icon: 'DS', color: '#6D4C41', bg: '#EFEBE9' },
+  { type: 'UPSAMPLE' as GraphNodeType, name: '升采样', icon: 'US', color: '#455A64', bg: '#ECEFF1' },
   { type: 'SUM' as GraphNodeType, name: '求和器', icon: 'SUM', color: '#7B1FA2', bg: '#F3E5F5' },
   { type: 'SPLIT' as GraphNodeType, name: '分离器', icon: 'SPT', color: '#F9A825', bg: '#FFF8E1' },
   { type: 'MERGE' as GraphNodeType, name: '合并器', icon: 'MRG', color: '#EF6C00', bg: '#FFF3E0' },
+  { type: 'CUSTOM_PYFUNC' as GraphNodeType, name: 'Python函数', icon: 'PY', color: '#5E35B1', bg: '#EDE7F6' },
+  { type: 'CUSTOM_CONV' as GraphNodeType, name: '卷积节点', icon: 'CNV', color: '#00897B', bg: '#E0F2F1' },
 ];
 
 const outputNodes = [
   { type: 'OSC' as GraphNodeType, name: '示波器', icon: 'OSC', color: '#00796B', bg: '#E0F2F1' },
   { type: 'SPECTRUM' as GraphNodeType, name: '频谱', icon: 'FFT', color: '#3F51B5', bg: '#E8EAF6' },
-  { type: 'SAVE' as GraphNodeType, name: '保存', icon: 'SAV', color: '#C2185B', bg: '#FCE4EC' },
 ];
 
 // 打开节点编辑对话框
@@ -531,6 +616,20 @@ function parseLegacyNumberList(raw: unknown): number[] {
 function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown>) {
   const normalized = { ...params } as Record<string, unknown>;
 
+  if (type === 'SOURCE') {
+    normalized.sourceMode = String(normalized.sourceMode || 'live');
+    normalized.sampleRate = Math.max(1, Number(normalized.sampleRate || 1000));
+    normalized.channels = Math.max(1, Number(normalized.channels || 8));
+    normalized.filePath = String(normalized.filePath || '');
+    normalized.loop = Boolean(normalized.loop || false);
+  }
+
+  if (type === 'OSC') {
+    normalized.saveEnabled = Boolean(normalized.saveEnabled || false);
+    normalized.filename = String(normalized.filename || '');
+    normalized.format = String(normalized.format || 'CSV');
+  }
+
   if (type === 'SUM') {
     const existingInputs = Array.isArray(normalized.inputs) ? normalized.inputs as Array<Record<string, unknown>> : [];
     const legacyWeights = parseLegacyNumberList(normalized.weights);
@@ -567,13 +666,63 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
     delete normalized.channelIndices;
   }
 
+  if (type === 'CUSTOM_PYFUNC') {
+    normalized.portMode = String(normalized.portMode || 'fixed');
+    normalized.inputCount = Math.max(1, Number(normalized.inputCount || 2));
+    normalized.outputCount = Math.max(1, Number(normalized.outputCount || 1));
+    normalized.functionName = String(normalized.functionName || 'process_generated');
+    normalized.windowMode = String(normalized.windowMode || 'seconds');
+    normalized.windowSeconds = Math.max(0.01, Number(normalized.windowSeconds || 1));
+    normalized.windowPoints = Math.max(1, Number(normalized.windowPoints || 256));
+    normalized.hopMode = String(normalized.hopMode || 'points');
+    normalized.hopPoints = Math.max(1, Number(normalized.hopPoints || 1));
+    normalized.hopMs = Math.max(1, Number(normalized.hopMs || 10));
+    normalized.outputSampleRate = Math.max(1, Number(normalized.outputSampleRate || 100));
+    normalized.inputNames = Array.isArray(normalized.inputNames) ? normalized.inputNames : [];
+    normalized.outputNames = Array.isArray(normalized.outputNames) ? normalized.outputNames : [];
+    normalized.pythonEditableCode = String(normalized.pythonEditableCode || '');
+    normalized.pythonCode = String(normalized.pythonCode || '');
+  }
+
+  if (type === 'DOWNSAMPLE' || type === 'UPSAMPLE') {
+    normalized.mode = String(normalized.mode || 'targetRate');
+    normalized.targetRate = Math.max(1, Number(normalized.targetRate || (type === 'DOWNSAMPLE' ? 250 : 1000)));
+    normalized.factor = Math.max(1, Number(normalized.factor || 2));
+  }
+
+  if (type === 'CUSTOM_CONV') {
+    const rawKernel = normalized.kernel;
+    if (Array.isArray(rawKernel)) {
+      normalized.kernel = rawKernel;
+    } else if (typeof rawKernel === 'string') {
+      normalized.kernel = rawKernel
+        .split(',')
+        .map((token) => Number(token.trim()))
+        .filter((v) => Number.isFinite(v));
+    } else {
+      normalized.kernel = [0.25, 0.5, 0.25];
+    }
+  }
+
   return normalized;
+}
+
+function safePortCount(raw: unknown, fallback = 1): number {
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.floor(parsed));
 }
 
 function getInputPortIds(type: GraphNodeType, params: Record<string, unknown>): string[] {
   if (type === 'SUM' || type === 'MERGE') {
     const inputs = Array.isArray(params.inputs) ? params.inputs : [];
     const count = Math.max(1, inputs.length || 1);
+    return Array.from({ length: count }, (_, idx) => `in-${idx + 1}`);
+  }
+  const mode = String(params.portMode || 'fixed').toLowerCase();
+  if (mode === 'adaptive') return nodeTypes[type].hasInput ? ['in'] : [];
+  const count = safePortCount(params.inputCount, 1);
+  if (count > 1 && nodeTypes[type].hasInput) {
     return Array.from({ length: count }, (_, idx) => `in-${idx + 1}`);
   }
   return nodeTypes[type].hasInput ? ['in'] : [];
@@ -583,6 +732,12 @@ function getOutputPortIds(type: GraphNodeType, params: Record<string, unknown>):
   if (type === 'SPLIT') {
     const outputs = Array.isArray(params.outputs) ? params.outputs : [];
     const count = Math.max(1, outputs.length || 1);
+    return Array.from({ length: count }, (_, idx) => `out-${idx + 1}`);
+  }
+  const mode = String(params.portMode || 'fixed').toLowerCase();
+  if (mode === 'adaptive') return nodeTypes[type].hasOutput ? ['out'] : [];
+  const count = safePortCount(params.outputCount, 1);
+  if (count > 1 && nodeTypes[type].hasOutput) {
     return Array.from({ length: count }, (_, idx) => `out-${idx + 1}`);
   }
   return nodeTypes[type].hasOutput ? ['out'] : [];
@@ -666,10 +821,13 @@ function getDefaultNodeOutputPort(nodeId: string): string {
   return getOutputPortIds(data.type, params)[0] || 'out';
 }
 
-function formatEdgeChannelLabel(channelNames: string[]) {
+function formatEdgeChannelLabel(channelNames: string[], sampleRate?: number | null) {
+  const rateText = Number.isFinite(sampleRate) && (sampleRate || 0) > 0
+    ? `\n${Math.round(sampleRate || 0)} sps`
+    : '';
   if (channelNames.length === 0) return '无通道';
-  if (channelNames.length <= 4) return channelNames.join(', ');
-  return `${channelNames.slice(0, 4).join(', ')} … (${channelNames.length})`;
+  if (channelNames.length <= 4) return `${channelNames.join(', ')}${rateText}`;
+  return `${channelNames.slice(0, 4).join(', ')} … (${channelNames.length})${rateText}`;
 }
 
 function parsePortIndex(portId: string | undefined, fallback = 0) {
@@ -681,8 +839,14 @@ function parsePortIndex(portId: string | undefined, fallback = 0) {
 }
 
 function parseIndices(raw: unknown): number[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => Number(item))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }
   if (typeof raw !== 'string') return [];
   return raw
+    .replace(/，/g, ',')
     .split(',')
     .map((item) => Number(item.trim()))
     .filter((n) => Number.isInteger(n) && n >= 0);
@@ -692,7 +856,7 @@ function defaultChannelNames(count: number) {
   return Array.from({ length: Math.max(0, count) }, (_, idx) => `CH${idx + 1}`);
 }
 
-function inferNodeOutputChannels(nodeId: string, visited = new Set<string>()): string[] {
+function inferNodeOutputChannels(nodeId: string, sourcePort?: string, visited = new Set<string>()): string[] {
   const graph = graphRef.value;
   if (!graph) return [];
   if (visited.has(nodeId)) return [];
@@ -703,8 +867,8 @@ function inferNodeOutputChannels(nodeId: string, visited = new Set<string>()): s
   const data = node.getData() as GraphNode;
   const params = (data.params || {}) as Record<string, unknown>;
 
-  const incomingEdges = graph
-    .getIncomingEdges(node)
+  const incomingEdges = (graph.getIncomingEdges(node) || [])
+    .slice()
     .sort((a, b) => (a.getTargetPortId() || '').localeCompare(b.getTargetPortId() || ''));
 
   if (data.type === 'SOURCE') {
@@ -721,7 +885,8 @@ function inferNodeOutputChannels(nodeId: string, visited = new Set<string>()): s
 
   const upstreamEdge = incomingEdges[0];
   const upstreamNodeId = upstreamEdge?.getSourceCellId();
-  const upstreamChannels = upstreamNodeId ? inferNodeOutputChannels(upstreamNodeId, visited) : [];
+  const upstreamPortId = upstreamEdge?.getSourcePortId() || undefined;
+  const upstreamChannels = upstreamNodeId ? inferNodeOutputChannels(upstreamNodeId, upstreamPortId, visited) : [];
 
   if (data.type === 'FILTER') {
     return upstreamChannels;
@@ -736,17 +901,89 @@ function inferNodeOutputChannels(nodeId: string, visited = new Set<string>()): s
     incomingEdges.forEach((edge) => {
       const sourceId = edge.getSourceCellId();
       if (!sourceId) return;
-      const sourceNames = inferNodeOutputChannels(sourceId, new Set(visited));
+      const sourceNames = inferNodeOutputChannels(sourceId, edge.getSourcePortId() || undefined, new Set(visited));
       merged.push(...sourceNames);
     });
     return merged;
   }
 
   if (data.type === 'SPLIT') {
+    const paramsOutputs = Array.isArray(params.outputs) ? params.outputs as Array<Record<string, unknown>> : [];
+    const outputIdx = parsePortIndex(sourcePort, 0);
+    const outputCfg = paramsOutputs[outputIdx] || paramsOutputs[0];
+    const indices = parseIndices(outputCfg?.channelIndices);
+    const selected = indices.map((idx) => upstreamChannels[idx]).filter((name): name is string => Boolean(name));
+    if (selected.length > 0) return selected;
+    if (typeof outputCfg?.label === 'string' && outputCfg.label.trim() !== '') {
+      return [outputCfg.label.trim()];
+    }
     return upstreamChannels;
   }
 
   return upstreamChannels;
+}
+
+function inferNodeOutputSampleRate(nodeId: string, sourcePort?: string, visited = new Set<string>()): number | null {
+  const graph = graphRef.value;
+  if (!graph) return null;
+  if (visited.has(nodeId)) return null;
+  visited.add(nodeId);
+
+  const node = graph.getCellById(nodeId);
+  if (!node || !node.isNode()) return null;
+  const data = node.getData() as GraphNode;
+  const params = (data.params || {}) as Record<string, unknown>;
+
+  const incomingEdges = (graph.getIncomingEdges(node) || [])
+    .slice()
+    .sort((a, b) => (a.getTargetPortId() || '').localeCompare(b.getTargetPortId() || ''));
+
+  if (data.type === 'SOURCE' || data.type === 'REPLAY') {
+    const sr = Number(params.sampleRate || 1000);
+    return Number.isFinite(sr) && sr > 0 ? sr : 1000;
+  }
+
+  const upstreamEdge = incomingEdges[0];
+  const upstreamNodeId = upstreamEdge?.getSourceCellId();
+  const upstreamPortId = upstreamEdge?.getSourcePortId() || undefined;
+  const upstreamRate = upstreamNodeId ? inferNodeOutputSampleRate(upstreamNodeId, upstreamPortId, visited) : null;
+
+  if (data.type === 'DOWNSAMPLE') {
+    const inRate = upstreamRate || 1000;
+    const mode = String(params.mode || 'targetRate').toLowerCase();
+    if (mode === 'factor') {
+      const factor = Math.max(1, Number(params.factor || 2));
+      return inRate / factor;
+    }
+    const targetRate = Math.max(1, Number(params.targetRate || inRate / 2));
+    return Math.min(inRate, targetRate);
+  }
+
+  if (data.type === 'UPSAMPLE') {
+    const inRate = upstreamRate || 1000;
+    const mode = String(params.mode || 'targetRate').toLowerCase();
+    if (mode === 'factor') {
+      const factor = Math.max(1, Number(params.factor || 2));
+      return inRate * factor;
+    }
+    return Math.max(1, Number(params.targetRate || inRate));
+  }
+
+  if (data.type === 'CUSTOM_PYFUNC') {
+    const inRate = upstreamRate || 1000;
+    const hopMode = String(params.hopMode || 'points').toLowerCase();
+    if (hopMode === 'targetrate') {
+      return Math.max(1, Number(params.outputSampleRate || inRate));
+    }
+    if (hopMode === 'milliseconds') {
+      const hopMs = Math.max(1, Number(params.hopMs || 10));
+      return 1000 / hopMs;
+    }
+    const hopPoints = Math.max(1, Number(params.hopPoints || 1));
+    return inRate / hopPoints;
+  }
+
+  return upstreamRate;
 }
 
 function inferEdgeChannelNames(edge: import('@antv/x6').Edge): string[] {
@@ -767,7 +1004,7 @@ function inferEdgeChannelNames(edge: import('@antv/x6').Edge): string[] {
     const outputIdx = parsePortIndex(sourcePort, 0);
     const outputCfg = outputs[outputIdx] || outputs[0];
 
-    const incomingEdges = graph.getIncomingEdges(sourceNode);
+    const incomingEdges = graph.getIncomingEdges(sourceNode) || [];
     const inputEdge = incomingEdges[0];
     const upstreamId = inputEdge?.getSourceCellId();
     const upstreamNames = upstreamId ? inferNodeOutputChannels(upstreamId) : [];
@@ -784,12 +1021,15 @@ function inferEdgeChannelNames(edge: import('@antv/x6').Edge): string[] {
     return [sourceData.name || 'SUM'];
   }
 
-  return inferNodeOutputChannels(sourceNodeId);
+  return inferNodeOutputChannels(sourceNodeId, sourcePort);
 }
 
 function applyEdgeLabel(edge: import('@antv/x6').Edge) {
   const channelNames = inferEdgeChannelNames(edge);
-  const label = formatEdgeChannelLabel(channelNames);
+  const sourceNodeId = edge.getSourceCellId();
+  const sourcePort = edge.getSourcePortId() || undefined;
+  const sampleRate = sourceNodeId ? inferNodeOutputSampleRate(sourceNodeId, sourcePort) : null;
+  const label = formatEdgeChannelLabel(channelNames, sampleRate);
   edge.setLabels([
     {
       position: {
@@ -906,6 +1146,16 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const filterType = params['type'] || 'lowpass';
       const cutoff = params['cutoff'] || 50;
       return `${filterType} ${cutoff}Hz`;
+    case 'DOWNSAMPLE': {
+      const mode = String(params['mode'] || 'targetRate');
+      if (mode === 'factor') return `/${Math.max(1, Number(params['factor'] || 2))}`;
+      return `→${Math.max(1, Number(params['targetRate'] || 250))}Hz`;
+    }
+    case 'UPSAMPLE': {
+      const mode = String(params['mode'] || 'targetRate');
+      if (mode === 'factor') return `x${Math.max(1, Number(params['factor'] || 2))}`;
+      return `→${Math.max(1, Number(params['targetRate'] || 1000))}Hz`;
+    }
     case 'OSC':
       const timeWindow = params['timeWindow'] || 5;
       const mode = params['mode'] || 'scroll';
@@ -932,6 +1182,21 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
       const strategy = params['strategy'] || 'interleave';
       return `${inputs.length || 0}→1 ${strategy}`;
+    }
+    case 'CUSTOM_PYFUNC': {
+      const mode = params['portMode'] || 'fixed';
+      const inputCount = Number(params['inputCount'] || 2);
+      const outputCount = Number(params['outputCount'] || 1);
+      const hopMode = String(params['hopMode'] || 'points');
+      const hopDesc = hopMode === 'targetRate'
+        ? `${Math.max(1, Number(params['outputSampleRate'] || 100))}Hz`
+        : (hopMode === 'milliseconds' ? `${Math.max(1, Number(params['hopMs'] || 10))}ms` : `${Math.max(1, Number(params['hopPoints'] || 1))}pt`);
+      if (String(mode) === 'adaptive') return 'I/O 自适应';
+      return `${inputCount}→${outputCount} @${hopDesc}`;
+    }
+    case 'CUSTOM_CONV': {
+      const kernel = Array.isArray(params['kernel']) ? params['kernel'] : [];
+      return `kernel=${kernel.length || 0}`;
     }
     default:
       return '';
@@ -1210,8 +1475,8 @@ async function loadGraphFromFile(event: Event) {
   }
 }
 
-async function run() {
-  console.log('[GraphEditor] Run button clicked, frozen:', frozen.value);
+async function run(mode: 'live' | 'offline' = 'live') {
+  console.log('[GraphEditor] Run button clicked, mode:', mode, 'frozen:', frozen.value);
   
   // 启动 runtime（会验证冻结状态并连接 WebSocket）
   const success = await graphRuntime.start();
@@ -1224,10 +1489,12 @@ async function run() {
   console.log('[GraphEditor] Runtime started, calling runGraph API');
   // 调用后端API
   try {
-    const res = await runGraph();
+    const res = await runGraph(mode);
     console.log('[GraphEditor] Graph run API called successfully');
     if (res.ok) {
       isRunning.value = true;
+      runtimeMode.value = mode;
+      offlineProgress.value = 0;
       startRuntimeStatePolling();
     }
   } catch (err) {
@@ -1304,6 +1571,10 @@ function clear() {
   stopMockDataStream();
   stopRuntimeStatePolling();
   isRunning.value = false;
+  offlineProgress.value = 0;
+  processingDelayMs.value = 0;
+  nonRealtime.value = false;
+  runtimeWarning.value = null;
   
   graph.clearCells();
   hasNodes.value = false;
@@ -1459,6 +1730,14 @@ onMounted(async () => {
 
   graph.on('edge:removed', () => {
     updateAllEdgeLabels();
+  });
+
+  graph.on('edge:change:source', ({ edge }) => {
+    if (edge) applyEdgeLabel(edge);
+  });
+
+  graph.on('edge:change:target', ({ edge }) => {
+    if (edge) applyEdgeLabel(edge);
   });
 
   // 节点双击编辑

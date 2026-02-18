@@ -1143,7 +1143,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
     : undefined;
   ensureChannelSchema(inferredCount, inferredNames);
 
-  const packetTs = Number(packet.timestamp || 0);
+  const packetTs = Number(packet.utcFirstFrameMs || packet.timestamp || 0);
   if (Number.isFinite(packetTs) && packetTs > 0) {
     const lagMs = Date.now() - packetTs;
     if (lagMs > MAX_DISPLAY_LAG_MS) {
@@ -1189,7 +1189,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
   if (Array.isArray(packet.spectra) && packet.spectra.length > 0) {
     const byChannel = { ...spectrogramRowsByChannel.value };
     const frame: { timestamp: number; avg?: number[]; channels: Record<number, number[]> } = { 
-      timestamp: packet.timestamp || Date.now(),
+      timestamp: packet.utcFirstFrameMs || packet.timestamp || Date.now(),
       channels: {} 
     };
     if (Array.isArray(packet.spectrogramRow) && packet.spectrogramRow.length > 1) {

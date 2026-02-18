@@ -16,23 +16,26 @@
           "CH6",
           "CH7",
           "CH8"
-        ]
+        ],
+        "sourceMode": "live",
+        "filePath": "",
+        "loop": false
       },
       "id": "node-1771072109663-775",
-      "x": 50,
+      "x": 10,
       "y": 100
     },
     {
       "type": "FILTER",
       "name": "低通滤波器",
       "params": {
-        "type": "陷波",
-        "cutoff": 100,
+        "type": "低通",
+        "cutoff": 20,
         "order": 4
       },
       "id": "node-1771072109667-217",
-      "x": 500,
-      "y": 220
+      "x": 540,
+      "y": 270
     },
     {
       "type": "SPLIT",
@@ -50,7 +53,7 @@
         ]
       },
       "id": "node-1771072109669-612",
-      "x": 280,
+      "x": 290,
       "y": 100
     },
     {
@@ -71,10 +74,13 @@
           "CH2",
           "CH3",
           "CH4"
-        ]
+        ],
+        "saveEnabled": false,
+        "filename": "",
+        "format": "CSV"
       },
       "id": "node-1771072109669-111",
-      "x": 740,
+      "x": 850,
       "y": 80
     },
     {
@@ -99,11 +105,14 @@
           "CH6",
           "CH7",
           "CH8"
-        ]
+        ],
+        "saveEnabled": false,
+        "filename": "",
+        "format": "CSV"
       },
       "id": "node-1771409666522-919",
-      "x": 740,
-      "y": 190
+      "x": 840,
+      "y": 200
     }
   ],
   "edges": [

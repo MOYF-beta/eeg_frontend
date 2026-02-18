@@ -24,8 +24,20 @@
         
         <!-- 数据源专用表单 -->
         <template v-if="nodeType === 'SOURCE'">
+          <v-select
+            v-model="form.params.sourceMode"
+            :items="[{ title: '实时', value: 'live' }, { title: '回放', value: 'replay' }]"
+            item-title="title"
+            item-value="value"
+            label="输入模式"
+            density="compact"
+            variant="outlined"
+            class="mb-3"
+          />
+
           <!-- 设备选择器 -->
           <v-select
+            v-if="form.params.sourceMode !== 'replay'"
             v-model="selectedDeviceId"
             :items="availableDevices"
             item-title="displayName"
@@ -61,6 +73,23 @@
           </v-select>
 
           <v-divider class="my-3" />
+
+          <template v-if="form.params.sourceMode === 'replay'">
+            <v-text-field
+              v-model="form.params.filePath"
+              label="回放文件名/路径"
+              density="compact"
+              variant="outlined"
+              class="mb-3"
+            />
+            <v-checkbox
+              v-model="form.params.loop"
+              label="循环播放"
+              density="compact"
+              hide-details
+              class="mb-3"
+            />
+          </template>
           
           <v-text-field
             v-model.number="form.params.sampleRate"
@@ -160,6 +189,33 @@
                 clearable
                 :hint="boundOscilloscopeId ? '已绑定' : '未绑定'"
                 persistent-hint
+              />
+
+              <v-divider class="my-3" />
+
+              <v-checkbox
+                v-model="form.params.saveEnabled"
+                label="同时保存到文件"
+                density="compact"
+                hide-details
+                class="mb-2"
+              />
+              <v-text-field
+                v-if="form.params.saveEnabled"
+                v-model="form.params.filename"
+                label="输出文件名"
+                density="compact"
+                variant="outlined"
+                class="mb-2"
+                placeholder="eeg_output.csv"
+              />
+              <v-select
+                v-if="form.params.saveEnabled"
+                v-model="form.params.format"
+                :items="['CSV', 'EDF', 'NPY']"
+                label="保存格式"
+                density="compact"
+                variant="outlined"
               />
             </v-card-text>
           </v-card>
@@ -415,6 +471,209 @@
             </v-card-text>
           </v-card>
         </template>
+
+        <!-- 自定义 Python 节点 -->
+        <template v-else-if="nodeType === 'CUSTOM_PYFUNC' || nodeType === 'CUSTOM_CONV'">
+          <v-card variant="outlined" class="mb-3" v-if="nodeType === 'CUSTOM_PYFUNC'">
+            <v-card-title class="text-subtitle-2">输入输出配置</v-card-title>
+            <v-card-text>
+              <v-select
+                v-model="form.params.portMode"
+                :items="['fixed', 'adaptive']"
+                label="端口模式"
+                density="compact"
+                variant="outlined"
+                class="mb-3"
+              />
+              <v-row>
+                <v-col cols="6">
+                  <v-text-field
+                    v-model.number="form.params.inputCount"
+                    label="输入数量"
+                    type="number"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="form.params.portMode === 'adaptive'"
+                  />
+                </v-col>
+                <v-col cols="6">
+                  <v-text-field
+                    v-model.number="form.params.outputCount"
+                    label="输出数量"
+                    type="number"
+                    density="compact"
+                    variant="outlined"
+                    :disabled="form.params.portMode === 'adaptive'"
+                  />
+                </v-col>
+              </v-row>
+
+              <v-row>
+                <v-col cols="12" md="6">
+                  <v-text-field
+                    v-model="form.params.functionName"
+                    label="函数名（自动签名）"
+                    density="compact"
+                    variant="outlined"
+                    hint="仅支持字母数字下划线"
+                    persistent-hint
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-select
+                    v-model="form.params.windowMode"
+                    :items="[{title: '秒', value: 'seconds'}, {title: '数据点', value: 'points'}]"
+                    item-title="title"
+                    item-value="value"
+                    label="滑动窗口单位"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-select
+                    v-model="form.params.hopMode"
+                    :items="[
+                      { title: '滑动点数', value: 'points' },
+                      { title: '滑动毫秒', value: 'milliseconds' },
+                      { title: '目标输出频率', value: 'targetRate' }
+                    ]"
+                    item-title="title"
+                    item-value="value"
+                    label="滑动间隔模式"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6" v-if="form.params.windowMode !== 'points'">
+                  <v-text-field
+                    v-model.number="form.params.windowSeconds"
+                    label="窗口秒数"
+                    type="number"
+                    min="0.01"
+                    step="0.1"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6" v-else>
+                  <v-text-field
+                    v-model.number="form.params.windowPoints"
+                    label="窗口数据点"
+                    type="number"
+                    min="1"
+                    step="1"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6" v-if="form.params.hopMode === 'points'">
+                  <v-text-field
+                    v-model.number="form.params.hopPoints"
+                    label="滑动间隔点数"
+                    type="number"
+                    min="1"
+                    step="1"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6" v-else-if="form.params.hopMode === 'milliseconds'">
+                  <v-text-field
+                    v-model.number="form.params.hopMs"
+                    label="滑动间隔毫秒"
+                    type="number"
+                    min="1"
+                    step="1"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6" v-else>
+                  <v-text-field
+                    v-model.number="form.params.outputSampleRate"
+                    label="目标输出频率 (Hz)"
+                    type="number"
+                    min="1"
+                    step="1"
+                    density="compact"
+                    variant="outlined"
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-text-field
+                    v-model="inputNamesText"
+                    label="输入变量名（逗号分隔）"
+                    density="compact"
+                    variant="outlined"
+                    hint="顺序对应前端输入连接桩"
+                    persistent-hint
+                  />
+                </v-col>
+                <v-col cols="12" md="6">
+                  <v-text-field
+                    v-model="outputNamesText"
+                    label="输出变量名（逗号分隔）"
+                    density="compact"
+                    variant="outlined"
+                    hint="顺序对应前端输出连接桩"
+                    persistent-hint
+                  />
+                </v-col>
+              </v-row>
+            </v-card-text>
+          </v-card>
+
+          <v-card variant="outlined" class="mb-3" v-if="nodeType === 'CUSTOM_CONV'">
+            <v-card-title class="text-subtitle-2">卷积配置</v-card-title>
+            <v-card-text>
+              <v-text-field
+                v-model="kernelText"
+                label="卷积核 (逗号分隔)"
+                density="compact"
+                variant="outlined"
+                hint="示例: 0.25,0.5,0.25"
+                persistent-hint
+              />
+            </v-card-text>
+          </v-card>
+
+          <v-card variant="outlined">
+            <v-card-title class="text-subtitle-2 d-flex align-center">
+              Python 代码
+              <v-spacer />
+              <v-btn size="small" variant="text" @click="generatePrototype" v-if="nodeType === 'CUSTOM_PYFUNC'">后端生成原型</v-btn>
+              <v-btn size="small" variant="text" @click="resetPythonCode">恢复默认</v-btn>
+              <v-btn size="small" variant="text" @click="triggerPythonImport">导入 .py</v-btn>
+              <v-btn size="small" variant="text" @click="exportPythonCode">导出 .py</v-btn>
+            </v-card-title>
+            <v-card-text>
+              <v-textarea
+                v-if="nodeType === 'CUSTOM_PYFUNC'"
+                :model-value="pythonHeaderCode"
+                label="自动生成（不可编辑）：声明 + 参数读取"
+                rows="8"
+                density="compact"
+                variant="outlined"
+                readonly
+                class="mb-2"
+              />
+
+              <div ref="codeEditorHost" class="code-editor-host" />
+
+              <v-textarea
+                v-if="nodeType === 'CUSTOM_PYFUNC'"
+                :model-value="pythonFooterCode"
+                label="自动生成（不可编辑）：输出检查 + return"
+                rows="8"
+                density="compact"
+                variant="outlined"
+                readonly
+                class="mt-2"
+              />
+            </v-card-text>
+          </v-card>
+        </template>
         
         <!-- 其他节点通用参数 -->
         <template v-else>
@@ -439,11 +698,22 @@
       </v-card-actions>
     </v-card>
   </v-dialog>
+
+  <input
+    ref="pythonFileInput"
+    type="file"
+    accept=".py,text/x-python"
+    style="display: none"
+    @change="importPythonFile"
+  />
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
+import { basicSetup, EditorView } from 'codemirror';
+import { javascript } from '@codemirror/lang-javascript';
 import { sessionStore } from '../../services/sessionStore';
+import { fetchGraphPythonLibrary, generateGraphPythonPrototype } from '../../services/graph';
 
 interface GraphNode {
   id: string;
@@ -493,6 +763,8 @@ const typeInfo: Record<string, { name: string; icon: string; color: string }> = 
   OSC: { name: '示波器', icon: 'mdi-chart-line', color: 'teal' },
   SPECTRUM: { name: '频谱', icon: 'mdi-chart-bar', color: 'indigo' },
   SAVE: { name: '保存', icon: 'mdi-content-save', color: 'pink' },
+  CUSTOM_PYFUNC: { name: 'Python函数', icon: 'mdi-language-python', color: 'deep-purple' },
+  CUSTOM_CONV: { name: '卷积节点', icon: 'mdi-waveform', color: 'cyan-darken-2' },
 };
 
 const nodeTypeName = computed(() => typeInfo[nodeType.value]?.name || '节点');
@@ -525,6 +797,16 @@ interface SplitOutputConfig {
 const sumInputs = ref<SumInputConfig[]>([]);
 const mergeInputs = ref<MergeInputConfig[]>([]);
 const splitOutputs = ref<SplitOutputConfig[]>([]);
+const pythonCode = ref('');
+const pythonHeaderCode = ref('');
+const pythonFooterCode = ref('');
+const defaultCodeLibrary = ref<Record<string, string>>({});
+const pythonFileInput = ref<HTMLInputElement | null>(null);
+const codeEditorHost = ref<HTMLDivElement | null>(null);
+let codeEditor: EditorView | null = null;
+const kernelText = ref('0.25,0.5,0.25');
+const inputNamesText = ref('');
+const outputNamesText = ref('');
 
 // 通道相关
 const channelNames = ref<string[]>(['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8']);
@@ -597,8 +879,14 @@ function getIncomingEdge(nodeId: string): GraphEdge | null {
 }
 
 function parseIndices(raw: unknown): number[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((item) => Number(item))
+      .filter((n) => Number.isInteger(n) && n >= 0);
+  }
   if (typeof raw !== 'string') return [];
   return raw
+    .replace(/，/g, ',')
     .split(',')
     .map((item) => Number(item.trim()))
     .filter((n) => Number.isInteger(n) && n >= 0);
@@ -687,6 +975,20 @@ function updateChannelInfo() {
 }
 
 function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
+  if (type === 'SOURCE') {
+    params.sourceMode = params.sourceMode || 'live';
+    params.filePath = String(params.filePath || '');
+    params.loop = Boolean(params.loop || false);
+    params.sampleRate = Math.max(1, Number(params.sampleRate || 1000));
+    params.channels = Math.max(1, Number(params.channels || 8));
+  }
+
+  if (type === 'OSC') {
+    params.saveEnabled = Boolean(params.saveEnabled || false);
+    params.filename = String(params.filename || '');
+    params.format = String(params.format || 'CSV');
+  }
+
   if (type === 'SUM') {
     const legacyWeights = typeof params.weights === 'string'
       ? params.weights.split(',').map((w: string) => Number(w.trim())).filter((v: number) => !Number.isNaN(v))
@@ -731,6 +1033,193 @@ function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
     params.outputs = normalized;
     delete params.channelIndices;
   }
+
+  if (type === 'CUSTOM_PYFUNC') {
+    params.portMode = params.portMode || 'fixed';
+    params.inputCount = Math.max(1, Number(params.inputCount || 2));
+    params.outputCount = Math.max(1, Number(params.outputCount || 1));
+    params.functionName = String(params.functionName || 'process_generated');
+    params.windowMode = params.windowMode || 'seconds';
+    params.windowSeconds = Math.max(0.01, Number(params.windowSeconds || 1));
+    params.windowPoints = Math.max(1, Number(params.windowPoints || 256));
+    params.hopMode = params.hopMode || 'points';
+    params.hopPoints = Math.max(1, Number(params.hopPoints || 1));
+    params.hopMs = Math.max(1, Number(params.hopMs || 10));
+    params.outputSampleRate = Math.max(1, Number(params.outputSampleRate || 100));
+    if (!Array.isArray(params.inputNames)) {
+      params.inputNames = [];
+    }
+    if (!Array.isArray(params.outputNames)) {
+      params.outputNames = [];
+    }
+    params.pythonEditableCode = String(params.pythonEditableCode || '');
+    params.pythonCode = String(params.pythonCode || '');
+  }
+
+  if (type === 'CUSTOM_CONV') {
+    const kernel = Array.isArray(params.kernel) ? params.kernel : [0.25, 0.5, 0.25];
+    params.kernel = kernel;
+    params.pythonCode = String(params.pythonCode || '');
+    kernelText.value = kernel.join(',');
+  }
+}
+
+function destroyCodeEditor() {
+  codeEditor?.destroy();
+  codeEditor = null;
+}
+
+function createCodeEditor() {
+  if (!codeEditorHost.value) return;
+  destroyCodeEditor();
+  codeEditor = new EditorView({
+    doc: pythonCode.value || 'pass\n',
+    extensions: [
+      basicSetup,
+      javascript(),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) {
+          pythonCode.value = update.state.doc.toString();
+          if (nodeType.value === 'CUSTOM_PYFUNC') {
+            form.value.params.pythonEditableCode = pythonCode.value;
+          } else {
+            form.value.params.pythonCode = pythonCode.value;
+          }
+        }
+      }),
+    ],
+    parent: codeEditorHost.value,
+  });
+}
+
+function syncEditorDoc(newDoc: string) {
+  if (!codeEditor) return;
+  const current = codeEditor.state.doc.toString();
+  if (current === newDoc) return;
+  codeEditor.dispatch({
+    changes: { from: 0, to: current.length, insert: newDoc },
+  });
+}
+
+async function ensureDefaultLibraryLoaded() {
+  if (Object.keys(defaultCodeLibrary.value).length > 0) return;
+  try {
+    defaultCodeLibrary.value = await fetchGraphPythonLibrary();
+  } catch (e) {
+    console.warn('[NodeEditDialog] Failed to load default code library:', e);
+    defaultCodeLibrary.value = {};
+  }
+}
+
+function parseNameList(raw: unknown): string[] {
+  if (Array.isArray(raw)) {
+    return raw.map((item) => String(item).trim()).filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    return raw.split(',').map((item) => item.trim()).filter(Boolean);
+  }
+  return [];
+}
+
+function toNameText(raw: unknown): string {
+  return parseNameList(raw).join(', ');
+}
+
+function extractEditableCodeFromFull(code: string): string {
+  const start = '"""以下为可以编辑的部分"""';
+  const end = '"""以上为可以编辑的部分"""';
+  const startIdx = code.indexOf(start);
+  const endIdx = code.indexOf(end);
+  if (startIdx < 0 || endIdx < 0 || endIdx <= startIdx) {
+    return code.trim();
+  }
+  return code.slice(startIdx + start.length, endIdx).trim();
+}
+
+function currentPrototypePayload() {
+  const inputCount = Math.max(1, Number(form.value.params.inputCount || 1));
+  const outputCount = Math.max(1, Number(form.value.params.outputCount || 1));
+  return {
+    inputCount,
+    outputCount,
+    functionName: String(form.value.params.functionName || 'process_generated'),
+    inputNames: parseNameList(inputNamesText.value),
+    outputNames: parseNameList(outputNamesText.value),
+    editableCode: pythonCode.value,
+  };
+}
+
+async function refreshPythonPrototypeShell(overwriteEditable = false) {
+  if (nodeType.value !== 'CUSTOM_PYFUNC') return;
+  try {
+    const spec = await generateGraphPythonPrototype(currentPrototypePayload());
+    pythonHeaderCode.value = String(spec?.headerCode || '');
+    pythonFooterCode.value = String(spec?.footerCode || '');
+    form.value.params.functionName = String(spec?.functionName || form.value.params.functionName || 'process_generated');
+    inputNamesText.value = Array.isArray(spec?.inputNames) ? spec.inputNames.join(', ') : inputNamesText.value;
+    outputNamesText.value = Array.isArray(spec?.outputNames) ? spec.outputNames.join(', ') : outputNamesText.value;
+
+    if (overwriteEditable || !pythonCode.value.trim()) {
+      const editable = String(spec?.editableCode || '').trim();
+      pythonCode.value = editable;
+      syncEditorDoc(editable);
+    }
+
+    form.value.params.inputNames = parseNameList(inputNamesText.value);
+    form.value.params.outputNames = parseNameList(outputNamesText.value);
+    form.value.params.pythonEditableCode = pythonCode.value;
+    form.value.params.pythonCode = String(spec?.code || '');
+  } catch (e) {
+    console.error('[NodeEditDialog] refresh prototype shell failed:', e);
+  }
+}
+
+async function generatePrototype() {
+  await refreshPythonPrototypeShell(true);
+}
+
+async function resetPythonCode() {
+  await ensureDefaultLibraryLoaded();
+  const byType = defaultCodeLibrary.value[nodeType.value];
+  const code = String(byType || '');
+  const editable = extractEditableCodeFromFull(code);
+  pythonCode.value = editable;
+  syncEditorDoc(editable);
+  form.value.params.pythonEditableCode = editable;
+  await refreshPythonPrototypeShell(false);
+}
+
+function triggerPythonImport() {
+  pythonFileInput.value?.click();
+}
+
+async function importPythonFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  const content = await file.text();
+  const editable = extractEditableCodeFromFull(content);
+  pythonCode.value = editable;
+  syncEditorDoc(editable);
+  form.value.params.pythonEditableCode = editable;
+  await refreshPythonPrototypeShell(false);
+  input.value = '';
+}
+
+async function exportPythonCode() {
+  if (nodeType.value === 'CUSTOM_PYFUNC') {
+    await refreshPythonPrototypeShell(false);
+  }
+  const content = String(form.value.params.pythonCode || '');
+  const blob = new Blob([content], { type: 'text/x-python' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${form.value.name || nodeTypeName.value || 'node'}.py`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 function addSumInput() {
@@ -785,12 +1274,85 @@ watch(() => props.nodeData, (data) => {
     
     // 更新上游通道信息
     updateChannelInfo();
+
+    if (data.type === 'CUSTOM_PYFUNC') {
+      const editable = String(form.value.params.pythonEditableCode || '').trim()
+        || extractEditableCodeFromFull(String(form.value.params.pythonCode || ''));
+      pythonCode.value = editable;
+      form.value.params.pythonEditableCode = editable;
+      inputNamesText.value = toNameText(form.value.params.inputNames);
+      outputNamesText.value = toNameText(form.value.params.outputNames);
+      pythonHeaderCode.value = '';
+      pythonFooterCode.value = '';
+    } else {
+      pythonCode.value = String(form.value.params.pythonCode || '');
+      pythonHeaderCode.value = '';
+      pythonFooterCode.value = '';
+    }
+
+    if (data.type === 'CUSTOM_CONV') {
+      const kernel = Array.isArray(form.value.params.kernel) ? form.value.params.kernel : [0.25, 0.5, 0.25];
+      kernelText.value = kernel.join(',');
+    }
     
     // 检查是否已绑定示波器
     const osc = sessionStore.getOutputNodeOscilloscope(data.id);
     boundOscilloscopeId.value = osc?.id || null;
   }
 }, { immediate: true });
+
+watch([show, nodeType], async ([dialogOpen, type]) => {
+  if (!dialogOpen || (type !== 'CUSTOM_PYFUNC' && type !== 'CUSTOM_CONV')) {
+    destroyCodeEditor();
+    return;
+  }
+  await ensureDefaultLibraryLoaded();
+  if (!pythonCode.value && defaultCodeLibrary.value[type]) {
+    if (type === 'CUSTOM_PYFUNC') {
+      pythonCode.value = extractEditableCodeFromFull(String(defaultCodeLibrary.value[type] || ''));
+      form.value.params.pythonEditableCode = pythonCode.value;
+    } else {
+      pythonCode.value = String(defaultCodeLibrary.value[type] || '');
+      form.value.params.pythonCode = pythonCode.value;
+    }
+  }
+  if (type === 'CUSTOM_PYFUNC') {
+    await refreshPythonPrototypeShell(false);
+  }
+  await nextTick();
+  createCodeEditor();
+});
+
+watch(
+  [
+    () => form.value.params.inputCount,
+    () => form.value.params.outputCount,
+    () => form.value.params.functionName,
+    () => form.value.params.portMode,
+    () => form.value.params.windowMode,
+    () => form.value.params.windowSeconds,
+    () => form.value.params.windowPoints,
+    () => form.value.params.hopMode,
+    () => form.value.params.hopPoints,
+    () => form.value.params.hopMs,
+    () => form.value.params.outputSampleRate,
+    inputNamesText,
+    outputNamesText,
+  ],
+  async () => {
+    if (!show.value || nodeType.value !== 'CUSTOM_PYFUNC') return;
+    await refreshPythonPrototypeShell(false);
+  }
+);
+
+watch(kernelText, (value) => {
+  if (nodeType.value !== 'CUSTOM_CONV') return;
+  const kernel = String(value)
+    .split(',')
+    .map((token) => Number(token.trim()))
+    .filter((num) => Number.isFinite(num));
+  form.value.params.kernel = kernel.length > 0 ? kernel : [1];
+});
 
 watch(paramsJson, (val) => {
   try {
@@ -813,7 +1375,7 @@ const close = () => {
   show.value = false;
 };
 
-const save = () => {
+const save = async () => {
   if (jsonError.value) return;
 
   if (nodeType.value === 'SUM') {
@@ -840,20 +1402,49 @@ const save = () => {
   
   // 保存通道信息
   if (nodeType.value === 'SOURCE') {
+    form.value.params.sourceMode = form.value.params.sourceMode || 'live';
+    form.value.params.filePath = String(form.value.params.filePath || '');
+    form.value.params.loop = Boolean(form.value.params.loop || false);
     form.value.params.channelNames = channelNames.value;
     // 保存设备ID到params
-    form.value.params.deviceId = selectedDeviceId.value;
+    form.value.params.deviceId = form.value.params.sourceMode === 'replay' ? null : selectedDeviceId.value;
   }
   
   // 保存示波器通道选择
   if (nodeType.value === 'OSC') {
     form.value.params.selectedChannels = availableChannels.value.map((_, i) => i);
     form.value.params.availableChannels = availableChannels.value;
+    form.value.params.saveEnabled = Boolean(form.value.params.saveEnabled || false);
+    form.value.params.filename = String(form.value.params.filename || '');
+    form.value.params.format = String(form.value.params.format || 'CSV');
   }
 
   if (nodeType.value === 'SPECTRUM') {
     form.value.params.selectedChannels = selectedChannels.value;
     form.value.params.availableChannels = availableChannels.value;
+  }
+
+  if (nodeType.value === 'CUSTOM_PYFUNC') {
+    form.value.params.portMode = form.value.params.portMode || 'fixed';
+    form.value.params.inputCount = Math.max(1, Number(form.value.params.inputCount || 1));
+    form.value.params.outputCount = Math.max(1, Number(form.value.params.outputCount || 1));
+    form.value.params.functionName = String(form.value.params.functionName || 'process_generated');
+    form.value.params.windowMode = form.value.params.windowMode || 'seconds';
+    form.value.params.windowSeconds = Math.max(0.01, Number(form.value.params.windowSeconds || 1));
+    form.value.params.windowPoints = Math.max(1, Number(form.value.params.windowPoints || 256));
+    form.value.params.hopMode = form.value.params.hopMode || 'points';
+    form.value.params.hopPoints = Math.max(1, Number(form.value.params.hopPoints || 1));
+    form.value.params.hopMs = Math.max(1, Number(form.value.params.hopMs || 10));
+    form.value.params.outputSampleRate = Math.max(1, Number(form.value.params.outputSampleRate || 100));
+    form.value.params.inputNames = parseNameList(inputNamesText.value);
+    form.value.params.outputNames = parseNameList(outputNamesText.value);
+    form.value.params.pythonEditableCode = pythonCode.value;
+    await refreshPythonPrototypeShell(false);
+  }
+
+  if (nodeType.value === 'CUSTOM_CONV') {
+    form.value.params.pythonCode = pythonCode.value;
+    form.value.params.kernel = Array.isArray(form.value.params.kernel) ? form.value.params.kernel : [0.25, 0.5, 0.25];
   }
   
   emit('save', {
@@ -872,4 +1463,25 @@ const save = () => {
   
   close();
 };
+
+onMounted(() => {
+  ensureDefaultLibraryLoaded();
+});
+
+onUnmounted(() => {
+  destroyCodeEditor();
+});
 </script>
+
+<style scoped>
+.code-editor-host {
+  min-height: 260px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+:deep(.cm-editor) {
+  min-height: 260px;
+}
+</style>

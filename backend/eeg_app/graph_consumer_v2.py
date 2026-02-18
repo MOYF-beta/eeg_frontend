@@ -1,0 +1,371 @@
+from __future__ import annotations
+# pyright: reportMissingImports=false
+
+import asyncio
+import json
+import time
+from collections import deque
+from typing import Dict, List, Optional, Set
+
+import numpy as np
+from channels.generic.websocket import AsyncWebsocketConsumer
+
+from .graph_engine import GraphExecutionManager
+
+
+class EegGraphConsumerV2(AsyncWebsocketConsumer):
+    """Path-threaded graph consumer with UTC-ms packet timestamp support."""
+
+    async def connect(self):
+        await self.accept()
+        self.subscribed_nodes: Set[str] = set()
+        self.running = True
+        self.graph_frozen = False
+
+        self._save_nodes: List[str] = []
+        self._replay_nodes: List[str] = []
+        self._save_replay_signature: Optional[str] = None
+
+        self._engine = GraphExecutionManager()
+        self._sample_buffer: Dict[str, List[List[float]]] = {}
+        self._sample_channel_names: Dict[str, List[str]] = {}
+        self._sample_rates: Dict[str, int] = {}
+        self._batch_first_utc: Dict[str, int] = {}
+
+        self._spectrum_buffers_by_node: Dict[str, List[deque]] = {}
+
+        from .graph_store import get_graph
+
+        graph = get_graph()
+        self.graph_frozen = bool(graph.get('frozen', False))
+
+        self._sync_save_replay_nodes(graph)
+        if self.graph_frozen:
+            asyncio.create_task(self.stream_data())
+
+        print(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
+
+    async def disconnect(self, code):
+        self.running = False
+        self._engine.stop_all()
+        self._stop_all_save_replay()
+        print(f"[WebSocket] Client disconnected, code: {code}")
+
+    @staticmethod
+    def _extract_fft_size(nodes):
+        valid_sizes = {256, 512, 1024, 2048}
+        for node in nodes:
+            if str(node.get('type')).upper() != 'SPECTRUM':
+                continue
+            params = node.get('params', {}) or {}
+            raw = params.get('fftSize', params.get('fft_size', 512))
+            try:
+                size = int(raw)
+            except Exception:
+                continue
+            if size in valid_sizes:
+                return size
+        return 512
+
+    def _ensure_spectrum_buffers(self, node_id: str, channel_count: int, maxlen: int = 4096) -> None:
+        channel_count = max(1, int(channel_count))
+        existing = self._spectrum_buffers_by_node.get(node_id) or []
+        if len(existing) != channel_count:
+            existing = [deque(maxlen=maxlen) for _ in range(channel_count)]
+            self._spectrum_buffers_by_node[node_id] = existing
+
+    def _compute_spectrum_bundle(self, node_id: str, sample_rate: int, fft_size: int):
+        if fft_size < 8:
+            return None
+
+        buffers = self._spectrum_buffers_by_node.get(node_id) or []
+        if not buffers:
+            return None
+
+        min_len = min((len(ch) for ch in buffers), default=0)
+        if min_len < fft_size:
+            return None
+
+        channel_frames = []
+        for ch in buffers:
+            arr = np.array(list(ch)[-fft_size:], dtype=np.float64)
+            channel_frames.append(arr)
+
+        data = np.stack(channel_frames, axis=0)
+        window = np.hamming(fft_size)
+        data = data * window
+
+        fft = np.fft.rfft(data, axis=1)
+        mags = np.abs(fft) / fft_size
+        avg = np.mean(mags, axis=0)
+
+        db = 20.0 * np.log10(np.maximum(avg, 1e-12))
+        db_min = float(np.min(db))
+        db_max = float(np.max(db))
+        span = max(1e-6, db_max - db_min)
+        norm_row = np.clip((db - db_min) / span, 0.0, 1.0)
+
+        return {
+            'fftSize': fft_size,
+            'freqResolution': float(sample_rate / fft_size),
+            'spectra': mags.tolist(),
+            'spectrum': avg.tolist(),
+            'spectrogramRow': norm_row.tolist(),
+            'spectrogramDbMin': db_min,
+            'spectrogramDbMax': db_max,
+        }
+
+    def _build_save_replay_signature(self, graph: Dict) -> str:
+        nodes = graph.get('nodes', []) or []
+        filtered = [
+            {
+                'id': n.get('id'),
+                'type': n.get('type'),
+                'params': n.get('params', {}),
+            }
+            for n in nodes
+            if (
+                str(n.get('type')).upper() in {'SAVE', 'REPLAY'}
+                or (
+                    str(n.get('type')).upper() == 'SOURCE'
+                    and str((n.get('params') or {}).get('sourceMode') or 'live').lower() == 'replay'
+                )
+                or (
+                    str(n.get('type')).upper() in {'OSC', 'SPECTRUM'}
+                    and bool((n.get('params') or {}).get('saveEnabled', False))
+                )
+            )
+        ]
+        return json.dumps(filtered, ensure_ascii=False, sort_keys=True)
+
+    def _sync_save_replay_nodes(self, graph: Dict) -> None:
+        signature = self._build_save_replay_signature(graph)
+        if signature == self._save_replay_signature:
+            return
+
+        self._stop_all_save_replay()
+        self._save_replay_signature = signature
+
+        from .data_recorder import start_recording
+        from .data_replay import start_replay
+
+        self._save_nodes = []
+        self._replay_nodes = []
+
+        nodes = graph.get('nodes', []) or []
+        for node in nodes:
+            node_type = str(node.get('type') or '').upper()
+            params = node.get('params', {}) or {}
+            node_id = node.get('id')
+            if not node_id:
+                continue
+
+            if node_type == 'SAVE' or (node_type in {'OSC', 'SPECTRUM'} and bool(params.get('saveEnabled', False))):
+                filename = params.get('filename') or params.get('filePath')
+                format_type = str(params.get('format', 'CSV')).upper()
+                result = start_recording(node_id=node_id, filename=filename, format=format_type)
+                if result.get('ok'):
+                    self._save_nodes.append(node_id)
+                    print(f"[WebSocket] SAVE node initialized: {node_id} -> {result.get('filepath')}")
+                else:
+                    print(f"[WebSocket] SAVE node failed: {node_id} - {result.get('error')}")
+
+            is_replay_source = node_type == 'REPLAY' or (
+                node_type == 'SOURCE' and str(params.get('sourceMode') or 'live').lower() == 'replay'
+            )
+            if is_replay_source:
+                filename = params.get('file') or params.get('filePath')
+                if isinstance(filename, list) and filename:
+                    filename = filename[0]
+                loop = bool(params.get('loop', False))
+                if not filename:
+                    continue
+                result = start_replay(node_id=node_id, filename=filename, loop=loop)
+                if result.get('ok'):
+                    self._replay_nodes.append(node_id)
+                    print(f"[WebSocket] REPLAY node initialized: {node_id} -> {result.get('filename')}")
+                else:
+                    print(f"[WebSocket] REPLAY node failed: {node_id} - {result.get('error')}")
+
+    def _stop_all_save_replay(self):
+        from .data_recorder import stop_recording
+        from .data_replay import stop_replay
+
+        for node_id in self._save_nodes:
+            try:
+                stop_recording(node_id)
+            except Exception:
+                pass
+
+        for node_id in self._replay_nodes:
+            try:
+                stop_replay(node_id)
+            except Exception:
+                pass
+
+        self._save_nodes = []
+        self._replay_nodes = []
+
+    async def receive(self, text_data):
+        try:
+            message = json.loads(text_data)
+            msg_type = message.get('type')
+
+            if msg_type == 'subscribe':
+                node_ids = message.get('nodeIds', [])
+                self.subscribed_nodes.update(str(node_id) for node_id in node_ids)
+                print(f"[WebSocket] Subscribed to nodes: {node_ids}")
+
+            elif msg_type == 'unsubscribe':
+                self.subscribed_nodes.clear()
+                print("[WebSocket] Unsubscribed from all nodes")
+
+            elif msg_type == 'ping':
+                await self.send(text_data=json.dumps({'type': 'pong'}))
+
+            elif msg_type == 'get_recordings':
+                from .data_recorder import get_active_recordings
+
+                await self.send(text_data=json.dumps({'type': 'recordings', 'recordings': get_active_recordings()}))
+
+            elif msg_type == 'get_saved_files':
+                from .data_recorder import list_saved_files
+
+                await self.send(text_data=json.dumps({'type': 'saved_files', 'files': list_saved_files()}))
+
+        except json.JSONDecodeError:
+            await self.send(text_data=json.dumps({'type': 'error', 'error': 'Invalid JSON'}))
+        except Exception as e:
+            await self.send(text_data=json.dumps({'type': 'error', 'error': str(e)}))
+
+    async def stream_data(self):
+        from .graph_store import get_graph, get_runtime_state, set_runtime_metrics
+        from .data_replay import get_replay_status
+
+        TARGET_FPS = 30
+        FRAME_INTERVAL = 1.0 / TARGET_FPS
+        last_send_time = time.time()
+
+        while self.running:
+            graph = get_graph()
+            self.graph_frozen = bool(graph.get('frozen', False))
+            self._sync_save_replay_nodes(graph)
+            runtime_state = get_runtime_state()
+            is_runtime_running = bool(runtime_state.get('running', False))
+            runtime_mode = str(runtime_state.get('mode') or 'live').lower()
+
+            if not self.graph_frozen or not is_runtime_running:
+                self._engine.stop_all()
+                self._sample_buffer.clear()
+                self._sample_channel_names.clear()
+                self._sample_rates.clear()
+                self._batch_first_utc.clear()
+                await asyncio.sleep(0.1)
+                continue
+
+            nodes = graph.get('nodes', []) or []
+            node_type_map = {str(node.get('id')): str(node.get('type') or '').upper() for node in nodes if node.get('id')}
+
+            subscribed_output_nodes = {
+                node_id
+                for node_id in self.subscribed_nodes
+                if node_type_map.get(node_id) in {'OSC', 'SPECTRUM'}
+            }
+            save_nodes = set(self._save_nodes)
+
+            self._engine.update(graph, subscribed_output_nodes, save_nodes)
+
+            events = self._engine.poll_events(max_items_per_worker=1000)
+            max_processing_delay_ms = 0
+            for event in events:
+                node_id = str(event.get('nodeId') or '')
+                if not node_id:
+                    continue
+                channels = list(event.get('channels', []))
+                if not channels:
+                    continue
+                names = [str(v) for v in event.get('channelNames', [])]
+                sample_rate = int(event.get('sampleRate') or 1000)
+                utc_ms = int(event.get('utcFirstFrameMs') or int(time.time() * 1000))
+                processing_delay_ms = int(event.get('processingDelayMs') or 0)
+                if processing_delay_ms > max_processing_delay_ms:
+                    max_processing_delay_ms = processing_delay_ms
+
+                self._sample_buffer.setdefault(node_id, []).append(channels)
+                self._sample_channel_names[node_id] = names
+                self._sample_rates[node_id] = sample_rate
+                self._batch_first_utc.setdefault(node_id, utc_ms)
+
+                if node_type_map.get(node_id) in {'SPECTRUM', 'OSC'}:
+                    self._ensure_spectrum_buffers(node_id, len(channels))
+                    for ch_idx, val in enumerate(channels):
+                        self._spectrum_buffers_by_node[node_id][ch_idx].append(float(val))
+
+            now = time.time()
+            if (now - last_send_time) >= FRAME_INTERVAL:
+                last_send_time = now
+                fft_size = self._extract_fft_size(nodes)
+
+                for node_id, samples in list(self._sample_buffer.items()):
+                    if not samples:
+                        continue
+                    latest_channels = samples[-1]
+                    node_type = node_type_map.get(node_id)
+
+                    payload = {
+                        'type': 'data',
+                        'timestamp': int(time.time() * 1000),
+                        'utcFirstFrameMs': int(self._batch_first_utc.get(node_id, int(time.time() * 1000))),
+                        'nodeId': node_id,
+                        'nodeType': node_type,
+                        'channels': latest_channels,
+                        'samples': samples,
+                        'channelNames': self._sample_channel_names.get(node_id, []),
+                        'sampleRate': int(self._sample_rates.get(node_id, 1000)),
+                        'processingDelayMs': int(max_processing_delay_ms),
+                        'runtimeMode': runtime_mode,
+                        'nonRealtime': bool(max_processing_delay_ms > 10000),
+                        'performanceWarning': '非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
+                    }
+
+                    if node_type in {'SPECTRUM', 'OSC'}:
+                        bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
+                        if bundle is not None:
+                            payload.update(bundle)
+
+                    try:
+                        await self.send(text_data=json.dumps(payload))
+                    except Exception as exc:
+                        print(f"[WebSocket] Send error: {exc}")
+                        self.running = False
+                        break
+
+                self._sample_buffer.clear()
+                self._sample_channel_names.clear()
+                self._sample_rates.clear()
+                self._batch_first_utc.clear()
+
+                progress = None
+                if runtime_mode == 'offline' and self._replay_nodes:
+                    progresses = []
+                    for replay_node_id in self._replay_nodes:
+                        status = get_replay_status(replay_node_id)
+                        if not status:
+                            continue
+                        try:
+                            progresses.append(float(status.get('progress', 0)))
+                        except Exception:
+                            pass
+                    if progresses:
+                        progress = sum(progresses) / len(progresses)
+                    else:
+                        progress = 100.0
+
+                set_runtime_metrics(
+                    processing_delay_ms=max_processing_delay_ms,
+                    progress=progress,
+                    non_realtime=max_processing_delay_ms > 10000,
+                    warning='非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
+                )
+
+            await asyncio.sleep(0.005)

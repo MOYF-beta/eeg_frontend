@@ -20,7 +20,9 @@
   },
   "dependencies": {
     "@antv/x6": "^3.0.0",
+    "@codemirror/lang-javascript": "^6.2.4",
     "@mdi/font": "^7.4.47",
+    "codemirror": "^6.0.2",
     "echarts": "^6.0.0",
     "vue": "^3.4.21",
     "vue-router": "^4.6.4",
