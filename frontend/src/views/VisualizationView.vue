@@ -1,12 +1,21 @@
 <template>
-  <v-container class="py-6">
-    <div class="d-flex align-center justify-space-between mb-6">
-      <h1 class="text-h4">波形可视化</h1>
+  <v-container fluid class="py-4">
+    <div class="d-flex align-center justify-space-between mb-4">
+      <h1 class="text-h5">波形可视化</h1>
       
-      <div class="d-flex gap-2">
+      <div class="d-flex align-center gap-2">
+        <div class="text-caption text-grey mr-1">布局网格:</div>
+        <v-btn-toggle v-model="gridColumns" mandatory density="compact" class="mr-2">
+          <v-btn :value="1" size="small">1x1</v-btn>
+          <v-btn :value="2" size="small">2x2</v-btn>
+          <v-btn :value="3" size="small">3x3</v-btn>
+          <v-btn :value="4" size="small">4x4</v-btn>
+        </v-btn-toggle>
+
         <v-btn
           color="primary"
           prepend-icon="mdi-plus"
+          size="small"
           @click="addOscilloscope"
           :disabled="!canAddOscilloscope"
         >
@@ -15,6 +24,7 @@
         <v-btn
           color="secondary"
           prepend-icon="mdi-plus"
+          size="small"
           @click="addSpectrum"
           :disabled="!canAddSpectrum"
         >
@@ -29,20 +39,23 @@
       <router-link to="/cpgraph">前往计算图编辑器添加 →</router-link>
     </v-alert>
 
-    <!-- 示波器卡片列表 -->
-    <div v-for="(osc, index) in oscilloscopes" :key="osc.id">
-      <Oscilloscope
-        :initial-node-id="osc.initialNodeId"
-        @remove="removeOscilloscope(index)"
-      />
-    </div>
+    <!-- 可视化组件网格 -->
+    <div class="visualization-grid" :style="{ '--grid-cols': gridColumns }">
+      <!-- 示波器卡片列表 -->
+      <div v-for="(osc, index) in oscilloscopes" :key="osc.id" class="grid-item">
+        <Oscilloscope
+          :initial-node-id="osc.initialNodeId"
+          @remove="removeOscilloscope(index)"
+        />
+      </div>
 
-    <!-- 频谱卡片列表 -->
-    <div v-for="(spec, index) in spectrums" :key="spec.id">
-      <FrequencyView
-        :initial-node-id="spec.initialNodeId"
-        @remove="removeSpectrum(index)"
-      />
+      <!-- 频谱卡片列表 -->
+      <div v-for="(spec, index) in spectrums" :key="spec.id" class="grid-item">
+        <FrequencyView
+          :initial-node-id="spec.initialNodeId"
+          @remove="removeSpectrum(index)"
+        />
+      </div>
     </div>
 
     <!-- 空状态 -->
@@ -65,6 +78,9 @@ import type { GraphNode } from '../services/graph';
 
 // 计算图节点
 const graphNodes = ref<GraphNode[]>([]);
+
+// 网格布局显示模式
+const gridColumns = ref(1);
 
 // 示波器列表
 interface ViewerItem {
@@ -152,6 +168,17 @@ onMounted(() => {
 </script>
 
 <style scoped>
+.visualization-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--grid-cols), 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.grid-item {
+  min-width: 0; /* 防止内容撑开网格 */
+}
+
 .gap-2 {
   gap: 8px;
 }

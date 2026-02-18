@@ -122,23 +122,23 @@
           
           <!-- 通道选择 -->
           <v-card variant="outlined" class="mb-3">
-            <v-card-title class="text-subtitle-2">通道选择</v-card-title>
+            <v-card-title class="text-subtitle-2">通道来源（自动）</v-card-title>
             <v-card-text>
               <div class="d-flex align-center mb-2">
-                <v-btn size="small" variant="text" @click="selectAllChannels">全选</v-btn>
-                <v-btn size="small" variant="text" @click="clearAllChannels">清空</v-btn>
-                <v-spacer />
-                <span class="text-caption">已选择 {{ selectedChannels.length }} 个通道</span>
+                <v-icon size="small" class="mr-2" color="info">mdi-source-branch</v-icon>
+                <span class="text-caption">通道由输入连接自动决定，共 {{ availableChannels.length }} 路</span>
               </div>
-              <v-checkbox
-                v-for="(ch, idx) in availableChannels"
-                :key="idx"
-                v-model="selectedChannels"
-                :value="idx"
-                :label="ch"
-                density="compact"
-                hide-details
-              />
+              <div class="d-flex flex-wrap ga-1">
+                <v-chip
+                  v-for="(ch, idx) in availableChannels"
+                  :key="idx"
+                  size="small"
+                  variant="tonal"
+                  color="primary"
+                >
+                  {{ ch }}
+                </v-chip>
+              </div>
               <v-alert v-if="availableChannels.length === 0" type="info" density="compact" class="mt-2">
                 未连接数据源，请先连接上游节点
               </v-alert>
@@ -245,6 +245,98 @@
             class="mb-3"
           />
         </template>
+
+        <!-- 求和器专用表单 -->
+        <template v-else-if="nodeType === 'SUM'">
+          <v-card variant="outlined" class="mb-3">
+            <v-card-title class="text-subtitle-2 d-flex align-center">
+              输入配置
+              <v-spacer />
+              <v-btn size="small" variant="text" @click="addSumInput">新增输入</v-btn>
+            </v-card-title>
+            <v-card-text>
+              <div
+                v-for="(input, idx) in sumInputs"
+                :key="`sum-${idx}`"
+                class="d-flex align-center ga-2 mb-2"
+              >
+                <v-text-field
+                  v-model="input.label"
+                  :label="`输入 ${idx + 1} 标签`"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-text-field
+                  v-model.number="input.weight"
+                  label="权重"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  style="max-width: 120px"
+                />
+                <v-btn
+                  icon="mdi-delete"
+                  size="small"
+                  variant="text"
+                  :disabled="sumInputs.length <= 1"
+                  @click="removeSumInput(idx)"
+                />
+              </div>
+            </v-card-text>
+          </v-card>
+        </template>
+
+        <!-- 合并器专用表单 -->
+        <template v-else-if="nodeType === 'MERGE'">
+          <v-card variant="outlined" class="mb-3">
+            <v-card-title class="text-subtitle-2 d-flex align-center">
+              输入配置
+              <v-spacer />
+              <v-btn size="small" variant="text" @click="addMergeInput">新增输入</v-btn>
+            </v-card-title>
+            <v-card-text>
+              <div
+                v-for="(input, idx) in mergeInputs"
+                :key="`merge-${idx}`"
+                class="d-flex align-center ga-2 mb-2"
+              >
+                <v-text-field
+                  v-model="input.label"
+                  :label="`输入 ${idx + 1} 标签`"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-text-field
+                  v-model.number="input.gain"
+                  label="增益"
+                  type="number"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  style="max-width: 120px"
+                />
+                <v-btn
+                  icon="mdi-delete"
+                  size="small"
+                  variant="text"
+                  :disabled="mergeInputs.length <= 1"
+                  @click="removeMergeInput(idx)"
+                />
+              </div>
+            </v-card-text>
+          </v-card>
+          <v-select
+            v-model="form.params.strategy"
+            :items="['interleave', 'concatenate']"
+            label="合并策略"
+            density="compact"
+            variant="outlined"
+            class="mb-3"
+          />
+        </template>
         
         <!-- 回放专用表单 -->
         <template v-else-if="nodeType === 'REPLAY'">
@@ -285,14 +377,43 @@
         
         <!-- 分离器专用表单 -->
         <template v-else-if="nodeType === 'SPLIT'">
-          <v-text-field
-            v-model="form.params.groups"
-            label="分组规则"
-            density="compact"
-            variant="outlined"
-            class="mb-3"
-            placeholder="1-4,5-8"
-          />
+          <v-card variant="outlined" class="mb-3">
+            <v-card-title class="text-subtitle-2 d-flex align-center">
+              输出配置
+              <v-spacer />
+              <v-btn size="small" variant="text" @click="addSplitOutput">新增输出</v-btn>
+            </v-card-title>
+            <v-card-text>
+              <div
+                v-for="(output, idx) in splitOutputs"
+                :key="`split-${idx}`"
+                class="d-flex align-center ga-2 mb-2"
+              >
+                <v-text-field
+                  v-model="output.label"
+                  :label="`输出 ${idx + 1} 标签`"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                />
+                <v-text-field
+                  v-model="output.channelIndices"
+                  label="通道索引"
+                  density="compact"
+                  variant="outlined"
+                  hide-details
+                  placeholder="0,1,2"
+                />
+                <v-btn
+                  icon="mdi-delete"
+                  size="small"
+                  variant="text"
+                  :disabled="splitOutputs.length <= 1"
+                  @click="removeSplitOutput(idx)"
+                />
+              </div>
+            </v-card-text>
+          </v-card>
         </template>
         
         <!-- 其他节点通用参数 -->
@@ -329,6 +450,7 @@ interface GraphNode {
   type: string;
   name: string;
   params: Record<string, any>;
+  deviceId?: string;
   x?: number;
   y?: number;
 }
@@ -337,6 +459,8 @@ interface GraphEdge {
   id: string;
   source: string;
   target: string;
+  sourcePort?: string;
+  targetPort?: string;
 }
 
 const props = defineProps<{
@@ -348,7 +472,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void;
-  (e: 'save', data: { name: string; params: Record<string, any> }): void;
+  (e: 'save', data: { name: string; params: Record<string, any>; deviceId?: string | null }): void;
   (e: 'bindOscilloscope', data: { nodeId: string; oscId: string | null }): void;
 }>();
 
@@ -382,6 +506,25 @@ const form = ref({
 
 const paramsJson = ref('{}');
 const jsonError = ref('');
+
+interface SumInputConfig {
+  label: string;
+  weight: number;
+}
+
+interface MergeInputConfig {
+  label: string;
+  gain: number;
+}
+
+interface SplitOutputConfig {
+  label: string;
+  channelIndices: string;
+}
+
+const sumInputs = ref<SumInputConfig[]>([]);
+const mergeInputs = ref<MergeInputConfig[]>([]);
+const splitOutputs = ref<SplitOutputConfig[]>([]);
 
 // 通道相关
 const channelNames = ref<string[]>(['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8']);
@@ -443,27 +586,185 @@ function getUpstreamSource(nodeId: string): GraphNode | null {
   return getUpstreamSource(sourceNode.id);
 }
 
+function getNodeById(nodeId: string): GraphNode | null {
+  if (!props.allNodes) return null;
+  return props.allNodes.find((n) => n.id === nodeId) || null;
+}
+
+function getIncomingEdge(nodeId: string): GraphEdge | null {
+  if (!props.allEdges) return null;
+  return props.allEdges.find((e) => e.target === nodeId) || null;
+}
+
+function parseIndices(raw: unknown): number[] {
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+}
+
+function resolveNodeOutputChannels(nodeId: string, sourcePort?: string, visited = new Set<string>()): string[] {
+  if (visited.has(nodeId)) return [];
+  visited.add(nodeId);
+
+  const node = getNodeById(nodeId);
+  if (!node) return [];
+
+  if (node.type === 'SOURCE') {
+    const channelCount = Number(node.params?.channels || 8);
+    const names = Array.isArray(node.params?.channelNames)
+      ? node.params.channelNames.map((n: unknown) => String(n))
+      : [];
+    if (names.length > 0) return names;
+    return Array.from({ length: channelCount }, (_, i) => `CH${i + 1}`);
+  }
+
+  if (node.type === 'FILTER' || node.type === 'OSC' || node.type === 'SPECTRUM' || node.type === 'SAVE') {
+    const inEdge = getIncomingEdge(node.id);
+    if (!inEdge) return [];
+    return resolveNodeOutputChannels(inEdge.source, inEdge.sourcePort, visited);
+  }
+
+  if (node.type === 'SUM') {
+    return [node.name || 'SUM'];
+  }
+
+  if (node.type === 'MERGE') {
+    const incoming = (props.allEdges || [])
+      .filter((e) => e.target === node.id)
+      .sort((a, b) => (a.targetPort || '').localeCompare(b.targetPort || ''));
+    const merged: string[] = [];
+    incoming.forEach((edge) => {
+      merged.push(...resolveNodeOutputChannels(edge.source, edge.sourcePort, new Set(visited)));
+    });
+    return merged;
+  }
+
+  if (node.type === 'SPLIT') {
+    const inEdge = getIncomingEdge(node.id);
+    const upstream = inEdge ? resolveNodeOutputChannels(inEdge.source, inEdge.sourcePort, visited) : [];
+    const outputs = Array.isArray(node.params?.outputs) ? node.params.outputs : [];
+    const portIdx = sourcePort
+      ? Math.max(0, Number((sourcePort.match(/-(\d+)$/)?.[1] || '1')) - 1)
+      : 0;
+    const output = outputs[portIdx] as Record<string, unknown> | undefined;
+    const indices = parseIndices(output?.channelIndices);
+    const selected = indices.map((idx) => upstream[idx]).filter((name): name is string => Boolean(name));
+    if (selected.length > 0) return selected;
+    if (typeof output?.label === 'string' && output.label.trim() !== '') return [output.label.trim()];
+    return upstream;
+  }
+
+  return [];
+}
+
 // 从上游节点获取通道信息
 function updateChannelInfo() {
   if (!props.nodeData) return;
-  
+
+  const incoming = getIncomingEdge(props.nodeData.id);
+  if (incoming) {
+    const names = resolveNodeOutputChannels(incoming.source, incoming.sourcePort);
+    if (names.length > 0) {
+      availableChannels.value = names;
+      return;
+    }
+  }
+
   const upstream = getUpstreamSource(props.nodeData.id);
   if (upstream) {
     const channelCount = upstream.params?.channels || 8;
     const upstreamChannelNames = upstream.params?.channelNames || [];
-    
+
     availableChannels.value = Array.from({ length: channelCount }, (_, i) => {
       return upstreamChannelNames[i] || `CH${i + 1}`;
     });
-  } else {
-    availableChannels.value = ['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8'];
+    return;
   }
+
+  availableChannels.value = ['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8'];
+}
+
+function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
+  if (type === 'SUM') {
+    const legacyWeights = typeof params.weights === 'string'
+      ? params.weights.split(',').map((w: string) => Number(w.trim())).filter((v: number) => !Number.isNaN(v))
+      : [];
+    const inputs = Array.isArray(params.inputs) ? params.inputs : [];
+    const normalized = inputs.length > 0
+      ? inputs.map((item: any, idx: number) => ({
+          label: String(item?.label || `输入${idx + 1}`),
+          weight: Number(item?.weight ?? 1),
+        }))
+      : (legacyWeights.length > 0
+        ? legacyWeights.map((w: number, idx: number) => ({ label: `输入${idx + 1}`, weight: w }))
+        : [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }]);
+    sumInputs.value = normalized;
+    params.inputs = normalized;
+    delete params.weights;
+  }
+
+  if (type === 'MERGE') {
+    const inputs = Array.isArray(params.inputs) ? params.inputs : [];
+    const normalized = inputs.length > 0
+      ? inputs.map((item: any, idx: number) => ({
+          label: String(item?.label || `输入${idx + 1}`),
+          gain: Number(item?.gain ?? 1),
+        }))
+      : [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }];
+    mergeInputs.value = normalized;
+    params.inputs = normalized;
+    params.strategy = params.strategy || 'interleave';
+  }
+
+  if (type === 'SPLIT') {
+    const outputs = Array.isArray(params.outputs) ? params.outputs : [];
+    const legacy = typeof params.channelIndices === 'string' ? params.channelIndices : '';
+    const normalized = outputs.length > 0
+      ? outputs.map((item: any, idx: number) => ({
+          label: String(item?.label || `输出${idx + 1}`),
+          channelIndices: String(item?.channelIndices || ''),
+        }))
+      : [{ label: '输出1', channelIndices: legacy || '0,1,2,3' }];
+    splitOutputs.value = normalized;
+    params.outputs = normalized;
+    delete params.channelIndices;
+  }
+}
+
+function addSumInput() {
+  sumInputs.value.push({ label: `输入${sumInputs.value.length + 1}`, weight: 1 });
+}
+
+function removeSumInput(index: number) {
+  if (sumInputs.value.length <= 1) return;
+  sumInputs.value.splice(index, 1);
+}
+
+function addMergeInput() {
+  mergeInputs.value.push({ label: `输入${mergeInputs.value.length + 1}`, gain: 1 });
+}
+
+function removeMergeInput(index: number) {
+  if (mergeInputs.value.length <= 1) return;
+  mergeInputs.value.splice(index, 1);
+}
+
+function addSplitOutput() {
+  splitOutputs.value.push({ label: `输出${splitOutputs.value.length + 1}`, channelIndices: '' });
+}
+
+function removeSplitOutput(index: number) {
+  if (splitOutputs.value.length <= 1) return;
+  splitOutputs.value.splice(index, 1);
 }
 
 watch(() => props.nodeData, (data) => {
   if (data) {
     form.value.name = data.name || '';
     form.value.params = { ...data.params };
+    ensureVisualParamDefaults(data.type, form.value.params);
     paramsJson.value = JSON.stringify(data.params || {}, null, 2);
     jsonError.value = '';
     
@@ -514,6 +815,28 @@ const close = () => {
 
 const save = () => {
   if (jsonError.value) return;
+
+  if (nodeType.value === 'SUM') {
+    form.value.params.inputs = sumInputs.value.map((item) => ({
+      label: item.label || '输入',
+      weight: Number(item.weight ?? 1),
+    }));
+  }
+
+  if (nodeType.value === 'MERGE') {
+    form.value.params.inputs = mergeInputs.value.map((item) => ({
+      label: item.label || '输入',
+      gain: Number(item.gain ?? 1),
+    }));
+    form.value.params.strategy = form.value.params.strategy || 'interleave';
+  }
+
+  if (nodeType.value === 'SPLIT') {
+    form.value.params.outputs = splitOutputs.value.map((item) => ({
+      label: item.label || '输出',
+      channelIndices: String(item.channelIndices || ''),
+    }));
+  }
   
   // 保存通道信息
   if (nodeType.value === 'SOURCE') {
@@ -523,7 +846,12 @@ const save = () => {
   }
   
   // 保存示波器通道选择
-  if (nodeType.value === 'OSC' || nodeType.value === 'SPECTRUM') {
+  if (nodeType.value === 'OSC') {
+    form.value.params.selectedChannels = availableChannels.value.map((_, i) => i);
+    form.value.params.availableChannels = availableChannels.value;
+  }
+
+  if (nodeType.value === 'SPECTRUM') {
     form.value.params.selectedChannels = selectedChannels.value;
     form.value.params.availableChannels = availableChannels.value;
   }

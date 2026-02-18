@@ -1,7 +1,7 @@
 <template>
-  <v-card class="mb-4" variant="tonal">
+  <v-card :class="{ 'osc-fullscreen-card': fullscreen }" class="mb-4" variant="tonal">
 
-    <v-card-text>
+    <v-card-text class="pa-2">
       <!-- 未选择数据源提示 -->
       <v-alert
         v-if="!selectedNodeId"
@@ -95,10 +95,19 @@
           </div>
           <div class="osc-status-section osc-status-close">
             <v-btn
+              v-if="!fullscreen"
               size="x-small"
               variant="text"
               color="grey"
-              icon="mdi-close"
+              icon="mdi-fullscreen"
+              title="全屏显示"
+              @click="openFullscreen"
+            />
+            <v-btn
+              size="x-small"
+              variant="text"
+              color="grey"
+              :icon="fullscreen ? 'mdi-fullscreen-exit' : 'mdi-close'"
               @click="$emit('remove')"
             />
           </div>
@@ -159,7 +168,7 @@
               class="osc-left-axis-row"
               :style="[getChannelRowStyle(ch - 1), { '--channel-line-color': getChannelLineColor(ch - 1) }]"
             >
-              <div class="osc-left-axis-label">CH{{ ch }}</div>
+              <div class="osc-left-axis-label">{{ getChannelDisplayName(ch - 1) }}</div>
               <div class="osc-left-axis-values">
                 <div>+{{ getChannelTick(ch - 1).max }}</div>
                 <div>{{ getChannelTick(ch - 1).min }}</div>
@@ -226,6 +235,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
@@ -233,14 +243,18 @@ import type { GraphNode } from '../services/graph';
 
 const props = defineProps<{
   initialNodeId?: string;
+  fullscreen?: boolean;
 }>();
 
 const emit = defineEmits<{
   (e: 'remove'): void;
 }>();
 
+const router = useRouter();
+
 // 配置
-const channelCount = 8;
+const channelCount = ref(8);
+const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 const colors = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#3949ab'];
 
 // === 扫描模式配置 ===
@@ -287,16 +301,16 @@ const plotMetrics = ref({
   amplitudeScale: 0,
 });
 const timeWindowSec = ref(DEFAULT_WINDOW_SEC);
-const gainFineByCh = ref<number[]>(Array.from({ length: channelCount }, () => 1.0));
-const gainExpByCh = ref<number[]>(Array.from({ length: channelCount }, () => 0));
-const autoGainDisplay = ref<number[]>(Array.from({ length: channelCount }, () => 1));
+const gainFineByCh = ref<number[]>(Array.from({ length: channelCount.value }, () => 1.0));
+const gainExpByCh = ref<number[]>(Array.from({ length: channelCount.value }, () => 0));
+const autoGainDisplay = ref<number[]>(Array.from({ length: channelCount.value }, () => 1));
 const centerEnabled = ref(false);
 const autoGainEnabled = ref(false);
 let isAutoGainSync = false;
-const channelAbsDisplay = ref<number[]>(Array.from({ length: channelCount }, () => 1));
+const channelAbsDisplay = ref<number[]>(Array.from({ length: channelCount.value }, () => 1));
 const sidebarCollapsed = ref(false);
 const sourceDialogOpen = ref(false);
-const channelRanges = ref<Array<{ max: number; min: number }>>(Array.from({ length: channelCount }, () => ({ max: 0, min: 0 })));
+const channelRanges = ref<Array<{ max: number; min: number }>>(Array.from({ length: channelCount.value }, () => ({ max: 0, min: 0 })));
 
 // === 扫描模式数据存储 ===
 // 动态大小的双缓冲区：当前窗口 + 上一个窗口
@@ -320,9 +334,9 @@ type RunningChannelStats = {
 
 const createEmptyRunningStats = (): RunningChannelStats => ({
   count: 0,
-  sum: new Array(channelCount).fill(0),
-  rawMax: new Array(channelCount).fill(-Infinity),
-  rawMin: new Array(channelCount).fill(Infinity),
+  sum: new Array(channelCount.value).fill(0),
+  rawMax: new Array(channelCount.value).fill(-Infinity),
+  rawMin: new Array(channelCount.value).fill(Infinity),
 });
 
 let statsCurrentRunning: RunningChannelStats = createEmptyRunningStats();
@@ -451,6 +465,31 @@ const getChannelLineColor = (ch: number, alpha = 0.28) => {
   return hexToRgba(colors[index], alpha);
 };
 
+const getChannelDisplayName = (ch: number) => {
+  return channelNames.value[ch] || `CH${ch + 1}`;
+};
+
+const ensureChannelSchema = (count: number, names?: string[]) => {
+  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
+  const normalizedNames = Array.from({ length: normalizedCount }, (_, i) => {
+    return names?.[i] || channelNames.value[i] || `CH${i + 1}`;
+  });
+
+  if (channelCount.value === normalizedCount) {
+    channelNames.value = normalizedNames;
+    return;
+  }
+
+  channelCount.value = normalizedCount;
+  channelNames.value = normalizedNames;
+  gainFineByCh.value = Array.from({ length: normalizedCount }, (_, i) => gainFineByCh.value[i] ?? 1.0);
+  gainExpByCh.value = Array.from({ length: normalizedCount }, (_, i) => gainExpByCh.value[i] ?? 0);
+  autoGainDisplay.value = Array.from({ length: normalizedCount }, (_, i) => autoGainDisplay.value[i] ?? 1);
+  channelAbsDisplay.value = Array.from({ length: normalizedCount }, (_, i) => channelAbsDisplay.value[i] ?? 1);
+  channelRanges.value = Array.from({ length: normalizedCount }, (_, i) => channelRanges.value[i] || { max: 0, min: 0 });
+  resetAllData();
+};
+
 const formatGainDisplay = (ch: number) => {
   const gain = autoGainEnabled.value
     ? (autoGainDisplay.value[ch] ?? 1)
@@ -471,6 +510,15 @@ const onNodeSelected = (nodeId: string | null) => {
   if (nodeId) {
     sessionStore.bindViewToNode(viewId, nodeId);
     selectedNodeId.value = nodeId;
+
+    const node = graphNodes.value.find((n) => n.id === nodeId);
+    const paramNames = Array.isArray(node?.params?.availableChannels)
+      ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
+      : null;
+    if (paramNames && paramNames.length > 0) {
+      ensureChannelSchema(paramNames.length, paramNames);
+    }
+
     subscribeToNode(nodeId);
     sourceDialogOpen.value = false;
   } else {
@@ -488,10 +536,19 @@ const unbindNode = () => {
   resetAllData();
 };
 
+const openFullscreen = () => {
+  if (!selectedNodeId.value) return;
+  const routeData = router.resolve({
+    name: 'Fullscreen',
+    params: { type: 'osc', nodeId: selectedNodeId.value }
+  });
+  window.open(routeData.href, '_blank');
+};
+
 const createSamplesBuffer = (windowSize: number) => {
   const size = Math.max(1, windowSize);
-  samplesCurrent = Array.from({ length: channelCount }, () => new Array(size).fill(0));
-  samplesPrev = Array.from({ length: channelCount }, () => new Array(size).fill(0));
+  samplesCurrent = Array.from({ length: channelCount.value }, () => new Array(size).fill(0));
+  samplesPrev = Array.from({ length: channelCount.value }, () => new Array(size).fill(0));
   statsCurrentRunning = createEmptyRunningStats();
   statsPrevRunning = createEmptyRunningStats();
 };
@@ -551,7 +608,7 @@ const updatePlotMetrics = () => {
   const bottom = plotMetrics.value.bottom;
   const plotWidth = Math.max(0, width - left - right);
   const plotHeight = Math.max(0, height - top - bottom);
-  const channelSpacing = channelCount > 0 ? plotHeight / (channelCount + 0.5) : 0;
+  const channelSpacing = channelCount.value > 0 ? plotHeight / (channelCount.value + 0.5) : 0;
   const amplitudeScale = AMPLITUDE_REF_UV > 0 ? (channelSpacing * 0.35) / AMPLITUDE_REF_UV : 0;
 
   plotMetrics.value = {
@@ -643,7 +700,7 @@ const drawGrid = () => {
     gridCtx.stroke();
   }
 
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     const y = top + channelSpacing * (ch + 0.5);
     gridCtx.strokeStyle = getChannelLineColor(ch, 0.35);
     gridCtx.lineWidth = 1;
@@ -657,9 +714,9 @@ const drawGrid = () => {
   gridCtx.font = '12px sans-serif';
   gridCtx.textAlign = 'right';
   gridCtx.textBaseline = 'middle';
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     const y = top + channelSpacing * (ch + 0.5);
-    gridCtx.fillText(`CH${ch + 1}`, left - 8, y);
+    gridCtx.fillText(getChannelDisplayName(ch), left - 8, y);
   }
 
   gridCtx.restore();
@@ -689,10 +746,10 @@ type ChannelStats = {
 };
 
 const buildChannelStats = (running: RunningChannelStats): ChannelStats => {
-  const means = new Array(channelCount).fill(0);
-  const maxAbs = new Array(channelCount).fill(1);
-  const rawMax = new Array(channelCount).fill(0);
-  const rawMin = new Array(channelCount).fill(0);
+  const means = new Array(channelCount.value).fill(0);
+  const maxAbs = new Array(channelCount.value).fill(1);
+  const rawMax = new Array(channelCount.value).fill(0);
+  const rawMin = new Array(channelCount.value).fill(0);
 
   const count = running.count;
   if (count <= 0) {
@@ -704,7 +761,7 @@ const buildChannelStats = (running: RunningChannelStats): ChannelStats => {
     };
   }
 
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     const mean = (running.sum[ch] || 0) / count;
     means[ch] = mean;
 
@@ -733,7 +790,7 @@ const syncAutoGainDisplay = (stats: ChannelStats, channelSpacing: number) => {
   const amplitudeScale = plotMetrics.value.amplitudeScale || 1;
 
   isAutoGainSync = true;
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     const peak = stats.maxAbs[ch] || 1;
     const scale = targetHalfHeight / Math.max(peak, 1e-6);
     const gainEquivalent = scale / amplitudeScale;
@@ -767,7 +824,7 @@ const drawSamples = (
   const useAuto = centerEnabled.value && autoGainEnabled.value;
   const targetHalfHeight = (channelSpacing * 0.5) / 1.1;
 
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     waveCtx.strokeStyle = colors[ch];
     waveCtx.lineWidth = 1.5;
     waveCtx.beginPath();
@@ -829,7 +886,7 @@ const drawFullWindow = () => {
   updateChannelRange(statsCurrent);
   channelAbsDisplay.value = statsCurrent.maxAbs.slice();
 
-  for (let ch = 0; ch < channelCount; ch++) {
+  for (let ch = 0; ch < channelCount.value; ch++) {
     waveCtx.strokeStyle = colors[ch];
     waveCtx.lineWidth = 1.5;
     waveCtx.beginPath();
@@ -954,6 +1011,16 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   if (!selectedId || packetNodeId !== selectedId) return;
 
+  const inferredCount = Math.max(
+    Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,
+    Array.isArray(packet.channels) ? packet.channels.length : 0,
+    1,
+  );
+  const inferredNames = Array.isArray(packet.channelNames)
+    ? packet.channelNames.map((name, idx) => String(name || `CH${idx + 1}`))
+    : undefined;
+  ensureChannelSchema(inferredCount, inferredNames);
+
   // 如果包中带有采样率信息，则更新
   if (packet.sampleRate && packet.sampleRate > 0 && packet.sampleRate !== currentSampleRate.value) {
     currentSampleRate.value = packet.sampleRate;
@@ -989,7 +1056,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
       samplesCurrent = prev;
 
       // 为新的一轮清理数据
-      for (let ch = 0; ch < channelCount; ch++) {
+      for (let ch = 0; ch < channelCount.value; ch++) {
         samplesCurrent[ch]?.fill(0);
       }
 
@@ -1008,7 +1075,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
     packetCount.value++;
     const idx = pos % windowSize;
 
-    for (let ch = 0; ch < channelCount; ch++) {
+    for (let ch = 0; ch < channelCount.value; ch++) {
       if (!samplesCurrent[ch]) continue;
       const value = channels[ch] ?? 0;
       samplesCurrent[ch][idx] = value;
@@ -1079,6 +1146,16 @@ const updateGraphState = async () => {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
     isGraphFrozen.value = graph.frozen || false;
+
+    if (selectedNodeId.value) {
+      const node = graphNodes.value.find((n) => n.id === selectedNodeId.value);
+      const paramNames = Array.isArray(node?.params?.availableChannels)
+        ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
+        : null;
+      if (paramNames && paramNames.length > 0) {
+        ensureChannelSchema(paramNames.length, paramNames);
+      }
+    }
 
     if (isGraphFrozen.value && selectedNodeId.value) {
       subscribeToNode(selectedNodeId.value);
@@ -1225,7 +1302,7 @@ const resetAllData = () => {
   createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
   packetCount.value = 0;
   autoGainDisplay.value = gainFineByCh.value.map((fine, ch) => fine * Math.pow(10, gainExpByCh.value[ch] || 0));
-  channelRanges.value = Array.from({ length: channelCount }, () => ({ max: 0, min: 0 }));
+  channelRanges.value = Array.from({ length: channelCount.value }, () => ({ max: 0, min: 0 }));
   clearWaveCanvas();
   clearOverlayCanvas();
   drawGrid();
@@ -1236,7 +1313,9 @@ const resetAllData = () => {
 .osc-root {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+  width: 100%;
+  min-width: 320px;
 }
 
 .osc-statusbar {
@@ -1374,11 +1453,40 @@ const resetAllData = () => {
 
 .osc-chart-container {
   position: relative;
-  height: 400px;
+  height: 400px; /* Fixed height for card mode */
+  min-height: 200px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
+  width: 100%;
+}
+
+.osc-fullscreen-card {
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 0 !important;
+}
+
+.osc-fullscreen-card :deep(.v-card-text) {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 8px !important;
+}
+
+.osc-fullscreen-card .osc-root {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.osc-fullscreen-card .osc-chart-container {
+  height: auto !important;
+  flex: 1 !important;
 }
 
 .osc-chart {

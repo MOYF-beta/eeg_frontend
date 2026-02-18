@@ -284,7 +284,7 @@ let unsubscribeSessionStore: (() => void) | null = null;
 const nodeEditDialogOpen = ref(false);
 const editingNode = ref<GraphNode | null>(null);
 const allNodes = ref<GraphNode[]>([]);
-const allEdges = ref<Array<{id: string; source: string; target: string}>>([]);
+const allEdges = ref<Array<{id: string; source: string; target: string; sourcePort?: string; targetPort?: string}>>([]);
 
 // 监听冻结状态变化
 watch(frozen, (newVal, oldVal) => {
@@ -336,12 +336,13 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
     { key: 'order', label: '阶数', type: 'slider', min: 1, max: 8, hint: '滤波器阶数', default: 4 },
   ],
   SUM: [
-    { key: 'weights', label: '权重', type: 'text', hint: '各通道权重,逗号分隔', default: '1,1' },
+    { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立权重', default: [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }] },
   ],
   SPLIT: [
-    { key: 'channelIndices', label: '分离通道', type: 'text', hint: '要分离的通道索引,逗号分隔', default: '0,1,2,3' },
+    { key: 'outputs', label: '输出配置', type: 'text', hint: '每个输出独立通道配置', default: [{ label: '输出1', channelIndices: '0,1,2,3' }] },
   ],
   MERGE: [
+    { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立增益', default: [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }] },
     { key: 'strategy', label: '合并策略', type: 'select', options: ['interleave', 'concatenate'], hint: '数据合并方式', default: 'interleave' },
   ],
   OSC: [
@@ -412,6 +413,8 @@ function openNodeEditDialog(nodeId: string) {
     id: e.id,
     source: e.getSourceCellId() || '',
     target: e.getTargetCellId() || '',
+    sourcePort: e.getSourcePortId() || undefined,
+    targetPort: e.getTargetPortId() || undefined,
   }));
 
   // 使用新的对话框
@@ -430,11 +433,17 @@ function handleNodeSave({ name, params, deviceId }: { name: string; params: Reco
   // 更新节点数据
   const data = node.getData() as GraphNode;
   data.name = name;
-  data.params = { ...params };
+  data.params = normalizeNodeParams(data.type, { ...params });
   if (deviceId !== undefined) {
     data.deviceId = deviceId || undefined;
   }
   node.setData(data);
+
+  // 根据配置刷新动态端口
+  syncNodePorts(node, data.type, data.params);
+
+  // 参数变化后刷新边标签
+  updateAllEdgeLabels();
 
   // 更新节点标签显示
   const labelText = generateNodeLabel(data.type, data.name, data.params, editingNode.value?.id);
@@ -511,16 +520,83 @@ function createNodeHtml(type: GraphNodeType, name: string) {
   `;
 }
 
+function parseLegacyNumberList(raw: unknown): number[] {
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((n) => !Number.isNaN(n));
+}
+
+function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown>) {
+  const normalized = { ...params } as Record<string, unknown>;
+
+  if (type === 'SUM') {
+    const existingInputs = Array.isArray(normalized.inputs) ? normalized.inputs as Array<Record<string, unknown>> : [];
+    const legacyWeights = parseLegacyNumberList(normalized.weights);
+    const inputs = existingInputs.length > 0
+      ? existingInputs
+      : (legacyWeights.length > 0
+        ? legacyWeights.map((weight, idx) => ({ label: `输入${idx + 1}`, weight }))
+        : [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }]);
+    normalized.inputs = inputs.map((item, idx) => ({
+      label: String(item.label || `输入${idx + 1}`),
+      weight: Number(item.weight ?? 1),
+    }));
+    delete normalized.weights;
+  }
+
+  if (type === 'MERGE') {
+    const existingInputs = Array.isArray(normalized.inputs) ? normalized.inputs as Array<Record<string, unknown>> : [];
+    normalized.inputs = (existingInputs.length > 0 ? existingInputs : [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }])
+      .map((item, idx) => ({
+        label: String(item.label || `输入${idx + 1}`),
+        gain: Number(item.gain ?? 1),
+      }));
+    normalized.strategy = String(normalized.strategy || 'interleave');
+  }
+
+  if (type === 'SPLIT') {
+    const existingOutputs = Array.isArray(normalized.outputs) ? normalized.outputs as Array<Record<string, unknown>> : [];
+    const legacyChannelIndices = typeof normalized.channelIndices === 'string' ? normalized.channelIndices : '0,1,2,3';
+    normalized.outputs = (existingOutputs.length > 0 ? existingOutputs : [{ label: '输出1', channelIndices: legacyChannelIndices }])
+      .map((item, idx) => ({
+        label: String(item.label || `输出${idx + 1}`),
+        channelIndices: String(item.channelIndices || ''),
+      }));
+    delete normalized.channelIndices;
+  }
+
+  return normalized;
+}
+
+function getInputPortIds(type: GraphNodeType, params: Record<string, unknown>): string[] {
+  if (type === 'SUM' || type === 'MERGE') {
+    const inputs = Array.isArray(params.inputs) ? params.inputs : [];
+    const count = Math.max(1, inputs.length || 1);
+    return Array.from({ length: count }, (_, idx) => `in-${idx + 1}`);
+  }
+  return nodeTypes[type].hasInput ? ['in'] : [];
+}
+
+function getOutputPortIds(type: GraphNodeType, params: Record<string, unknown>): string[] {
+  if (type === 'SPLIT') {
+    const outputs = Array.isArray(params.outputs) ? params.outputs : [];
+    const count = Math.max(1, outputs.length || 1);
+    return Array.from({ length: count }, (_, idx) => `out-${idx + 1}`);
+  }
+  return nodeTypes[type].hasOutput ? ['out'] : [];
+}
+
 // 创建端口
-function createPorts(type: GraphNodeType) {
+function createPorts(type: GraphNodeType, params: Record<string, unknown>) {
   const config = nodeTypes[type];
-  const items = [];
-  if (config.hasInput) {
-    items.push({ id: 'in', group: 'in' });
-  }
-  if (config.hasOutput) {
-    items.push({ id: 'out', group: 'out' });
-  }
+  const inputPortIds = getInputPortIds(type, params);
+  const outputPortIds = getOutputPortIds(type, params);
+  const items = [
+    ...inputPortIds.map((id) => ({ id, group: 'in' })),
+    ...outputPortIds.map((id) => ({ id, group: 'out' })),
+  ];
   return {
     groups: {
       in: {
@@ -534,6 +610,223 @@ function createPorts(type: GraphNodeType) {
     },
     items,
   };
+}
+
+function syncNodePorts(node: import('@antv/x6').Node, type: GraphNodeType, params: Record<string, unknown>) {
+  const graph = graphRef.value;
+  if (!graph) return;
+
+  const ports = createPorts(type, params);
+  const dynamicNode = node as unknown as {
+    setPorts?: (ports: unknown) => void;
+    prop: (path: string, value: unknown) => void;
+  };
+
+  // 不同 X6 版本 API 有差异：优先调用 setPorts，不存在时回退到 prop('ports', ...)
+  if (typeof dynamicNode.setPorts === 'function') {
+    dynamicNode.setPorts(ports);
+  } else {
+    dynamicNode.prop('ports', ports);
+  }
+
+  const validInputPorts = new Set(getInputPortIds(type, params));
+  const validOutputPorts = new Set(getOutputPortIds(type, params));
+
+  graph.getConnectedEdges(node).forEach((edge) => {
+    const sourceCellId = edge.getSourceCellId();
+    const targetCellId = edge.getTargetCellId();
+    const sourcePortId = edge.getSourcePortId();
+    const targetPortId = edge.getTargetPortId();
+
+    const invalidSourcePort = sourceCellId === node.id && sourcePortId && !validOutputPorts.has(sourcePortId);
+    const invalidTargetPort = targetCellId === node.id && targetPortId && !validInputPorts.has(targetPortId);
+    if (invalidSourcePort || invalidTargetPort) {
+      edge.remove();
+    }
+  });
+}
+
+function getDefaultNodeInputPort(nodeId: string): string {
+  const graph = graphRef.value;
+  if (!graph) return 'in';
+  const node = graph.getCellById(nodeId);
+  if (!node || !node.isNode()) return 'in';
+  const data = node.getData() as GraphNode;
+  const params = (data?.params || {}) as Record<string, unknown>;
+  return getInputPortIds(data.type, params)[0] || 'in';
+}
+
+function getDefaultNodeOutputPort(nodeId: string): string {
+  const graph = graphRef.value;
+  if (!graph) return 'out';
+  const node = graph.getCellById(nodeId);
+  if (!node || !node.isNode()) return 'out';
+  const data = node.getData() as GraphNode;
+  const params = (data?.params || {}) as Record<string, unknown>;
+  return getOutputPortIds(data.type, params)[0] || 'out';
+}
+
+function formatEdgeChannelLabel(channelNames: string[]) {
+  if (channelNames.length === 0) return '无通道';
+  if (channelNames.length <= 4) return channelNames.join(', ');
+  return `${channelNames.slice(0, 4).join(', ')} … (${channelNames.length})`;
+}
+
+function parsePortIndex(portId: string | undefined, fallback = 0) {
+  if (!portId) return fallback;
+  const match = portId.match(/-(\d+)$/);
+  if (!match) return fallback;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? Math.max(0, parsed - 1) : fallback;
+}
+
+function parseIndices(raw: unknown): number[] {
+  if (typeof raw !== 'string') return [];
+  return raw
+    .split(',')
+    .map((item) => Number(item.trim()))
+    .filter((n) => Number.isInteger(n) && n >= 0);
+}
+
+function defaultChannelNames(count: number) {
+  return Array.from({ length: Math.max(0, count) }, (_, idx) => `CH${idx + 1}`);
+}
+
+function inferNodeOutputChannels(nodeId: string, visited = new Set<string>()): string[] {
+  const graph = graphRef.value;
+  if (!graph) return [];
+  if (visited.has(nodeId)) return [];
+  visited.add(nodeId);
+
+  const node = graph.getCellById(nodeId);
+  if (!node || !node.isNode()) return [];
+  const data = node.getData() as GraphNode;
+  const params = (data.params || {}) as Record<string, unknown>;
+
+  const incomingEdges = graph
+    .getIncomingEdges(node)
+    .sort((a, b) => (a.getTargetPortId() || '').localeCompare(b.getTargetPortId() || ''));
+
+  if (data.type === 'SOURCE') {
+    const names = Array.isArray(params.channelNames) ? params.channelNames.map((n) => String(n)) : [];
+    if (names.length > 0) return names;
+    const channels = Number(params.channels || 8);
+    return defaultChannelNames(Number.isFinite(channels) ? channels : 8);
+  }
+
+  if (data.type === 'REPLAY') {
+    const names = Array.isArray(params.channelNames) ? params.channelNames.map((n) => String(n)) : [];
+    return names.length > 0 ? names : defaultChannelNames(8);
+  }
+
+  const upstreamEdge = incomingEdges[0];
+  const upstreamNodeId = upstreamEdge?.getSourceCellId();
+  const upstreamChannels = upstreamNodeId ? inferNodeOutputChannels(upstreamNodeId, visited) : [];
+
+  if (data.type === 'FILTER') {
+    return upstreamChannels;
+  }
+
+  if (data.type === 'SUM') {
+    return [data.name || 'SUM'];
+  }
+
+  if (data.type === 'MERGE') {
+    const merged: string[] = [];
+    incomingEdges.forEach((edge) => {
+      const sourceId = edge.getSourceCellId();
+      if (!sourceId) return;
+      const sourceNames = inferNodeOutputChannels(sourceId, new Set(visited));
+      merged.push(...sourceNames);
+    });
+    return merged;
+  }
+
+  if (data.type === 'SPLIT') {
+    return upstreamChannels;
+  }
+
+  return upstreamChannels;
+}
+
+function inferEdgeChannelNames(edge: import('@antv/x6').Edge): string[] {
+  const graph = graphRef.value;
+  if (!graph) return [];
+
+  const sourceNodeId = edge.getSourceCellId();
+  if (!sourceNodeId) return [];
+  const sourceNode = graph.getCellById(sourceNodeId);
+  if (!sourceNode || !sourceNode.isNode()) return [];
+
+  const sourceData = sourceNode.getData() as GraphNode;
+  const sourcePort = edge.getSourcePortId() || 'out';
+
+  if (sourceData.type === 'SPLIT') {
+    const params = (sourceData.params || {}) as Record<string, unknown>;
+    const outputs = Array.isArray(params.outputs) ? params.outputs as Array<Record<string, unknown>> : [];
+    const outputIdx = parsePortIndex(sourcePort, 0);
+    const outputCfg = outputs[outputIdx] || outputs[0];
+
+    const incomingEdges = graph.getIncomingEdges(sourceNode);
+    const inputEdge = incomingEdges[0];
+    const upstreamId = inputEdge?.getSourceCellId();
+    const upstreamNames = upstreamId ? inferNodeOutputChannels(upstreamId) : [];
+    const indices = parseIndices(outputCfg?.channelIndices);
+    const selected = indices.map((idx) => upstreamNames[idx]).filter((name): name is string => Boolean(name));
+    if (selected.length > 0) return selected;
+    if (typeof outputCfg?.label === 'string' && outputCfg.label.trim() !== '') {
+      return [outputCfg.label.trim()];
+    }
+    return [];
+  }
+
+  if (sourceData.type === 'SUM') {
+    return [sourceData.name || 'SUM'];
+  }
+
+  return inferNodeOutputChannels(sourceNodeId);
+}
+
+function applyEdgeLabel(edge: import('@antv/x6').Edge) {
+  const channelNames = inferEdgeChannelNames(edge);
+  const label = formatEdgeChannelLabel(channelNames);
+  edge.setLabels([
+    {
+      position: {
+        distance: 0.5,
+        options: {
+          keepGradient: true,
+          ensureLegibility: true,
+        },
+      },
+      attrs: {
+        label: {
+          text: label,
+          fill: '#546E7A',
+          fontSize: 11,
+          textAnchor: 'middle',
+          textVerticalAnchor: 'middle',
+        },
+        rect: {
+          fill: '#ffffff',
+          stroke: '#CFD8DC',
+          strokeWidth: 1,
+          rx: 8,
+          ry: 8,
+          refWidth: '120%',
+          refHeight: '140%',
+          refX: '-10%',
+          refY: '-20%',
+        },
+      },
+    },
+  ]);
+}
+
+function updateAllEdgeLabels() {
+  const graph = graphRef.value;
+  if (!graph) return;
+  graph.getEdges().forEach((edge) => applyEdgeLabel(edge));
 }
 
 // 添加节点 - 使用 rect 形状配合 attrs
@@ -555,10 +848,10 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
   });
 
   // 合并传入的参数
-  const nodeParams = { ...defaultParams, ...params };
+  const nodeParams = normalizeNodeParams(type, { ...defaultParams, ...params });
 
   // 生成带属性的标签文本
-  const labelText = generateNodeLabel(type, name || config.name, nodeParams);
+  const labelText = generateNodeLabel(type, name || config.name, nodeParams, nodeId);
 
   const node = graph.addNode({
     id: nodeId,
@@ -584,7 +877,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
         textVerticalAnchor: 'middle',
       },
     },
-    ports: createPorts(type),
+    ports: createPorts(type, nodeParams),
     data: { type, name: name || config.name, params: nodeParams },
   });
 
@@ -627,6 +920,19 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
     case 'SAVE':
       const format = params['format'] || 'edf';
       return `.${format}`;
+    case 'SUM': {
+      const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
+      return `${inputs.length || 0}路输入`;
+    }
+    case 'SPLIT': {
+      const outputs = Array.isArray(params['outputs']) ? params['outputs'] : [];
+      return `${outputs.length || 0}路输出`;
+    }
+    case 'MERGE': {
+      const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
+      const strategy = params['strategy'] || 'interleave';
+      return `${inputs.length || 0}→1 ${strategy}`;
+    }
     default:
       return '';
   }
@@ -666,8 +972,8 @@ async function loadFromBackend() {
       if (sourceNode && targetNode) {
         graph.addEdge({
           id: edge.id,
-          source: { cell: edge.source, port: 'out' },
-          target: { cell: edge.target, port: 'in' },
+          source: { cell: edge.source, port: edge.sourcePort || getDefaultNodeOutputPort(edge.source) },
+          target: { cell: edge.target, port: edge.targetPort || getDefaultNodeInputPort(edge.target) },
           attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
         });
       } else {
@@ -676,6 +982,7 @@ async function loadFromBackend() {
     });
 
     hasNodes.value = graph.getNodes().length > 0;
+    updateAllEdgeLabels();
     setGraphInteracting(graph, !frozen.value);
   } catch (err) {
     console.error('Failed to load graph:', err);
@@ -792,6 +1099,8 @@ function buildPayload(): GraphPayload {
     id: edge.id,
     source: edge.getSourceCellId() || '',
     target: edge.getTargetCellId() || '',
+    sourcePort: edge.getSourcePortId() || undefined,
+    targetPort: edge.getTargetPortId() || undefined,
   }));
 
   return { nodes, edges, frozen: frozen.value };
@@ -874,8 +1183,8 @@ async function loadGraphFromFile(event: Event) {
       if (sourceNode && targetNode) {
         graph.addEdge({
           id: edge.id,
-          source: { cell: edge.source, port: 'out' },
-          target: { cell: edge.target, port: 'in' },
+          source: { cell: edge.source, port: edge.sourcePort || getDefaultNodeOutputPort(edge.source) },
+          target: { cell: edge.target, port: edge.targetPort || getDefaultNodeInputPort(edge.target) },
           attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
         });
       } else {
@@ -885,6 +1194,7 @@ async function loadGraphFromFile(event: Event) {
 
     hasNodes.value = graph.getNodes().length > 0;
     frozen.value = payload.frozen || false;
+    updateAllEdgeLabels();
     
     // 保存到后端
     await saveGraph(buildPayload());
@@ -1019,13 +1329,25 @@ async function loadMockData() {
   });
 
   // 创建边
-  for (let i = 0; i < nodeIds.length - 1; i++) {
+  if (nodeIds.length >= 4) {
     graph.addEdge({
-      source: { cell: nodeIds[i], port: 'out' },
-      target: { cell: nodeIds[i + 1], port: 'in' },
+      source: { cell: nodeIds[0], port: 'out' },
+      target: { cell: nodeIds[1], port: 'in' },
+      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+    });
+    graph.addEdge({
+      source: { cell: nodeIds[1], port: 'out' },
+      target: { cell: nodeIds[2], port: 'in' },
+      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+    });
+    graph.addEdge({
+      source: { cell: nodeIds[2], port: 'out-1' },
+      target: { cell: nodeIds[3], port: 'in' },
       attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
     });
   }
+
+  updateAllEdgeLabels();
 
   await saveGraph(buildPayload());
 }
@@ -1054,6 +1376,15 @@ onMounted(async () => {
       validateConnection({ sourceMagnet, targetMagnet }) {
         if (!sourceMagnet || sourceMagnet.getAttribute('port-group') === 'in') return false;
         if (!targetMagnet || targetMagnet.getAttribute('port-group') !== 'in') return false;
+
+        const targetPort = targetMagnet.getAttribute('port');
+        const targetCellId = targetMagnet.getAttribute('data-cell-id');
+        if (targetCellId && targetPort) {
+          const hasIncoming = graph.getEdges().some((edge) => {
+            return edge.getTargetCellId() === targetCellId && edge.getTargetPortId() === targetPort;
+          });
+          if (hasIncoming) return false;
+        }
         return true;
       },
     },
@@ -1116,12 +1447,18 @@ onMounted(async () => {
   });
 
   // 连接成功高亮
-  graph.on('edge:connected', ({ currentCell, currentPort }) => {
+  graph.on('edge:connected', ({ edge, currentCell, currentPort }) => {
     if (currentCell && currentPort) {
       currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#5F95FF');
       currentCell.setPortProp(currentPort, 'attrs/circle/stroke', '#5F95FF');
       currentCell.setPortProp(currentPort, 'attrs/circle/style/visibility', 'visible');
     }
+    // 更新连接桩标签
+    if (edge) applyEdgeLabel(edge);
+  });
+
+  graph.on('edge:removed', () => {
+    updateAllEdgeLabels();
   });
 
   // 节点双击编辑

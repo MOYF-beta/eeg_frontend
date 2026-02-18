@@ -9,6 +9,7 @@ export interface EegDataPacket {
   nodeId: string; // 数据来源节点ID
   nodeType?: string;
   channels: number[]; // 各通道数据值
+  channelNames?: string[];
   samples?: number[][]; // 批量样本（可选）
   sampleRate?: number;
   fftSize?: number;
@@ -186,6 +187,7 @@ class EegWebSocket {
           nodeId: message.nodeId,
           nodeType: message.nodeType,
           channels: message.channels,
+          channelNames: Array.isArray(message.channelNames) ? message.channelNames : undefined,
           samples: message.samples,
           sampleRate: message.sampleRate,
           fftSize: message.fftSize,

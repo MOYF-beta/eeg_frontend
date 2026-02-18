@@ -23,6 +23,8 @@ export type GraphEdge = {
   id: string;
   source: string;
   target: string;
+  sourcePort?: string;
+  targetPort?: string;
 };
 
 export type GraphPayload = {

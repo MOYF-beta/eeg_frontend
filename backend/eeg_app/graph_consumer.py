@@ -2,6 +2,7 @@ import asyncio
 import json
 import time
 from collections import deque
+from typing import Dict, List, Set
 
 import numpy as np
 from channels.generic.websocket import AsyncWebsocketConsumer
@@ -239,13 +240,225 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         
         # 没有REPLAY节点或回放结束，返回None
         return None
+
+    @staticmethod
+    def _default_channel_names(count: int) -> List[str]:
+        return [f'CH{i + 1}' for i in range(max(0, count))]
+
+    @staticmethod
+    def _parse_channel_indices(raw: object) -> List[int]:
+        if not isinstance(raw, str):
+            return []
+        result: List[int] = []
+        for part in raw.split(','):
+            item = part.strip()
+            if not item:
+                continue
+            try:
+                idx = int(item)
+            except Exception:
+                continue
+            if idx >= 0:
+                result.append(idx)
+        return result
+
+    @staticmethod
+    def _clone_signal(signal: Dict) -> Dict:
+        return {
+            'channels': list(signal.get('channels', [])),
+            'channelNames': list(signal.get('channelNames', [])),
+        }
+
+    def _compute_node_outputs(
+        self,
+        node_id: str,
+        nodes_by_id: Dict[str, Dict],
+        incoming_by_target: Dict[str, List[Dict]],
+        default_source_signal: Dict,
+        memo: Dict[str, Dict[str, Dict]],
+        visiting: Set[str],
+    ) -> Dict[str, Dict]:
+        if node_id in memo:
+            return memo[node_id]
+
+        if node_id in visiting:
+            memo[node_id] = {}
+            return memo[node_id]
+
+        node = nodes_by_id.get(node_id)
+        if not node:
+            memo[node_id] = {}
+            return memo[node_id]
+
+        visiting.add(node_id)
+
+        node_type = node.get('type')
+        params = node.get('params') or {}
+        incoming_edges = sorted(
+            incoming_by_target.get(node_id, []),
+            key=lambda e: str(e.get('targetPort') or ''),
+        )
+
+        def get_edge_signal(edge: Dict) -> Dict:
+            source_id = edge.get('source')
+            if not source_id:
+                return {'channels': [], 'channelNames': []}
+            source_outputs = self._compute_node_outputs(
+                source_id,
+                nodes_by_id,
+                incoming_by_target,
+                default_source_signal,
+                memo,
+                visiting,
+            )
+            source_port = edge.get('sourcePort') or 'out'
+            if source_port in source_outputs:
+                return self._clone_signal(source_outputs[source_port])
+            if source_outputs:
+                first = next(iter(source_outputs.values()))
+                return self._clone_signal(first)
+            return {'channels': [], 'channelNames': []}
+
+        def get_first_input_signal() -> Dict:
+            for edge in incoming_edges:
+                sig = get_edge_signal(edge)
+                if sig.get('channels'):
+                    return sig
+            return {'channels': [], 'channelNames': []}
+
+        outputs: Dict[str, Dict] = {}
+
+        if node_type in {'SOURCE', 'REPLAY'}:
+            channels = list(default_source_signal.get('channels', []))
+            names = params.get('channelNames')
+            if isinstance(names, list) and names:
+                channel_names = [str(v) for v in names]
+            else:
+                channel_names = self._default_channel_names(len(channels))
+            outputs['out'] = {'channels': channels, 'channelNames': channel_names}
+
+        elif node_type == 'FILTER':
+            in_sig = get_first_input_signal()
+            outputs['out'] = in_sig
+
+        elif node_type == 'SUM':
+            input_cfg = params.get('inputs')
+            if not isinstance(input_cfg, list):
+                input_cfg = []
+
+            total = 0.0
+            has_value = False
+            if input_cfg:
+                for idx, cfg in enumerate(input_cfg):
+                    target_port = f'in-{idx + 1}'
+                    edge = next((e for e in incoming_edges if (e.get('targetPort') or 'in') == target_port), None)
+                    if not edge:
+                        continue
+                    sig = get_edge_signal(edge)
+                    channels = sig.get('channels', [])
+                    if not channels:
+                        continue
+                    weight = 1.0
+                    if isinstance(cfg, dict):
+                        try:
+                            weight = float(cfg.get('weight', 1.0))
+                        except Exception:
+                            weight = 1.0
+                    total += channels[0] * weight
+                    has_value = True
+            else:
+                for edge in incoming_edges:
+                    sig = get_edge_signal(edge)
+                    channels = sig.get('channels', [])
+                    if not channels:
+                        continue
+                    total += channels[0]
+                    has_value = True
+
+            out_channels = [total] if has_value else []
+            outputs['out'] = {
+                'channels': out_channels,
+                'channelNames': [str(node.get('name') or 'SUM')] if out_channels else [],
+            }
+
+        elif node_type == 'SPLIT':
+            in_sig = get_first_input_signal()
+            in_channels = list(in_sig.get('channels', []))
+            in_names = list(in_sig.get('channelNames', []))
+            outputs_cfg = params.get('outputs')
+            if not isinstance(outputs_cfg, list) or len(outputs_cfg) == 0:
+                outputs_cfg = [{'label': '输出1', 'channelIndices': ','.join(str(i) for i in range(len(in_channels)))}]
+
+            for idx, cfg in enumerate(outputs_cfg):
+                port = f'out-{idx + 1}'
+                label = f'输出{idx + 1}'
+                channel_indices_raw = ''
+                if isinstance(cfg, dict):
+                    label = str(cfg.get('label') or label)
+                    channel_indices_raw = str(cfg.get('channelIndices') or '')
+
+                indices = self._parse_channel_indices(channel_indices_raw)
+                if indices:
+                    out_channels = [in_channels[i] for i in indices if 0 <= i < len(in_channels)]
+                    out_names = [in_names[i] if i < len(in_names) else f'CH{i + 1}' for i in indices if 0 <= i < len(in_channels)]
+                else:
+                    out_channels = list(in_channels)
+                    out_names = list(in_names)
+
+                if not out_names and out_channels:
+                    out_names = self._default_channel_names(len(out_channels))
+
+                if len(out_names) == 1 and label:
+                    out_names = [label]
+
+                outputs[port] = {
+                    'channels': out_channels,
+                    'channelNames': out_names,
+                }
+
+        elif node_type == 'MERGE':
+            input_cfg = params.get('inputs')
+            if not isinstance(input_cfg, list):
+                input_cfg = []
+
+            out_channels: List[float] = []
+            out_names: List[str] = []
+
+            for idx, edge in enumerate(incoming_edges):
+                sig = get_edge_signal(edge)
+                channels = list(sig.get('channels', []))
+                names = list(sig.get('channelNames', []))
+                gain = 1.0
+                if idx < len(input_cfg) and isinstance(input_cfg[idx], dict):
+                    try:
+                        gain = float(input_cfg[idx].get('gain', 1.0))
+                    except Exception:
+                        gain = 1.0
+                out_channels.extend([v * gain for v in channels])
+                if names:
+                    out_names.extend(names)
+                else:
+                    out_names.extend(self._default_channel_names(len(channels)))
+
+            outputs['out'] = {'channels': out_channels, 'channelNames': out_names}
+
+        elif node_type in {'OSC', 'SPECTRUM', 'SAVE'}:
+            outputs['in'] = get_first_input_signal()
+
+        else:
+            outputs['out'] = get_first_input_signal()
+
+        memo[node_id] = outputs
+        visiting.remove(node_id)
+        return outputs
     
-    def _save_channels(self, channels):
-        """保存通道数据到所有SAVE节点"""
+    def _save_channels(self, channels, node_ids=None):
+        """保存通道数据到指定或全部 SAVE 节点"""
         from .data_recorder import write_sample
         
         timestamp = time.time() * 1000
-        for node_id in self._save_nodes:
+        target_nodes = node_ids if node_ids is not None else self._save_nodes
+        for node_id in target_nodes:
             write_sample(node_id, timestamp, channels)
     
     async def stream_data(self):
@@ -265,6 +478,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         
         # 数据缓冲区
         sample_buffer = {}
+        sample_channel_names: Dict[str, List[str]] = {}
         last_send_time = time.time()
 
         # 采样节拍控制（基于实际耗时追赶采样率）
@@ -317,6 +531,15 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
 
             # 获取计算图节点并缓冲数据
             nodes = graph.get('nodes', [])
+            edges = graph.get('edges', [])
+            nodes_by_id = {node.get('id'): node for node in nodes if node.get('id')}
+            incoming_by_target: Dict[str, List[Dict]] = {}
+            for edge in edges:
+                target = edge.get('target')
+                if not target:
+                    continue
+                incoming_by_target.setdefault(target, []).append(edge)
+
             osc_nodes = [node for node in nodes if node.get('type') == 'OSC' and node.get('id') in self.subscribed_nodes]
             spectrum_nodes = [node for node in nodes if node.get('type') == 'SPECTRUM' and node.get('id') in self.subscribed_nodes]
             output_nodes = osc_nodes + spectrum_nodes
@@ -362,15 +585,45 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                     channels.append(filtered_values[i])
                     self._spectrum_buffers[i].append(filtered_values[i])
 
-                # 保存数据到文件（如果有SAVE节点）
-                if self._save_nodes:
-                    self._save_channels(channels)
+                base_signal = {
+                    'channels': channels,
+                    'channelNames': self._default_channel_names(len(channels)),
+                }
+                memo: Dict[str, Dict[str, Dict]] = {}
+
+                # 保存节点：写入其输入通道
+                for save_node_id in self._save_nodes:
+                    save_out = self._compute_node_outputs(
+                        save_node_id,
+                        nodes_by_id,
+                        incoming_by_target,
+                        base_signal,
+                        memo,
+                        set(),
+                    )
+                    in_sig = save_out.get('in') or {}
+                    save_channels = in_sig.get('channels') or []
+                    if save_channels:
+                        self._save_channels(save_channels, [save_node_id])
 
                 for node in output_nodes:
                     node_id = node['id']
+                    node_outputs = self._compute_node_outputs(
+                        node_id,
+                        nodes_by_id,
+                        incoming_by_target,
+                        base_signal,
+                        memo,
+                        set(),
+                    )
+                    in_sig = node_outputs.get('in') or node_outputs.get('out') or {}
+                    node_channels = list(in_sig.get('channels') or [])
+                    node_names = [str(v) for v in (in_sig.get('channelNames') or [])]
+
                     if node_id not in sample_buffer:
                         sample_buffer[node_id] = []
-                    sample_buffer[node_id].append(channels[:])
+                    sample_buffer[node_id].append(node_channels)
+                    sample_channel_names[node_id] = node_names
 
                 t += dt
             
@@ -397,6 +650,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                             'nodeType': node_type_map.get(node_id),
                             'channels': latest_channels,
                             'samples': samples,
+                            'channelNames': sample_channel_names.get(node_id, []),
                             'sampleRate': sample_rate,
                         }
 
@@ -413,4 +667,5 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 
                 # 清空缓冲区
                 sample_buffer.clear()
+                sample_channel_names.clear()
             await asyncio.sleep(0.001)

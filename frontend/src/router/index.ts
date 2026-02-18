@@ -4,6 +4,7 @@ import OscilloscopeView from '../views/OscilloscopeView.vue';
 import VisualizationView from '../views/VisualizationView.vue';
 import CpgraphView from '../views/CpgraphView.vue';
 import TestView from '../views/TestView.vue';
+import FullscreenView from '../views/FullscreenView.vue';
 
 const routes = [
   { path: '/', redirect: '/devices' },
@@ -12,6 +13,12 @@ const routes = [
   { path: '/visualization', name: 'Visualization', component: VisualizationView },
   { path: '/cpgraph', name: 'Cpgraph', component: CpgraphView },
   { path: '/test', name: 'Test', component: TestView },
+  {
+    path: '/fullscreen/:type/:nodeId',
+    name: 'Fullscreen',
+    component: FullscreenView,
+    props: true
+  },
 ];
 
 export const router = createRouter({

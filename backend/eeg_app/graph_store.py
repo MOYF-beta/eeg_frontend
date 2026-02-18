@@ -22,6 +22,8 @@ class GraphEdge(TypedDict):
     id: str
     source: str
     target: str
+    sourcePort: str
+    targetPort: str
 
 
 class GraphPayload(TypedDict):
@@ -41,6 +43,41 @@ NODE_TYPES = {
     'SPECTRUM',
     'SAVE',
 }
+
+_NO_INPUT_NODE_TYPES = {'SOURCE', 'REPLAY'}
+_NO_OUTPUT_NODE_TYPES = {'OSC', 'SPECTRUM', 'SAVE'}
+
+
+def _node_input_ports(node: Dict) -> List[str]:
+    node_type = node.get('type')
+    params = node.get('params') or {}
+
+    if node_type in _NO_INPUT_NODE_TYPES:
+        return []
+
+    if node_type in {'SUM', 'MERGE'}:
+        inputs = params.get('inputs')
+        count = len(inputs) if isinstance(inputs, list) else 1
+        count = max(1, count)
+        return [f'in-{i + 1}' for i in range(count)]
+
+    return ['in']
+
+
+def _node_output_ports(node: Dict) -> List[str]:
+    node_type = node.get('type')
+    params = node.get('params') or {}
+
+    if node_type in _NO_OUTPUT_NODE_TYPES:
+        return []
+
+    if node_type == 'SPLIT':
+        outputs = params.get('outputs')
+        count = len(outputs) if isinstance(outputs, list) else 1
+        count = max(1, count)
+        return [f'out-{i + 1}' for i in range(count)]
+
+    return ['out']
 
 # 默认空图
 _DEFAULT_GRAPH: GraphPayload = {
@@ -116,6 +153,7 @@ def validate_graph(payload: GraphPayload) -> List[str]:
     """验证图数据"""
     errors: List[str] = []
     node_ids = set()
+    nodes_by_id = {}
     for node in payload.get('nodes', []):
         node_id = node.get('id')
         node_type = node.get('type')
@@ -126,15 +164,40 @@ def validate_graph(payload: GraphPayload) -> List[str]:
         if node_id in node_ids:
             errors.append(f"duplicate node id: {node_id}")
         node_ids.add(node_id)
+        nodes_by_id[node_id] = node
 
     for edge in payload.get('edges', []):
         source = edge.get('source')
         target = edge.get('target')
+        source_port = edge.get('sourcePort')
+        target_port = edge.get('targetPort')
         if not source or not target:
             errors.append('edge.source and edge.target are required')
             continue
         if source not in node_ids or target not in node_ids:
             errors.append('edge source/target must exist in nodes')
+            continue
+
+        source_node = nodes_by_id.get(source, {})
+        target_node = nodes_by_id.get(target, {})
+
+        valid_source_ports = _node_output_ports(source_node)
+        valid_target_ports = _node_input_ports(target_node)
+
+        if valid_source_ports and source_port and source_port not in valid_source_ports:
+            errors.append(f"invalid source port: {source}.{source_port}")
+        if valid_target_ports and target_port and target_port not in valid_target_ports:
+            errors.append(f"invalid target port: {target}.{target_port}")
+
+        if valid_source_ports and not source_port:
+            errors.append(f"edge.sourcePort is required for node {source}")
+        if valid_target_ports and not target_port:
+            errors.append(f"edge.targetPort is required for node {target}")
+
+        if not valid_source_ports:
+            errors.append(f"node {source} cannot be edge source")
+        if not valid_target_ports:
+            errors.append(f"node {target} cannot be edge target")
 
     return errors
 

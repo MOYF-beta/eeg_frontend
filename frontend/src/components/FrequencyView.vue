@@ -1,6 +1,6 @@
 <template>
-  <v-card class="mb-4" variant="tonal">
-    <v-card-text>
+  <v-card :class="{ 'osc-fullscreen-card': fullscreen }" class="mb-4" variant="tonal">
+    <v-card-text class="pa-2">
       <!-- 未选择数据源提示 -->
       <v-alert
         v-if="!selectedNodeId"
@@ -103,10 +103,19 @@
 
           <div class="osc-status-section osc-status-close">
             <v-btn
+              v-if="!fullscreen"
               size="x-small"
               variant="text"
               color="grey"
-              icon="mdi-close"
+              icon="mdi-fullscreen"
+              title="全屏显示"
+              @click="openFullscreen"
+            />
+            <v-btn
+              size="x-small"
+              variant="text"
+              color="grey"
+              :icon="fullscreen ? 'mdi-fullscreen-exit' : 'mdi-close'"
               @click="$emit('remove')"
             />
           </div>
@@ -170,12 +179,12 @@
                 class="flex-wrap"
               >
                 <v-btn
-                  v-for="i in CHANNEL_COUNT"
-                  :key="`channel-${i}`"
-                  :value="i - 1"
+                  v-for="item in channelItems"
+                  :key="`channel-${item.value}`"
+                  :value="item.value"
                   size="small"
                 >
-                  CH{{ i }}
+                  {{ item.title }}
                 </v-btn>
               </v-btn-toggle>
               <v-switch
@@ -260,19 +269,22 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { sessionStore } from '../services/sessionStore';
 import { fetchGraph, type GraphNode } from '../services/graph';
 
-defineEmits<{
+const emit = defineEmits<{
   (e: 'remove'): void;
 }>();
 
 const props = defineProps<{
   initialNodeId?: string;
+  fullscreen?: boolean;
 }>();
 
-const CHANNEL_COUNT = 8;
+const router = useRouter();
+
 const MAX_FREQ_LIMIT = 500;
 const channelColors = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#3949ab'];
 const heatmapPalette = [
@@ -326,6 +338,8 @@ const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('dis
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
+const channelCount = ref(8);
+const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 
 const selectedChannels = ref<number[]>([0]);
 const averageEnabled = ref(false);
@@ -358,6 +372,13 @@ const maxDisplayFreq = computed(() => Math.min(MAX_FREQ_LIMIT, Math.floor(sample
 const sampleCount = computed(() => bufferFill.value);
 
 const availableOscNodes = computed(() => graphNodes.value.filter((n) => n.type === 'OSC' || n.type === 'SPECTRUM'));
+
+const channelItems = computed(() => {
+  return Array.from({ length: channelCount.value }, (_, i) => ({
+    title: channelNames.value[i] || `CH${i + 1}`,
+    value: i,
+  }));
+});
 
 const canDisplay = computed(() => Boolean(selectedNodeId.value && isGraphFrozen.value && wsStatus.value === 'connected'));
 
@@ -401,8 +422,8 @@ const noDataText = computed(() => {
 });
 
 const channelDisplayText = computed(() => {
-  if (selectedChannels.value.length === 0) return 'CH1';
-  return selectedChannels.value.map((ch) => `CH${ch + 1}`).join(', ');
+  if (selectedChannels.value.length === 0) return channelNames.value[0] || 'CH1';
+  return selectedChannels.value.map((ch) => channelNames.value[ch] || `CH${ch + 1}`).join(', ');
 });
 
 const averageDisplayText = computed(() => `均值 ${selectedChannels.value.length} 通道`);
@@ -421,6 +442,19 @@ const hasSpectrumData = computed(() => {
 });
 
 const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+const ensureChannelSchema = (count: number, names?: string[]) => {
+  const normalizedCount = Math.max(1, Math.floor(Number(count) || 1));
+  const normalizedNames = Array.from({ length: normalizedCount }, (_, i) => {
+    return names?.[i] || channelNames.value[i] || `CH${i + 1}`;
+  });
+  channelCount.value = normalizedCount;
+  channelNames.value = normalizedNames;
+  selectedChannels.value = selectedChannels.value
+    .map((ch) => clamp(Math.floor(ch), 0, normalizedCount - 1))
+    .filter((ch, idx, arr) => arr.indexOf(ch) === idx);
+  if (selectedChannels.value.length === 0) selectedChannels.value = [0];
+};
 
 const resetData = () => {
   backendSpectra.value = [];
@@ -441,7 +475,7 @@ const resetData = () => {
 
 const getActiveChannels = () => {
   const normalized = (selectedChannels.value.length > 0 ? selectedChannels.value : [0])
-    .map((ch) => clamp(Math.floor(ch), 0, CHANNEL_COUNT - 1))
+    .map((ch) => clamp(Math.floor(ch), 0, channelCount.value - 1))
     .filter((ch, idx, arr) => arr.indexOf(ch) === idx);
   return normalized.length > 0 ? normalized : [0];
 };
@@ -536,6 +570,15 @@ const onNodeSelected = (nodeId: string | null) => {
   }
   selectedNodeId.value = nodeId;
   sessionStore.bindViewToNode(viewId, nodeId);
+
+  const node = graphNodes.value.find((n) => n.id === nodeId);
+  const paramNames = Array.isArray(node?.params?.availableChannels)
+    ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
+    : null;
+  if (paramNames && paramNames.length > 0) {
+    ensureChannelSchema(paramNames.length, paramNames);
+  }
+
   resetData();
   if (isGraphFrozen.value) {
     eegWebSocket.subscribe([nodeId]);
@@ -550,6 +593,15 @@ const unbindNode = () => {
   selectedNodeId.value = null;
   sessionStore.bindViewToNode(viewId, null);
   resetData();
+};
+
+const openFullscreen = () => {
+  if (!selectedNodeId.value) return;
+  const routeData = router.resolve({
+    name: 'Fullscreen',
+    params: { type: 'freq', nodeId: selectedNodeId.value }
+  });
+  window.open(routeData.href, '_blank');
 };
 
 const updatePlotMetrics = () => {
@@ -640,7 +692,9 @@ const drawGrid = () => {
         gridCtx.fillText(sec, x, top + pH + 6);
       }
 
-      const label = channels[region] === -1 ? 'AVG' : `CH${channels[region] + 1}`;
+      const label = channels[region] === -1
+        ? 'AVG'
+        : (channelNames.value[channels[region]] || `CH${channels[region] + 1}`);
       gridCtx.textBaseline = 'bottom';
       gridCtx.fillStyle = '#555';
       gridCtx.fillText(label, regionLeft + regionWidth / 2, top - 2);
@@ -1078,6 +1132,17 @@ const onZoomMouseDown = (e: MouseEvent) => {
 const handleDataPacket = (packet: EegDataPacket) => {
   if (!selectedNodeId.value || String(packet.nodeId) !== String(selectedNodeId.value)) return;
 
+  const inferredCount = Math.max(
+    Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,
+    Array.isArray(packet.spectra) ? packet.spectra.length : 0,
+    Array.isArray(packet.channels) ? packet.channels.length : 0,
+    1,
+  );
+  const inferredNames = Array.isArray(packet.channelNames)
+    ? packet.channelNames.map((name, idx) => String(name || `CH${idx + 1}`))
+    : undefined;
+  ensureChannelSchema(inferredCount, inferredNames);
+
   const packetTs = Number(packet.timestamp || 0);
   if (Number.isFinite(packetTs) && packetTs > 0) {
     const lagMs = Date.now() - packetTs;
@@ -1131,7 +1196,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
       frame.avg = packet.spectrogramRow;
     }
     const maxRows = Math.max(100, Math.round(spectrogramHistorySec.value * TARGET_FPS));
-    for (let ch = 0; ch < Math.min(CHANNEL_COUNT, packet.spectra.length); ch += 1) {
+    for (let ch = 0; ch < Math.min(channelCount.value, packet.spectra.length); ch += 1) {
       const mags = packet.spectra[ch];
       if (!Array.isArray(mags) || mags.length <= 1) continue;
       const normalized = normalizeSpectrogramRow(mags, packet.spectrogramDbMin, packet.spectrogramDbMax);
@@ -1165,6 +1230,17 @@ const updateGraphState = async () => {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
     isGraphFrozen.value = Boolean(graph.frozen);
+
+    if (selectedNodeId.value) {
+      const node = graphNodes.value.find((n) => n.id === selectedNodeId.value);
+      const paramNames = Array.isArray(node?.params?.availableChannels)
+        ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
+        : null;
+      if (paramNames && paramNames.length > 0) {
+        ensureChannelSchema(paramNames.length, paramNames);
+      }
+    }
+
     if (isGraphFrozen.value && selectedNodeId.value) {
       eegWebSocket.subscribe([selectedNodeId.value]);
     }
@@ -1206,7 +1282,7 @@ onUnmounted(() => {
 
 watch(selectedChannels, (channels) => {
   const normalized = channels
-    .map((v) => clamp(Math.floor(v), 0, CHANNEL_COUNT - 1))
+    .map((v) => clamp(Math.floor(v), 0, channelCount.value - 1))
     .filter((v, i, arr) => arr.indexOf(v) === i);
   if (normalized.length === 0) normalized.push(0);
   const same = normalized.length === channels.length && normalized.every((v, i) => v === channels[i]);
@@ -1277,7 +1353,9 @@ watch(isGraphFrozen, (frozen) => {
 .osc-root {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 8px;
+  width: 100%;
+  min-width: 320px;
 }
 
 .osc-statusbar {
@@ -1384,11 +1462,40 @@ watch(isGraphFrozen, (frozen) => {
 
 .osc-chart-container {
   position: relative;
-  height: 320px;
+  height: 320px; /* Fixed height for card mode */
+  min-height: 200px;
   border: 1px solid #e0e0e0;
   border-radius: 8px;
   background: #fff;
   overflow: hidden;
+  width: 100%;
+}
+
+.osc-fullscreen-card {
+  height: 100% !important;
+  width: 100% !important;
+  margin: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  border-radius: 0 !important;
+}
+
+.osc-fullscreen-card :deep(.v-card-text) {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 8px !important;
+}
+
+.osc-fullscreen-card .osc-root {
+  flex: 1 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+
+.osc-fullscreen-card .osc-chart-container {
+  height: auto !important;
+  flex: 1 !important;
 }
 
 .osc-chart {

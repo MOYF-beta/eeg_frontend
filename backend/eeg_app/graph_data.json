@@ -31,18 +31,27 @@
         "order": 4
       },
       "id": "node-1771072109667-217",
-      "x": 280,
-      "y": 270
+      "x": 500,
+      "y": 220
     },
     {
       "type": "SPLIT",
       "name": "通道分离",
       "params": {
-        "channelIndices": "0,1,2,3"
+        "outputs": [
+          {
+            "label": "输出1",
+            "channelIndices": "0,1,2,3"
+          },
+          {
+            "label": "输出2",
+            "channelIndices": "4,5,6,7"
+          }
+        ]
       },
       "id": "node-1771072109669-612",
-      "x": 530,
-      "y": 240
+      "x": 280,
+      "y": 100
     },
     {
       "type": "OSC",
@@ -50,18 +59,81 @@
       "params": {
         "timeWindow": 5,
         "yScale": 1,
-        "mode": "scroll"
+        "mode": "scroll",
+        "selectedChannels": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "availableChannels": [
+          "CH1",
+          "CH2",
+          "CH3",
+          "CH4"
+        ]
       },
       "id": "node-1771072109669-111",
-      "x": 800,
-      "y": 100
+      "x": 740,
+      "y": 80
+    },
+    {
+      "type": "OSC",
+      "name": "示波器",
+      "params": {
+        "timeWindow": 5,
+        "yScale": 1,
+        "mode": "scroll",
+        "selectedChannels": [
+          0,
+          1,
+          2,
+          3
+        ],
+        "availableChannels": [
+          "CH1",
+          "CH2",
+          "CH3",
+          "CH4",
+          "CH5",
+          "CH6",
+          "CH7",
+          "CH8"
+        ]
+      },
+      "id": "node-1771409666522-919",
+      "x": 740,
+      "y": 190
     }
   ],
   "edges": [
     {
-      "id": "4d08aa12-9d1a-4cf0-902e-0e115fe370dd",
+      "id": "0985795e-50d5-49cc-a57b-45fc824c5b98",
       "source": "node-1771072109663-775",
-      "target": "node-1771072109669-111"
+      "target": "node-1771072109669-612",
+      "sourcePort": "out",
+      "targetPort": "in"
+    },
+    {
+      "id": "7440e803-d1dc-4c6b-b21e-65c34977c956",
+      "source": "node-1771072109669-612",
+      "target": "node-1771072109669-111",
+      "sourcePort": "out-1",
+      "targetPort": "in"
+    },
+    {
+      "id": "0e602758-8503-4951-9141-32b321d2b2b0",
+      "source": "node-1771072109669-612",
+      "target": "node-1771072109667-217",
+      "sourcePort": "out-2",
+      "targetPort": "in"
+    },
+    {
+      "id": "82e2f0a9-84f3-4a5a-a647-5c6bcea10e1e",
+      "source": "node-1771072109667-217",
+      "target": "node-1771409666522-919",
+      "sourcePort": "out",
+      "targetPort": "in"
     }
   ],
   "frozen": true
