@@ -94,9 +94,9 @@
             <div class="osc-status-text">{{ currentSampleRate }}Hz</div>
           </div>
           <div class="osc-status-section">
-            <div class="osc-status-label">处理延迟</div>
+            <div class="osc-status-label">平均延迟</div>
             <div class="osc-status-text" :style="{ color: isNonRealtime ? '#FB8C00' : undefined }">
-              {{ processingDelayMs }}ms
+              {{ averageDelayMs.toFixed(1) }}ms
             </div>
             <div v-if="isNonRealtime" class="osc-status-text">非实时</div>
           </div>
@@ -356,6 +356,10 @@ const isGraphFrozen = ref(false);
 const packetCount = ref(0);
 const processingDelayMs = ref(0);
 const isNonRealtime = ref(false);
+
+// 延迟历史数据
+const delayHistory = ref<Array<{timestamp: number, delay: number}>>([]); // 存储最近1秒的延迟数据
+const averageDelayMs = ref(0); // 最近1秒的平均延迟
 
 // WebSocket 状态
 const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -1013,6 +1017,26 @@ const renderFrame = () => {
 };
 
 // WebSocket 数据处理器
+// 更新延迟历史数据
+const updateDelayHistory = (delayMs: number) => {
+  const now = Date.now();
+  
+  // 添加新延迟数据
+  delayHistory.value.push({ timestamp: now, delay: delayMs });
+  
+  // 移除超过1秒的旧数据
+  const oneSecondAgo = now - 1000;
+  delayHistory.value = delayHistory.value.filter(item => item.timestamp >= oneSecondAgo);
+  
+  // 计算平均延迟
+  if (delayHistory.value.length > 0) {
+    const totalDelay = delayHistory.value.reduce((sum, item) => sum + item.delay, 0);
+    averageDelayMs.value = totalDelay / delayHistory.value.length;
+  } else {
+    averageDelayMs.value = 0;
+  }
+};
+
 const handleDataPacket = (packet: EegDataPacket) => {
   // 宽松匹配：支持字符串和数字类型的 nodeId
   const packetNodeId = String(packet.nodeId);
@@ -1022,6 +1046,9 @@ const handleDataPacket = (packet: EegDataPacket) => {
 
   processingDelayMs.value = Math.max(0, Number(packet.processingDelayMs || 0));
   isNonRealtime.value = Boolean(packet.nonRealtime || processingDelayMs.value > 10000);
+  
+  // 更新延迟历史数据
+  updateDelayHistory(processingDelayMs.value);
 
   const inferredCount = Math.max(
     Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,

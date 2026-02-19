@@ -101,6 +101,11 @@
             <div class="osc-status-text">{{ freqRange[0] }}-{{ freqRange[1] }}Hz</div>
           </div>
 
+          <div class="osc-status-section">
+            <div class="osc-status-label">平均延迟</div>
+            <div class="osc-status-text">{{ averageDelayMs.toFixed(1) }}ms</div>
+          </div>
+
           <div class="osc-status-section osc-status-close">
             <v-btn
               v-if="!fullscreen"
@@ -334,6 +339,12 @@ const sampleRate = ref(1000);
 const fftWindowSec = ref(1.0);
 const freqRange = ref<[number, number]>([0, 125]);
 const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
+
+// 延迟相关状态
+const processingDelayMs = ref(0);
+const delayHistory = ref<Array<{timestamp: number, delay: number}>>([]); // 存储最近1秒的延迟数据
+const averageDelayMs = ref(0); // 最近1秒的平均延迟
+let delayHistoryTimer: number | null = null;
 
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
@@ -1129,6 +1140,26 @@ const onZoomMouseDown = (e: MouseEvent) => {
   document.addEventListener('mouseup', onGlobalMouseUp);
 };
 
+// 更新延迟历史数据
+const updateDelayHistory = (delayMs: number) => {
+  const now = Date.now();
+  
+  // 添加新延迟数据
+  delayHistory.value.push({ timestamp: now, delay: delayMs });
+  
+  // 移除超过1秒的旧数据
+  const oneSecondAgo = now - 1000;
+  delayHistory.value = delayHistory.value.filter(item => item.timestamp >= oneSecondAgo);
+  
+  // 计算平均延迟
+  if (delayHistory.value.length > 0) {
+    const totalDelay = delayHistory.value.reduce((sum, item) => sum + item.delay, 0);
+    averageDelayMs.value = totalDelay / delayHistory.value.length;
+  } else {
+    averageDelayMs.value = 0;
+  }
+};
+
 const handleDataPacket = (packet: EegDataPacket) => {
   if (!selectedNodeId.value || String(packet.nodeId) !== String(selectedNodeId.value)) return;
 
@@ -1152,9 +1183,14 @@ const handleDataPacket = (packet: EegDataPacket) => {
     }
     lastDataTimestamp = packetTs;
     lastDataWallTime = performance.now();
+    
+    // 更新延迟数据
+    processingDelayMs.value = lagMs;
+    updateDelayHistory(lagMs);
   } else {
     lastDataTimestamp = Date.now();
     lastDataWallTime = performance.now();
+    processingDelayMs.value = 0;
   }
 
   if (packet.sampleRate && packet.sampleRate > 0 && packet.sampleRate !== sampleRate.value) {

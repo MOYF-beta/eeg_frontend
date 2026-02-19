@@ -69,9 +69,8 @@
       <v-divider />
       
       <v-card-actions>
-        <v-btn variant="text" @click="close">{{ isReadOnly ? '关闭' : '取消' }}</v-btn>
         <v-spacer />
-        <v-btn v-if="!isReadOnly" color="primary" @click="save">保存</v-btn>
+        <v-btn variant="text" @click="close">{{ isReadOnly ? '关闭' : '取消' }}</v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -138,11 +137,7 @@
       </div>
     </div>
     
-    <v-divider v-if="!isReadOnly" />
-    
-    <div v-if="!isReadOnly" class="sidebar-actions">
-      <v-btn color="primary" @click="save" block>保存</v-btn>
-    </div>
+    <!-- 自动保存，无需保存按钮 -->
   </div>
 </template>
 
@@ -803,10 +798,35 @@ watch(kernelText, (value) => {
   form.value.params.kernel = kernel.length > 0 ? kernel : [1];
 });
 
+// 监听form变化，自动保存
+watch(() => form.value, (newForm, oldForm) => {
+  if (props.isReadOnly) return;
+  if (!props.nodeData) return;
+  
+  // 检查是否有实际变化
+  const hasNameChanged = newForm.name !== oldForm?.name;
+  const hasParamsChanged = JSON.stringify(newForm.params) !== JSON.stringify(oldForm?.params);
+  
+  if (hasNameChanged || hasParamsChanged) {
+    debouncedSave();
+  }
+}, { deep: true });
+
+// 监听特定数组变化
+watch([channelNames, sumInputs, splitOutputs, mergeInputs], () => {
+  if (props.isReadOnly) return;
+  if (!props.nodeData) return;
+  debouncedSave();
+}, { deep: true });
+
 watch(paramsJson, (val) => {
   try {
     form.value.params = JSON.parse(val);
     jsonError.value = '';
+    // JSON变化也触发保存
+    if (!props.isReadOnly && props.nodeData) {
+      debouncedSave();
+    }
   } catch (e) {
     jsonError.value = 'JSON 格式错误';
   }
@@ -834,6 +854,17 @@ const removeChannelName = (index: number) => {
   if (channelNames.value.length > 1) {
     channelNames.value.splice(index, 1);
   }
+};
+
+// 防抖保存函数
+let saveTimeout: number | null = null;
+const debouncedSave = () => {
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
+  saveTimeout = setTimeout(() => {
+    save();
+  }, 500); // 500ms防抖
 };
 
 const save = async () => {
@@ -937,6 +968,9 @@ onMounted(() => {
 
 onUnmounted(() => {
   destroyCodeEditor();
+  if (saveTimeout) {
+    clearTimeout(saveTimeout);
+  }
 });
 </script>
 

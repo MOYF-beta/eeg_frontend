@@ -106,5 +106,5 @@
       "targetPort": "in"
     }
   ],
-  "frozen": true
+  "frozen": false
 }

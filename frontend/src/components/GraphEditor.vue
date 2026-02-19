@@ -322,15 +322,6 @@
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="editDialog.open = false">{{ frozen ? '关闭' : '取消' }}</v-btn>
-        <v-btn 
-          v-if="!frozen" 
-          color="primary" 
-          @click="saveNodeEdit"
-          :disabled="!canEditGraph"
-          :title="!canEditGraph ? `当前状态不允许保存节点: ${statusDescription}` : '保存节点配置'"
-        >
-          保存
-        </v-btn>
       </v-card-actions>
     </v-card>
   </v-dialog>
@@ -647,14 +638,6 @@ const editingNode = ref<GraphNode | null>(null);
 const allNodes = ref<GraphNode[]>([]);
 const allEdges = ref<Array<{id: string; source: string; target: string; sourcePort?: string; targetPort?: string}>>([]);
 
-// 监听冻结状态变化
-watch(frozen, (newVal, oldVal) => {
-  if (newVal !== oldVal) {
-    console.log(`[GraphEditor] Frozen state changed: ${oldVal} -> ${newVal}`);
-    applyFrozen();
-  }
-});
-
 // 节点编辑对话框状态
 const editDialog = ref({
   open: false,
@@ -665,6 +648,67 @@ const editDialog = ref({
   config: null as { color: string; bg: string } | null,
   fields: [] as ParamField[],
 });
+
+// 监听冻结状态变化
+watch(frozen, (newVal, oldVal) => {
+  if (newVal !== oldVal) {
+    console.log(`[GraphEditor] Frozen state changed: ${oldVal} -> ${newVal}`);
+    applyFrozen();
+  }
+});
+
+// 保存节点编辑（旧版，保留兼容性）
+function saveNodeEdit() {
+  // 冻结状态下禁止编辑
+  if (frozen.value) {
+    console.log('[GraphEditor] 冻结状态下禁止编辑节点');
+    return;
+  }
+  
+  const graph = graphRef.value;
+  if (!graph || !editDialog.value.nodeId) return;
+
+  const node = graph.getCellById(editDialog.value.nodeId);
+  if (!node || !node.isNode()) return;
+
+  // 更新节点数据
+  const data = node.getData() as GraphNode;
+  data.name = editDialog.value.nodeName;
+  data.params = { ...editDialog.value.params };
+  node.setData(data);
+
+  // 更新节点标签显示
+  const labelText = generateNodeLabel(data.type, data.name, data.params, editDialog.value.nodeId);
+  node.attr('label/text', labelText);
+
+  editDialog.value.open = false;
+}
+
+// 防抖保存函数（用于旧版对话框）
+let debounceSaveTimeout: number | null = null;
+const debouncedSaveNodeEdit = () => {
+  if (debounceSaveTimeout) {
+    clearTimeout(debounceSaveTimeout);
+  }
+  debounceSaveTimeout = setTimeout(() => {
+    if (editDialog.value.open && editDialog.value.nodeId && !frozen.value) {
+      saveNodeEdit();
+    }
+  }, 500); // 500ms防抖
+};
+
+// 监听编辑对话框变化，自动保存
+watch(() => editDialog.value, (newVal, oldVal) => {
+  if (!newVal.open || frozen.value) return;
+  
+  // 检查是否有实际变化
+  const hasNameChanged = newVal.nodeName !== oldVal?.nodeName;
+  const hasParamsChanged = JSON.stringify(newVal.params) !== JSON.stringify(oldVal?.params);
+  
+  if (hasNameChanged || hasParamsChanged) {
+    debouncedSaveNodeEdit();
+  }
+}, { deep: true });
 
 // 参数字段定义
 interface ParamField {
@@ -868,33 +912,6 @@ function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: stri
   } else {
     sessionStore.unbindOutputNode(nodeId);
   }
-}
-
-// 保存节点编辑（旧版，保留兼容性）
-function saveNodeEdit() {
-  // 冻结状态下禁止编辑
-  if (frozen.value) {
-    console.log('[GraphEditor] 冻结状态下禁止编辑节点');
-    return;
-  }
-  
-  const graph = graphRef.value;
-  if (!graph || !editDialog.value.nodeId) return;
-
-  const node = graph.getCellById(editDialog.value.nodeId);
-  if (!node || !node.isNode()) return;
-
-  // 更新节点数据
-  const data = node.getData() as GraphNode;
-  data.name = editDialog.value.nodeName;
-  data.params = { ...editDialog.value.params };
-  node.setData(data);
-
-  // 更新节点标签显示
-  const labelText = generateNodeLabel(data.type, data.name, data.params, editDialog.value.nodeId);
-  node.attr('label/text', labelText);
-
-  editDialog.value.open = false;
 }
 
 // 创建节点 HTML - 使用 X6 HTML 节点需要的特殊结构
@@ -2569,8 +2586,10 @@ onUnmounted(() => {
 .graph-content {
   flex: 1;
   padding: 16px;
-  overflow: auto;
+  overflow: hidden; /* 改为hidden，让内部容器处理滚动 */
   min-height: 0; /* 确保flex容器可以收缩 */
+  display: flex;
+  flex-direction: column;
 }
 
 .graph-wrapper {
@@ -2582,6 +2601,7 @@ onUnmounted(() => {
   overflow: hidden;
   background: #fff;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  position: relative;
 }
 
 .palette {
@@ -2591,7 +2611,8 @@ onUnmounted(() => {
   flex-direction: column;
   border-right: 1px solid #e0e0e0;
   background: #fff;
-  overflow: hidden;
+  overflow-y: auto; /* 改为垂直滚动 */
+  overflow-x: hidden;
   min-height: 0;
 }
 
@@ -2790,19 +2811,30 @@ onUnmounted(() => {
   background: #fafafa;
   position: relative;
   transition: width 0.3s ease;
+  overflow: auto; /* 添加滚动 */
 }
 
 /* 确保X6画布充分利用空间 */
 .x6-graph {
   flex: 1;
   min-height: 0;
+  width: 100%;
+  height: 100%;
 }
 
 .x6-graph-scroller {
+  width: 100% !important;
   height: 100% !important;
+  overflow: auto !important;
 }
 
 .x6-graph-background {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+.x6-graph-svg {
+  width: 100% !important;
   height: 100% !important;
 }
 
