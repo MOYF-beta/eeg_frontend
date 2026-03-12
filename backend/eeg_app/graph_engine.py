@@ -58,6 +58,18 @@ class GraphWorker:
         for node_id in self.source_node_ids:
             node = self.nodes_by_id.get(node_id) or {}
             params = node.get('params') or {}
+            device_id = node.get('deviceId') or params.get('deviceId')
+            if device_id:
+                try:
+                    from .device_store import get_device
+
+                    device = get_device(str(device_id))
+                    if device:
+                        value = int(device.get('sampling_rate') or params.get('sampleRate') or 1000)
+                        if value > 0:
+                            return value
+                except Exception:
+                    pass
             try:
                 value = int(params.get('sampleRate', 1000))
             except Exception:
@@ -65,6 +77,14 @@ class GraphWorker:
             if value > 0:
                 return value
         return 1000
+
+    def _resolve_source_device_id(self, node: Dict[str, Any]) -> Optional[str]:
+        params = node.get('params') or {}
+        raw = node.get('deviceId') or params.get('deviceId')
+        if raw is None:
+            return None
+        text = str(raw).strip()
+        return text or None
 
     def _source_mode(self, node_id: str, node_type: str) -> str:
         if node_type == 'REPLAY':
@@ -131,6 +151,41 @@ class GraphWorker:
     def _generate_source_channels(self, node_id: str) -> Tuple[List[float], int]:
         node = self.nodes_by_id.get(node_id) or {}
         params = node.get('params') or {}
+
+        device_id = self._resolve_source_device_id(node)
+        if device_id:
+            try:
+                from .device_store import get_device
+                from .real_device_manager import get_real_device_manager
+
+                state = self.node_states[node_id]
+                t = float(state.get('t', 0.0))
+                dt = 1.0 / max(1, self.sample_rate)
+                state['t'] = t + dt
+
+                device_info = get_device(device_id) or {}
+                device_type = str(device_info.get('type') or '').lower()
+                device_channel_count = int(device_info.get('channel_count') or params.get('channels') or 8)
+                device_channel_count = max(1, device_channel_count)
+
+                # 真实设备未产出数据时，不回退到模拟信号，避免误导。
+                if device_type == 'wearable_eeg':
+                    port = (device_info.get('config') or {}).get('port')
+                    if port:
+                        manager = get_real_device_manager()
+                        latest_data = manager.get_latest_data(str(port), count=1)
+                        if latest_data:
+                            raw_channels = list((latest_data[-1] or {}).get('channels', []))
+                            channels = [float(ch) for ch in raw_channels]
+                            if len(channels) < device_channel_count:
+                                channels.extend([0.0] * (device_channel_count - len(channels)))
+                            elif len(channels) > device_channel_count:
+                                channels = channels[:device_channel_count]
+                            return channels, int(time.time() * 1000)
+                    return [0.0] * device_channel_count, int(time.time() * 1000)
+            except Exception as exc:
+                print(f'[GraphWorker] Failed to read channels from device {device_id}: {exc}')
+
         channels_count = 8
         try:
             channels_count = max(1, int(params.get('channels', 8)))

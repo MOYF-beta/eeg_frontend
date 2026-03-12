@@ -6,7 +6,7 @@
       "params": {
         "sampleRate": 1000,
         "channels": 8,
-        "deviceId": "mock-1",
+        "deviceId": "real--dev-ttyUSB0",
         "sourceMode": "live",
         "filePath": "",
         "loop": false,
@@ -22,7 +22,7 @@
           "CH8"
         ]
       },
-      "deviceId": "mock-1",
+      "deviceId": "real--dev-ttyUSB0",
       "id": "node-1771445485853-981",
       "x": 50,
       "y": 100
@@ -107,5 +107,5 @@
       "targetPort": "in"
     }
   ],
-  "frozen": true
+  "frozen": false
 }

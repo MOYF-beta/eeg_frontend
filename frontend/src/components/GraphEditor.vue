@@ -284,6 +284,7 @@
 
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, nextTick, watch, computed } from 'vue';
+import { onBeforeRouteLeave } from 'vue-router';
 import { Graph, Snapline } from '@antv/x6';
 import {
   fetchGraph,
@@ -296,6 +297,7 @@ import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
+import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
 
@@ -305,6 +307,41 @@ const SESSION_STORAGE_KEY = 'eeg_graph_editor_state';
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const hasNodes = ref(false);
+const hasUnsavedChanges = ref(false);
+const isApplyingBackendGraph = ref(false);
+const lastSyncedSignature = ref('');
+
+function sortValueDeep(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map((item) => sortValueDeep(item));
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, val]) => [key, sortValueDeep(val)]);
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function payloadSignature(payload: GraphPayload): string {
+  const normalized: GraphPayload = {
+    frozen: Boolean(payload.frozen),
+    nodes: [...(payload.nodes || [])]
+      .map((node) => sortValueDeep(node) as GraphNode)
+      .sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''))),
+    edges: [...(payload.edges || [])]
+      .map((edge) => sortValueDeep(edge) as typeof payload.edges[number])
+      .sort((a, b) => String(a.id || '').localeCompare(String(b.id || ''))),
+  };
+  return JSON.stringify(normalized);
+}
+
+function syncUnsavedState() {
+  if (isApplyingBackendGraph.value) return;
+  const current = buildPayload();
+  hasUnsavedChanges.value = payloadSignature(current) !== lastSyncedSignature.value;
+}
 
 // 从全局状态管理获取状态
 const {
@@ -545,6 +582,30 @@ async function stopRunLocal() {
 
 // 存储 sessionStore 取消订阅函数
 let unsubscribeSessionStore: (() => void) | null = null;
+let unsubscribeGraphSync: (() => void) | null = null;
+
+function onSaveHotkey(event: KeyboardEvent) {
+  if (!(event.ctrlKey || event.metaKey)) return;
+  if (event.key.toLowerCase() !== 's') return;
+  event.preventDefault();
+  if (!canEditGraphLocal.value || !hasUnsavedChanges.value) return;
+  void save();
+}
+
+function onBeforeUnload(event: BeforeUnloadEvent) {
+  if (!hasUnsavedChanges.value) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+onBeforeRouteLeave((_to, _from, next) => {
+  if (!hasUnsavedChanges.value) {
+    next();
+    return;
+  }
+  const confirmed = window.confirm('当前计算图有未保存更改，离开后将丢失。是否继续离开？');
+  next(confirmed);
+});
 
 // 新增：NodeEditDialog 相关状态
 const nodeEditDialogOpen = ref(false);
@@ -825,18 +886,8 @@ async function handleNodeSave({ name, params, deviceId }: { name: string; params
   // 更新节点标签显示
   const labelText = generateNodeLabel(data.type, data.name, data.params, editingNode.value?.id);
   node.attr('label/text', labelText);
-  
-  // 自动保存计算图到后端
-  if (canEditGraphLocal.value) {
-    try {
-      console.log('[GraphEditor] Auto-saving graph after node edit...');
-      await saveGraph(buildPayload());
-      console.log('[GraphEditor] Auto-save successful');
-    } catch (err) {
-      console.error('[GraphEditor] Auto-save failed:', err);
-      // 不阻止用户继续操作，只记录错误
-    }
-  }
+
+  syncUnsavedState();
 }
 
 // 处理示波器绑定
@@ -1520,145 +1571,68 @@ function onDragStart(e: DragEvent, type: GraphNodeType) {
 
 // 从后端加载数据
 async function loadFromBackend() {
-  const graph = graphRef.value;
-  if (!graph) return;
-
   try {
     console.log('[GraphEditor] Loading graph from backend...');
-    
-    // 首先检查会话存储中是否有状态
-    const hasSessionState = loadStateFromSessionStorage();
-    
-    // 从后端获取最新数据
     const backendPayload = await fetchGraph();
-    console.log('[GraphEditor] Loaded graph from backend:', { 
-      nodeCount: backendPayload.nodes?.length || 0, 
-      edgeCount: backendPayload.edges?.length || 0,
-      frozen: backendPayload.frozen 
-    });
-    
+
     // 立即获取运行时状态
     try {
       await pollRuntimeState();
     } catch (e) {
       console.warn('[GraphEditor] Failed to poll runtime state on load:', e);
     }
-    
-    let finalPayload = backendPayload;
-    
-    // 如果后端返回空数据但会话存储有状态，使用会话存储状态
-    if ((!backendPayload.nodes || backendPayload.nodes.length === 0) && hasSessionState) {
-      console.log('[GraphEditor] Backend returned empty data but session storage has state, checking...');
-      const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
-      if (stateJson) {
-        try {
-          const state = JSON.parse(stateJson);
-          if (state.payload && state.payload.nodes && state.payload.nodes.length > 0) {
-            console.log('[GraphEditor] Using state from session storage');
-            finalPayload = state.payload;
-            
-            // 同步运行时状态
-            if (state.isRunning) {
-              setRuntimeState({
-                isRunning: state.isRunning,
-                runtimeMode: state.runtimeMode,
-              });
-            }
-          }
-        } catch (err) {
-          console.error('[GraphEditor] Failed to parse session storage state:', err);
-        }
-      }
-    }
-    
-    // 如果计算图正在运行但后端返回空数据，使用会话存储状态
-    if (isRunning.value && (!backendPayload.nodes || backendPayload.nodes.length === 0)) {
-      console.error('[GraphEditor] Graph is running but backend returned empty graph data!');
-      
-      // 尝试从会话存储恢复状态
-      if (hasSessionState) {
-        console.log('[GraphEditor] Attempting to restore state from session storage...');
-        const stateJson = sessionStorage.getItem(SESSION_STORAGE_KEY);
-        if (stateJson) {
-          try {
-            const state = JSON.parse(stateJson);
-            if (state.payload && state.payload.nodes && state.payload.nodes.length > 0) {
-              console.log('[GraphEditor] Restoring state from session storage');
-              finalPayload = state.payload;
-              
-              // 同步运行时状态
-              if (state.isRunning) {
-                setRuntimeState({
-                  isRunning: state.isRunning,
-                  runtimeMode: state.runtimeMode,
-                });
-              }
-            }
-          } catch (err) {
-            console.error('[GraphEditor] Failed to parse session storage state:', err);
-          }
-        }
-      } else {
-        console.log('[GraphEditor] No session storage state available, keeping current canvas state');
-        return; // 不更新画布，保持当前状态
-      }
-    }
-    
-    setRuntimeState({ frozen: finalPayload.frozen });
 
-    // 如果计算图正在运行，但前端显示为冻结状态，需要同步状态
-    if (isRunning.value && frozen.value) {
-      console.log('[GraphEditor] Graph is running but marked as frozen, syncing state...');
-      // 计算图正在运行时不能保持冻结状态
-      setRuntimeState({ frozen: false });
-    }
+    applyPayloadToCanvas(backendPayload, { fromBackend: true });
+  } catch (err) {
+    console.error('Failed to load graph:', err);
+    hasNodes.value = false;
+  }
+}
 
-    // 先清空画布
-    console.log('[GraphEditor] Clearing canvas before loading...');
+function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: boolean }) {
+  const graph = graphRef.value;
+  if (!graph) return;
+
+  isApplyingBackendGraph.value = true;
+  try {
+    const safePayload: GraphPayload = {
+      nodes: Array.isArray(payload.nodes) ? payload.nodes : [],
+      edges: Array.isArray(payload.edges) ? payload.edges : [],
+      frozen: Boolean(payload.frozen),
+    };
+
+    setRuntimeState({ frozen: safePayload.frozen });
     graph.clearCells();
 
-    // 加载节点
-    finalPayload.nodes.forEach((node: GraphNode) => {
+    safePayload.nodes.forEach((node: GraphNode) => {
       if (!node.id) {
-        console.warn('Node without id:', node);
         node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       }
       addNode(node.type, node.x, node.y, node.name, node.params, node.id);
     });
 
-    // 加载边 - 确保节点存在后再连接
-    finalPayload.edges.forEach((edge) => {
+    safePayload.edges.forEach((edge) => {
       const sourceNode = graph.getCellById(edge.source);
       const targetNode = graph.getCellById(edge.target);
-      if (sourceNode && targetNode) {
-        graph.addEdge({
-          id: edge.id,
-          source: { cell: edge.source, port: edge.sourcePort || getDefaultNodeOutputPort(edge.source) },
-          target: { cell: edge.target, port: edge.targetPort || getDefaultNodeInputPort(edge.target) },
-          attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-        });
-      } else {
-        console.warn('Skipping edge with missing nodes:', edge);
-      }
+      if (!sourceNode || !targetNode) return;
+      graph.addEdge({
+        id: edge.id,
+        source: { cell: edge.source, port: edge.sourcePort || getDefaultNodeOutputPort(edge.source) },
+        target: { cell: edge.target, port: edge.targetPort || getDefaultNodeInputPort(edge.target) },
+        attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
+      });
     });
 
-    const finalNodeCount = graph.getNodes().length;
-    const finalEdgeCount = graph.getEdges().length;
-    hasNodes.value = finalNodeCount > 0;
-    console.log(`[GraphEditor] Load completed - Canvas has ${finalNodeCount} nodes, ${finalEdgeCount} edges`);
-    
+    hasNodes.value = graph.getNodes().length > 0;
     updateAllEdgeLabels();
     setGraphInteracting(graph, !frozen.value);
-  } catch (err) {
-    console.error('Failed to load graph:', err);
-    
-    // 加载失败时尝试从会话存储恢复状态
-    console.log('[GraphEditor] Backend load failed, attempting to restore from session storage...');
-    const restored = restoreStateFromSessionStorage();
-    if (!restored) {
-      // 恢复失败时显示空白画布，不阻塞用户操作
-      hasNodes.value = false;
+
+    if (options?.fromBackend) {
+      lastSyncedSignature.value = payloadSignature(safePayload);
+      hasUnsavedChanges.value = false;
     }
+  } finally {
+    isApplyingBackendGraph.value = false;
   }
 }
 
@@ -1879,6 +1853,10 @@ function clearSessionStorage() {
 
 async function save() {
   console.log('[GraphEditor] Save button clicked, frozen:', frozen.value);
+
+  if (!hasUnsavedChanges.value) {
+    return;
+  }
   
   // 检查计算图是否正在运行
   if (isRunning.value) {
@@ -1892,6 +1870,9 @@ async function save() {
     console.log('[GraphEditor] Saving graph with payload:', payload);
     await saveGraph(payload);
     console.log('[GraphEditor] Graph saved successfully');
+
+    lastSyncedSignature.value = payloadSignature(payload);
+    hasUnsavedChanges.value = false;
     
     // 保存状态到会话存储
     saveStateToSessionStorage();
@@ -1986,12 +1967,10 @@ async function loadGraphFromFile(event: Event) {
     hasNodes.value = graph.getNodes().length > 0;
     setRuntimeState({ frozen: payload.frozen || false });
     updateAllEdgeLabels();
-    
-    // 保存到后端
-    await saveGraph(buildPayload());
+    syncUnsavedState();
     
     console.log('[GraphEditor] Graph loaded from file:', file.name);
-    alert('计算图加载成功');
+    alert('计算图加载成功，请点击保存应用到后端。');
   } catch (err) {
     console.error('[GraphEditor] Failed to load graph from file:', err);
     alert('加载失败: ' + (err as Error).message);
@@ -2218,11 +2197,7 @@ async function loadMockData() {
   }
 
   updateAllEdgeLabels();
-
-  // 只在计算图未运行时保存
-  if (!isRunning.value) {
-    await saveGraph(buildPayload());
-  }
+  syncUnsavedState();
   
   // 保存状态到会话存储
   saveStateToSessionStorage();
@@ -2230,6 +2205,9 @@ async function loadMockData() {
 
 onMounted(async () => {
   if (!container.value) return;
+
+  window.addEventListener('keydown', onSaveHotkey);
+  window.addEventListener('beforeunload', onBeforeUnload);
 
   // 创建画布
   const graph = new Graph({
@@ -2282,6 +2260,18 @@ onMounted(async () => {
   });
 
   graphRef.value = graph;
+
+  unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
+    const incomingSignature = payloadSignature(backendGraph);
+    if (incomingSignature === lastSyncedSignature.value && !hasUnsavedChanges.value) {
+      return;
+    }
+    if (hasUnsavedChanges.value) {
+      console.warn('[GraphEditor] Local unsaved changes were replaced by backend graph sync update:', reason);
+    }
+    applyPayloadToCanvas(backendGraph, { fromBackend: true });
+  });
+  graphSyncWebSocket.connect();
 
   // 添加对齐线
   graph.use(new Snapline({ enabled: true }));
@@ -2373,6 +2363,28 @@ onMounted(async () => {
     if (edge) applyEdgeLabel(edge);
   });
 
+  graph.on('node:change:position', () => {
+    syncUnsavedState();
+  });
+
+  graph.on('node:added', () => {
+    syncUnsavedState();
+  });
+
+  graph.on('node:removed', () => {
+    hasNodes.value = graph.getNodes().length > 0;
+    syncUnsavedState();
+  });
+
+  graph.on('edge:added', () => {
+    syncUnsavedState();
+  });
+
+  graph.on('edge:removed', () => {
+    hasNodes.value = graph.getNodes().length > 0;
+    syncUnsavedState();
+  });
+
   // 节点双击编辑（冻结状态下可以查看但不能更改）
   // 节点单击：选择节点并在右侧边栏显示
   graph.on('node:click', ({ node }) => {
@@ -2408,6 +2420,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener('keydown', onSaveHotkey);
+  window.removeEventListener('beforeunload', onBeforeUnload);
+
   stopMockDataStream();
   stopRuntimeStatePolling();
   stopEdgeAnimations();
@@ -2418,6 +2433,8 @@ onUnmounted(() => {
   graphRef.value?.dispose();
   // 取消订阅
   unsubscribeSessionStore?.();
+  unsubscribeGraphSync?.();
+  graphSyncWebSocket.disconnect();
 });
 </script>
 

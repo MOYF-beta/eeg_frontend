@@ -819,6 +819,13 @@ watch([channelNames, sumInputs, splitOutputs, mergeInputs], () => {
   debouncedSave();
 }, { deep: true });
 
+watch(selectedDeviceId, () => {
+  if (props.isReadOnly) return;
+  if (!props.nodeData) return;
+  if (nodeType.value !== 'SOURCE') return;
+  debouncedSave();
+});
+
 watch(paramsJson, (val) => {
   try {
     form.value.params = JSON.parse(val);
