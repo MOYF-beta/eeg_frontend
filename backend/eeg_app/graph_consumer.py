@@ -140,8 +140,8 @@ def get_device_channels(device_id: str, t: float, sample_rate: float = 1000.0) -
         data = latest_data[-1]
         raw_channels = data.get('channels', [])
         
-        # 转换为浮点数（原始数据是整数）
-        channels = [float(ch) for ch in raw_channels]
+        # 转换为浮点数（原始数据是整数），并归一化到伏特量级
+        channels = [float(ch) / 1_000_000.0 for ch in raw_channels]
         
         # 确保有8个通道
         if len(channels) < 8:
