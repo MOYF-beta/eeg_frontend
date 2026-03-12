@@ -300,8 +300,8 @@ async function refreshDevices() {
         status: 'online', // 默认在线状态
         sampleRate: apiDevice.sampling_rate || 1000,
         channels: apiDevice.channel_count || 8,
-        port: apiDevice.address,
-        address: apiDevice.address,
+        port: apiDevice.port || apiDevice.address,
+        address: apiDevice.port || apiDevice.address,
         type: apiDevice.type as 'simulated' | 'physical'
       };
       

@@ -180,6 +180,7 @@ const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
 const packetCount = ref(0);
 const lastPacketTime = ref<number>(0);
+let graphStateTimer: number | null = null;
 
 // WebSocket 状态
 const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('disconnected');
@@ -478,6 +479,8 @@ const drawSingleSpectrum = (
 const handleDataPacket = (packet: EegDataPacket) => {
   if (packet.nodeId !== selectedNodeId.value) return;
 
+  isGraphFrozen.value = true;
+
   packetCount.value++;
   lastPacketTime.value = Date.now();
 
@@ -513,6 +516,22 @@ const updateGraphState = async () => {
   }
 };
 
+const startGraphStatePolling = () => {
+  if (graphStateTimer) return;
+  graphStateTimer = window.setInterval(() => {
+    updateGraphState().catch((e) => {
+      console.error('[SpectrumViewer] Failed to refresh graph state:', e);
+    });
+  }, 1000);
+};
+
+const stopGraphStatePolling = () => {
+  if (graphStateTimer) {
+    clearInterval(graphStateTimer);
+    graphStateTimer = null;
+  }
+};
+
 // 动画循环
 const loop = () => {
   drawSpectrum();
@@ -529,6 +548,7 @@ onMounted(async () => {
   try {
     // 加载计算图状态（先获取冻结状态）
     await updateGraphState();
+    startGraphStatePolling();
 
     // 注册WebSocket回调（使用正确的方法调用）
     unsubConnected = eegWebSocket.onStatusChange((status) => {
@@ -570,6 +590,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopGraphStatePolling();
   if (selectedNodeId.value) {
     eegWebSocket.unsubscribe([selectedNodeId.value]);
   }

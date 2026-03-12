@@ -49,6 +49,7 @@ class EegWebSocket {
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private isManualDisconnect = false; // 标记是否是主动断开
+  private connectionCount = 0; // 连接计数器，用于管理多个组件的连接请求
   private listeners: {
     onData: Set<(packet: EegDataPacket) => void>;
     onStatusChange: Set<(status: WsStatus) => void>;
@@ -66,32 +67,47 @@ class EegWebSocket {
 
   // ========== 连接管理 ==========
 
-  connect() {
+  connect(trackReference = true) {
+    if (trackReference) {
+      this.connectionCount++;
+      console.log(`[WebSocket] connect() called, connection count: ${this.connectionCount}`);
+    } else {
+      console.log(`[WebSocket] reconnect() called, connection count: ${this.connectionCount}`);
+    }
+    
+    // 如果已经连接或正在连接，直接返回
     if (this.ws?.readyState === WebSocket.CONNECTING) {
-      console.log('WebSocket already connecting...');
+      console.log('[WebSocket] Already connecting, skipping...');
       return;
     }
 
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('WebSocket already connected');
+      console.log('[WebSocket] Already connected');
+      return;
+    }
+
+    if (!trackReference && this.connectionCount <= 0) {
+      console.warn('[WebSocket] Reconnect skipped because there are no active consumers');
       return;
     }
 
     this.setStatus('connecting');
-    this.isManualDisconnect = false; // 重置主动断开标志
-    console.log('Connecting to WebSocket:', this.config.url);
+    this.isManualDisconnect = false;
+    console.log('[WebSocket] Establishing new connection to:', this.config.url);
 
     try {
       this.ws = new WebSocket(this.config.url);
 
       this.ws.onopen = () => {
-        console.log('WebSocket connected');
+        console.log('[WebSocket] Connection established');
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        // 发送订阅消息，告诉后端我们需要哪些节点的数据
-        this.subscribeToNodes();
+        setTimeout(() => {
+          console.log('[WebSocket] Delayed subscription after connection');
+          this.subscribeToNodes();
+        }, 500);
       };
 
       this.ws.onmessage = (event) => {
@@ -108,13 +124,13 @@ class EegWebSocket {
         console.log('WebSocket closed');
         this.setStatus('disconnected');
         this.stopHeartbeat();
-        
-        // 只有非主动断开时才尝试重连
+        this.ws = null;
+
         if (!this.isManualDisconnect) {
           this.attemptReconnect();
         } else {
           console.log('Manual disconnect, skipping reconnect');
-          this.isManualDisconnect = false; // 重置标志
+          this.isManualDisconnect = false;
         }
       };
     } catch (error) {
@@ -125,20 +141,32 @@ class EegWebSocket {
   }
 
   disconnect() {
-    console.log('Disconnecting WebSocket...');
-    this.isManualDisconnect = true; // 标记为主动断开
-    this.stopReconnect();
-    this.stopHeartbeat();
-
-    if (this.ws) {
-      // 发送取消订阅消息
-      this.unsubscribeFromNodes();
-
-      this.ws.close();
-      this.ws = null;
+    // 减少连接计数器
+    if (this.connectionCount > 0) {
+      this.connectionCount--;
     }
+    console.log(`[WebSocket] disconnect() called, connection count: ${this.connectionCount}`);
+    
+    // 只有当所有组件都断开连接时才真正断开WebSocket
+    if (this.connectionCount <= 0) {
+      console.log('[WebSocket] All components disconnected, closing WebSocket...');
+      this.isManualDisconnect = true; // 标记为主动断开
+      this.stopReconnect();
+      this.stopHeartbeat();
 
-    this.setStatus('disconnected');
+      if (this.ws) {
+        // 发送取消订阅消息
+        this.unsubscribeFromNodes();
+
+        this.ws.close();
+        this.ws = null;
+      }
+
+      this.setStatus('disconnected');
+      this.connectionCount = 0; // 重置计数器
+    } else {
+      console.log(`[WebSocket] ${this.connectionCount} components still connected, keeping WebSocket open`);
+    }
   }
 
   // ========== 重连机制 ==========
@@ -155,7 +183,7 @@ class EegWebSocket {
     );
 
     this.reconnectTimer = window.setTimeout(() => {
-      this.connect();
+      this.connect(false);
     }, this.config.reconnectInterval);
   }
 
@@ -233,20 +261,48 @@ class EegWebSocket {
   // ========== 订阅管理 ==========
 
   private subscribeToNodes() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      console.warn('[WebSocket] Cannot subscribe: WebSocket not open');
+      return;
+    }
 
     // 获取所有需要订阅的OSC节点ID
     const mappings = sessionStore.getOutputMappings();
     const nodeIds = Object.keys(mappings);
 
     if (nodeIds.length > 0) {
-      this.ws.send(
-        JSON.stringify({
-          type: 'subscribe',
-          nodeIds: nodeIds,
-        })
-      );
-      console.log('Subscribed to nodes:', nodeIds);
+      try {
+        this.ws.send(
+          JSON.stringify({
+            type: 'subscribe',
+            nodeIds: nodeIds,
+          })
+        );
+        console.log('[WebSocket] Subscribed to nodes:', nodeIds);
+      } catch (error) {
+        console.error('[WebSocket] Failed to send subscribe message:', error);
+      }
+    } else {
+      console.warn('[WebSocket] No nodes to subscribe to. Output mappings:', mappings);
+      
+      // 如果没有映射，尝试从计算图中获取OSC节点
+      const graph = sessionStore.getGraph();
+      const oscNodes = graph.nodes.filter((n) => n.type === 'OSC').map((n) => n.id);
+      
+      if (oscNodes.length > 0) {
+        console.log('[WebSocket] Found OSC nodes in graph, subscribing:', oscNodes);
+        try {
+          this.ws.send(
+            JSON.stringify({
+              type: 'subscribe',
+              nodeIds: oscNodes,
+            })
+          );
+          console.log('[WebSocket] Subscribed to OSC nodes from graph:', oscNodes);
+        } catch (error) {
+          console.error('[WebSocket] Failed to subscribe to OSC nodes:', error);
+        }
+      }
     }
   }
 

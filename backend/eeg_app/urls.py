@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from . import real_device_views
 
 urlpatterns = [
     path('health/', views.health),
@@ -13,4 +14,15 @@ urlpatterns = [
     path('graph/debug/', views.graph_debug),
     path('saved-files/', views.saved_files),
     path('replayable-files/', views.replayable_files),
+    
+    # 真实设备管理API
+    path('real-devices/', real_device_views.real_devices),
+    path('real-devices/scan-ports/', real_device_views.scan_ports),
+    path('real-devices/connect/', real_device_views.connect_device),
+    path('real-devices/status/', real_device_views.device_status),
+    path('real-devices/debug-output/', real_device_views.debug_output),
+    path('real-devices/<path:port>/status/', real_device_views.device_status),
+    path('real-devices/<path:port>/start-acquisition/', real_device_views.start_acquisition),
+    path('real-devices/<path:port>/stop-acquisition/', real_device_views.stop_acquisition),
+    path('real-devices/<path:port>/disconnect/', real_device_views.disconnect_device),
 ]

@@ -22,6 +22,7 @@
           "CH8"
         ]
       },
+      "deviceId": "mock-1",
       "id": "node-1771445485853-981",
       "x": 50,
       "y": 100
@@ -38,7 +39,7 @@
       },
       "id": "node-1771445485867-620",
       "x": 280,
-      "y": 30
+      "y": 10
     },
     {
       "type": "SPLIT",
@@ -106,5 +107,5 @@
       "targetPort": "in"
     }
   ],
-  "frozen": false
+  "frozen": true
 }

@@ -349,6 +349,7 @@ let delayHistoryTimer: number | null = null;
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
+let graphStateTimer: number | null = null;
 const channelCount = ref(8);
 const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 
@@ -1163,6 +1164,8 @@ const updateDelayHistory = (delayMs: number) => {
 const handleDataPacket = (packet: EegDataPacket) => {
   if (!selectedNodeId.value || String(packet.nodeId) !== String(selectedNodeId.value)) return;
 
+  isGraphFrozen.value = true;
+
   const inferredCount = Math.max(
     Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,
     Array.isArray(packet.spectra) ? packet.spectra.length : 0,
@@ -1285,23 +1288,53 @@ const updateGraphState = async () => {
   }
 };
 
+const startGraphStatePolling = () => {
+  if (graphStateTimer) return;
+  graphStateTimer = window.setInterval(() => {
+    updateGraphState().catch((error) => {
+      console.error('[FrequencyView] Failed to refresh graph state', error);
+    });
+  }, 1000);
+};
+
+const stopGraphStatePolling = () => {
+  if (graphStateTimer) {
+    clearInterval(graphStateTimer);
+    graphStateTimer = null;
+  }
+};
+
 let unsubData: (() => void) | null = null;
 let unsubStatus: (() => void) | null = null;
 
 onMounted(async () => {
   sessionStore.bindViewToNode(viewId, selectedNodeId.value);
-  eegWebSocket.connect();
+  // 不再直接调用connect()，由runtime统一管理WebSocket连接
   initCanvas();
   await updateGraphState();
+  startGraphStatePolling();
 
   unsubData = eegWebSocket.onData(handleDataPacket);
   unsubStatus = eegWebSocket.onStatusChange((status) => {
     wsStatus.value = status;
+    
+    // 当WebSocket连接成功时，如果计算图已冻结且选择了节点，则订阅该节点
+    if (status === 'connected' && isGraphFrozen.value && selectedNodeId.value) {
+      console.log(`[FrequencyView] WebSocket connected, subscribing to node: ${selectedNodeId.value}`);
+      eegWebSocket.subscribe([selectedNodeId.value]);
+    }
   });
+  
+  // 如果WebSocket已经连接，立即订阅
+  if (eegWebSocket.isConnected() && isGraphFrozen.value && selectedNodeId.value) {
+    console.log(`[FrequencyView] WebSocket already connected, subscribing to node: ${selectedNodeId.value}`);
+    eegWebSocket.subscribe([selectedNodeId.value]);
+  }
   wsStatus.value = eegWebSocket.getStatus();
 });
 
 onUnmounted(() => {
+  stopGraphStatePolling();
   if (selectedNodeId.value) {
     eegWebSocket.unsubscribe([selectedNodeId.value]);
   }

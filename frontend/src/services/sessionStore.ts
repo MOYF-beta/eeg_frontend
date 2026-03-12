@@ -48,11 +48,32 @@ export interface Device {
   id: string;
   name: string;
   status: 'online' | 'offline';
-  sampleRate: number;
-  channels: number;
-  port?: string; // 串口或其他连接信息
-  type?: 'simulated' | 'physical'; // 设备类型
-  config?: SimulatedDeviceConfig; // 模拟设备配置
+  samplingRate: number;
+  channelCount: number;
+  type: 'simulated' | 'real';
+  config: {
+    port?: string;
+    baudrate?: number;
+    connected?: boolean;
+    acquiring?: boolean;
+    description?: string;
+    manufacturer?: string;
+    product?: string;
+    hwid?: string;
+    is_ch340?: boolean;
+    vid?: string | number;
+    pid?: string | number;
+    channels?: Array<{
+      index: number;
+      wave_type: string;
+      frequency: number;
+      amplitude: number;
+      alias: string;
+      noise_type?: string;
+      noise_amplitude?: number;
+      duty_cycle?: number;
+    }>;
+  };
 }
 
 // 示波器实例接口
@@ -193,6 +214,41 @@ class SessionStore {
       device.status = status;
       this.saveToStorage();
       this.notify();
+    }
+  }
+
+  /**
+   * 从后端API加载设备列表
+   */
+  async loadDevicesFromBackend(): Promise<void> {
+    try {
+      const response = await fetch('/api/devices/');
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      
+      const result = await response.json();
+      if (result.code !== 0) {
+        throw new Error(result.message);
+      }
+      
+      // 将后端设备格式转换为前端格式
+      const devices: Device[] = result.data.map((device: any) => ({
+        id: device.id,
+        name: device.name,
+        status: device.config.connected ? 'online' : 'offline',
+        type: device.type === 'wearable_eeg' ? 'real' : 'simulated',
+        samplingRate: device.sampling_rate,
+        channelCount: device.channel_count,
+        config: device.config || {}
+      }));
+      
+      this.setDevices(devices);
+      console.log(`Loaded ${devices.length} devices from backend`);
+      
+    } catch (error) {
+      console.error('Failed to load devices from backend:', error);
+      // 保持现有设备列表
     }
   }
 
@@ -388,7 +444,7 @@ class SessionStore {
         errors.push(`输入节点 "${node.name}" 未绑定设备`);
       } else {
         // 检查设备是否存在
-        const device = this.getDeviceById(deviceId);
+        const device = this.getDeviceById(deviceId as string);
         if (!device) {
           errors.push(`输入节点 "${node.name}" 绑定的设备不存在: ${deviceId}`);
         }
@@ -442,7 +498,9 @@ class SessionStore {
 
   // 检查是否允许编辑计算图
   canEditGraph(): boolean {
-    return !this.state.graph.frozen;
+    // 根据新的设计，未运行时可以编辑计算图
+    // 运行状态由graphRuntimeStore管理，这里返回true让graphRuntimeStore控制
+    return true;
   }
 
   // 检查是否允许编辑设备（冻结时允许，运行时禁止）

@@ -18,6 +18,7 @@ class GraphNode(TypedDict):
     x: float
     y: float
     params: Dict
+    deviceId: str | None  # SOURCE/REPLAY节点绑定的设备ID
 
 
 class GraphEdge(TypedDict):
@@ -167,8 +168,15 @@ def _load_from_file() -> GraphPayload:
                 # 验证数据结构
                 if 'nodes' in data and 'edges' in data and 'frozen' in data:
                     print(f'[GraphStore] Loaded graph from {DATA_FILE}: {len(data["nodes"])} nodes, {len(data["edges"])} edges')
+                    
+                    # 确保每个节点都有deviceId字段
+                    nodes = data.get('nodes', [])
+                    for node in nodes:
+                        if 'deviceId' not in node:
+                            node['deviceId'] = None
+                    
                     return {
-                        'nodes': data.get('nodes', []),
+                        'nodes': nodes,
                         'edges': data.get('edges', []),
                         'frozen': data.get('frozen', False),
                     }
@@ -354,6 +362,7 @@ def get_runtime_state() -> Dict:
         'processingDelayMs': _RUNTIME_STATE['processingDelayMs'],
         'nonRealtime': _RUNTIME_STATE['nonRealtime'],
         'warning': _RUNTIME_STATE['warning'],
+        'frozen': _GRAPH['frozen'],  # 添加冻结状态
     }
 
 

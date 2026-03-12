@@ -9,6 +9,7 @@ from .data_recorder import list_saved_files, get_active_recordings, get_file_pat
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
 from .device_store import get_all_devices, create_device, update_device, delete_device, get_device_config
+from .graph_sync import broadcast_graph_state
 
 
 def health(request):
@@ -211,6 +212,7 @@ def graph(request):
                 }, status=403)
             
             set_graph(payload)
+            broadcast_graph_state(reason='saved')
             return JsonResponse({'ok': True})
         except json.JSONDecodeError:
             return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
@@ -226,6 +228,7 @@ def graph_freeze(request):
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
     payload = json.loads(request.body or '{}')
     set_frozen(bool(payload.get('frozen', False)))
+    broadcast_graph_state(reason='freeze_changed')
     return JsonResponse({'ok': True, 'frozen': get_graph().get('frozen', False)})
 
 

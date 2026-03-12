@@ -100,6 +100,97 @@
       },
       "created_at": 1771443258.009588,
       "updated_at": 1771446813.6006408
+    },
+    {
+      "id": "dev-1773303444082",
+      "name": "可穿戴EEG设备 (/dev/ttyUSB0)",
+      "type": "wearable_eeg",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 460800,
+        "connected": false,
+        "acquiring": true
+      },
+      "created_at": 1773303444.0825436,
+      "updated_at": 1773313816.825439,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 460800,
+      "connected": false,
+      "acquiring": false
+    },
+    {
+      "id": "dev-1773312968854",
+      "name": "可穿戴EEG设备 (/dev/ttyUSB0)",
+      "type": "wearable_eeg",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 460800,
+        "connected": true
+      },
+      "created_at": 1773312968.8548641,
+      "updated_at": 1773312968.8548644,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 460800,
+      "connected": false,
+      "acquiring": false
+    },
+    {
+      "id": "dev-1773313706797",
+      "name": "可穿戴EEG设备 (/dev/ttyUSB0)",
+      "type": "wearable_eeg",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 460800,
+        "connected": true
+      },
+      "created_at": 1773313706.7979276,
+      "updated_at": 1773313706.797928,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 460800,
+      "connected": false,
+      "acquiring": false
+    },
+    {
+      "id": "dev-1773313792171",
+      "name": "可穿戴EEG设备 (/dev/ttyUSB0)",
+      "type": "wearable_eeg",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 460800,
+        "connected": true
+      },
+      "created_at": 1773313792.1718268,
+      "updated_at": 1773313792.171828,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 460800,
+      "connected": false,
+      "acquiring": false
+    },
+    {
+      "id": "dev-1773313811065",
+      "name": "可穿戴EEG设备 (/dev/ttyUSB0)",
+      "type": "wearable_eeg",
+      "sampling_rate": 1000,
+      "channel_count": 8,
+      "config": {
+        "port": "/dev/ttyUSB0",
+        "baudrate": 460800,
+        "connected": true
+      },
+      "created_at": 1773313811.0656724,
+      "updated_at": 1773313811.0656729,
+      "port": "/dev/ttyUSB0",
+      "baudrate": 460800,
+      "connected": false,
+      "acquiring": false
     }
   ]
 }

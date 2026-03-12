@@ -3,10 +3,8 @@
 import json
 import os
 import time
+import serial.tools.list_ports
 from typing import Dict, List, Optional, Any
-
-# 设备数据文件路径
-DEVICE_FILE = os.path.join(os.path.dirname(__file__), 'device_data.json')
 
 # 设备配置结构
 class DeviceConfig:
@@ -20,9 +18,16 @@ class DeviceConfig:
         self.config = config or {}
         self.created_at = time.time()
         self.updated_at = time.time()
+        
+        # 真实设备特定字段
+        if device_type == 'wearable_eeg':
+            self.port = config.get('port', '')
+            self.baudrate = config.get('baudrate', 460800)
+            self.connected = False
+            self.acquiring = False
     
     def to_dict(self) -> Dict:
-        return {
+        result = {
             'id': self.id,
             'name': self.name,
             'type': self.type,
@@ -32,6 +37,15 @@ class DeviceConfig:
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
+        
+        # 添加真实设备特定字段
+        if self.type == 'wearable_eeg':
+            result['port'] = getattr(self, 'port', '')
+            result['baudrate'] = getattr(self, 'baudrate', 460800)
+            result['connected'] = getattr(self, 'connected', False)
+            result['acquiring'] = getattr(self, 'acquiring', False)
+            
+        return result
     
     @classmethod
     def from_dict(cls, data: Dict) -> 'DeviceConfig':
@@ -45,46 +59,137 @@ class DeviceConfig:
         )
         device.created_at = data.get('created_at', time.time())
         device.updated_at = data.get('updated_at', time.time())
+        
+        # 设置真实设备特定字段
+        if data['type'] == 'wearable_eeg':
+            device.port = data.get('port', '')
+            device.baudrate = data.get('baudrate', 460800)
+            device.connected = data.get('connected', False)
+            device.acquiring = data.get('acquiring', False)
+            
         return device
 
 
 class DeviceStore:
-    """设备存储管理器"""
+    """设备存储管理器 - 内存存储，后端启动时自动扫描设备"""
     
     def __init__(self):
         self._devices: Dict[str, DeviceConfig] = {}
-        self._load_from_file()
+        self._initialize_devices()
     
-    def _load_from_file(self) -> None:
-        """从JSON文件加载设备数据"""
-        try:
-            if os.path.exists(DEVICE_FILE):
-                with open(DEVICE_FILE, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    for device_data in data.get('devices', []):
-                        device = DeviceConfig.from_dict(device_data)
-                        self._devices[device.id] = device
-                print(f'[DeviceStore] Loaded {len(self._devices)} devices from {DEVICE_FILE}')
-            else:
-                # 文件不存在，创建默认模拟设备
-                print(f'[DeviceStore] Device file not found, creating default devices')
-                self._create_default_devices()
-        except Exception as e:
-            print(f'[DeviceStore] Failed to load from file: {e}')
-            # 创建默认模拟设备
-            self._create_default_devices()
+    def _initialize_devices(self) -> None:
+        """初始化设备：扫描真实设备并创建模拟设备"""
+        print('[DeviceStore] Initializing devices...')
+        
+        # 1. 扫描真实设备
+        self._scan_real_devices()
+        
+        # 2. 创建默认模拟设备
+        self._create_default_devices()
+        
+        print(f'[DeviceStore] Initialized {len(self._devices)} devices')
     
-    def _save_to_file(self) -> None:
-        """保存设备数据到JSON文件"""
+    def _scan_real_devices(self) -> None:
+        """扫描真实设备（CH340和其他USB串口设备）"""
         try:
-            data = {
-                'devices': [device.to_dict() for device in self._devices.values()]
-            }
-            with open(DEVICE_FILE, 'w', encoding='utf-8') as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-            print(f'[DeviceStore] Saved {len(self._devices)} devices to {DEVICE_FILE}')
+            # 获取所有串口设备
+            available_ports = serial.tools.list_ports.comports()
+            print(f'[DeviceStore] Found {len(available_ports)} serial ports')
+            
+            for port_info in available_ports:
+                device_name = port_info.device
+                
+                # 检查是否是USB串口设备
+                if not self._is_usb_serial_port(port_info):
+                    continue
+                
+                # 检查是否是CH340设备
+                is_ch340 = self._is_ch340_port(port_info)
+                
+                # 创建设备ID（使用端口名和设备信息）
+                device_id = f'real-{device_name.replace("/", "-")}'
+                
+                # 创建设备配置
+                device = DeviceConfig(
+                    device_id=device_id,
+                    name=f'真实设备 {device_name}',
+                    device_type='wearable_eeg',
+                    sampling_rate=250,  # 默认采样率
+                    channel_count=8,    # 默认通道数
+                    config={
+                        'port': device_name,
+                        'baudrate': 460800,
+                        'description': port_info.description or '',
+                        'manufacturer': port_info.manufacturer or '',
+                        'product': port_info.product or '',
+                        'hwid': port_info.hwid or '',
+                        'is_ch340': is_ch340,
+                        'vid': getattr(port_info, 'vid', None),
+                        'pid': getattr(port_info, 'pid', None)
+                    }
+                )
+                
+                self._devices[device_id] = device
+                print(f'[DeviceStore] Added real device: {device_name} (CH340: {is_ch340})')
+                
         except Exception as e:
-            print(f'[DeviceStore] Failed to save to file: {e}')
+            print(f'[DeviceStore] Error scanning real devices: {e}')
+            import traceback
+            traceback.print_exc()
+    
+    def _is_usb_serial_port(self, port_info) -> bool:
+        """检查是否是USB串口设备"""
+        try:
+            # 检查是否有VID/PID（USB设备）
+            vid = getattr(port_info, 'vid', None)
+            pid = getattr(port_info, 'pid', None)
+            
+            # 检查描述中是否包含USB或串口关键词
+            description = (port_info.description or '').lower()
+            manufacturer = (port_info.manufacturer or '').lower()
+            product = (port_info.product or '').lower()
+            
+            # USB设备通常有VID/PID
+            if vid is not None and pid is not None:
+                return True
+            
+            # 检查常见关键词
+            usb_keywords = ['usb', 'serial', 'com', 'uart', 'ch340', 'ftdi', 'cp210']
+            for keyword in usb_keywords:
+                if (keyword in description or 
+                    keyword in manufacturer or 
+                    keyword in product):
+                    return True
+                    
+            return False
+        except Exception:
+            return False
+    
+    def _is_ch340_port(self, port_info) -> bool:
+        """检查是否是CH340设备"""
+        try:
+            vid = getattr(port_info, 'vid', None)
+            pid = getattr(port_info, 'pid', None)
+            
+            # CH340的VID通常是0x1A86
+            if vid == 0x1A86:
+                return True
+            
+            # 检查描述中是否包含CH340
+            description = (port_info.description or '').lower()
+            manufacturer = (port_info.manufacturer or '').lower()
+            product = (port_info.product or '').lower()
+            
+            ch340_keywords = ['ch340', 'ch341', '1a86']
+            for keyword in ch340_keywords:
+                if (keyword in description or 
+                    keyword in manufacturer or 
+                    keyword in product):
+                    return True
+                    
+            return False
+        except Exception:
+            return False
     
     def _create_default_devices(self) -> None:
         """创建默认模拟设备"""
@@ -177,8 +282,7 @@ class DeviceStore:
         
         for device in default_devices:
             self._devices[device.id] = device
-        
-        self._save_to_file()
+            print(f'[DeviceStore] Added simulated device: {device.name}')
     
     def get_device(self, device_id: str) -> Optional[DeviceConfig]:
         """获取设备配置"""
@@ -203,7 +307,7 @@ class DeviceStore:
         )
         
         self._devices[device_id] = device
-        self._save_to_file()
+        print(f'[DeviceStore] Created device: {device.name} (ID: {device_id})')
         return device
     
     def update_device(self, device_id: str, updates: Dict) -> Optional[DeviceConfig]:
@@ -223,14 +327,15 @@ class DeviceStore:
                 setattr(device, field, updates[field])
         
         device.updated_at = time.time()
-        self._save_to_file()
+        print(f'[DeviceStore] Updated device: {device.name} (ID: {device_id})')
         return device
     
     def delete_device(self, device_id: str) -> bool:
         """删除设备"""
         if device_id in self._devices:
+            device_name = self._devices[device_id].name
             del self._devices[device_id]
-            self._save_to_file()
+            print(f'[DeviceStore] Deleted device: {device_name} (ID: {device_id})')
             return True
         return False
 
@@ -248,6 +353,12 @@ def get_device_config(device_id: str) -> Optional[Dict]:
     """获取设备配置"""
     device = _device_store.get_device(device_id)
     return device.config if device else None
+
+
+def get_device(device_id: str) -> Optional[Dict]:
+    """获取完整设备信息"""
+    device = _device_store.get_device(device_id)
+    return device.to_dict() if device else None
 
 
 def get_all_devices() -> List[Dict]:

@@ -356,6 +356,7 @@ const isGraphFrozen = ref(false);
 const packetCount = ref(0);
 const processingDelayMs = ref(0);
 const isNonRealtime = ref(false);
+let graphStateTimer: number | null = null;
 
 // 延迟历史数据
 const delayHistory = ref<Array<{timestamp: number, delay: number}>>([]); // 存储最近1秒的延迟数据
@@ -1044,6 +1045,8 @@ const handleDataPacket = (packet: EegDataPacket) => {
   
   if (!selectedId || packetNodeId !== selectedId) return;
 
+  isGraphFrozen.value = true;
+
   processingDelayMs.value = Math.max(0, Number(packet.processingDelayMs || 0));
   isNonRealtime.value = Boolean(packet.nonRealtime || processingDelayMs.value > 10000);
   
@@ -1204,6 +1207,22 @@ const updateGraphState = async () => {
   }
 };
 
+const startGraphStatePolling = () => {
+  if (graphStateTimer) return;
+  graphStateTimer = window.setInterval(() => {
+    updateGraphState().catch((e) => {
+      console.error('[Oscilloscope] Failed to refresh graph state:', e);
+    });
+  }, 1000);
+};
+
+const stopGraphStatePolling = () => {
+  if (graphStateTimer) {
+    clearInterval(graphStateTimer);
+    graphStateTimer = null;
+  }
+};
+
 // 清理函数
 let unsubConnected: (() => void) | null = null;
 let unsubData: (() => void) | null = null;
@@ -1217,6 +1236,7 @@ onMounted(async () => {
     initCanvas();
 
     await updateGraphState();
+    startGraphStatePolling();
     // restore any previously bound node for this view
     try {
       const bound = sessionStore.getViewBoundNode(viewId);
@@ -1253,6 +1273,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopGraphStatePolling();
   resizeObserver?.disconnect();
   resizeObserver = null;
   if (selectedNodeId.value) {

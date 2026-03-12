@@ -124,9 +124,6 @@ export const graphRuntime = {
 
   // 清理资源（应用卸载时调用）
   dispose() {
-    wsUnsubscribe();
-    wsStatusUnsubscribe();
-    wsErrorUnsubscribe();
-    this.stop();
+    state.error = null;
   },
 };

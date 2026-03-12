@@ -9,7 +9,8 @@ from typing import Dict, List, Set, Optional
 import numpy as np
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from .device_store import get_device_config
+from .device_store import get_device
+from .graph_store import get_runtime_state
 
 
 def generate_signal_from_config(channel_config: Dict, t: float, sample_rate: float = 1000.0) -> float:
@@ -112,22 +113,81 @@ def get_device_channels(device_id: str, t: float, sample_rate: float = 1000.0) -
     Returns:
         通道信号列表，如果设备不存在则返回None
     """
-    device_config = get_device_config(device_id)
-    if not device_config:
+    from .device_store import get_device
+    from .real_device_manager import get_real_device_manager
+    
+    device = get_device(device_id)
+    if not device:
         return None
     
-    channels_config = device_config.get('channels', [])
-    if not channels_config:
-        return None
+    device_type = device.get('type', 'simulated')
+    device_config = device.get('config', {}) or {}
     
-    # 按索引排序通道配置
-    sorted_channels = sorted(channels_config, key=lambda x: x.get('index', 0))
+    if device_type == 'wearable_eeg':
+        # 真实设备：从设备管理器获取数据
+        port = device_config.get('port')
+        if not port:
+            return None
+        
+        manager = get_real_device_manager()
+        latest_data = manager.get_latest_data(port, count=1)
+        
+        if not latest_data:
+            # 如果没有实时数据，返回模拟数据作为后备
+            return _generate_fallback_channels(device_config, t, sample_rate)
+        
+        # 获取最新的数据
+        data = latest_data[-1]
+        raw_channels = data.get('channels', [])
+        
+        # 转换为浮点数（原始数据是整数）
+        channels = [float(ch) for ch in raw_channels]
+        
+        # 确保有8个通道
+        if len(channels) < 8:
+            channels.extend([0.0] * (8 - len(channels)))
+        elif len(channels) > 8:
+            channels = channels[:8]
+            
+        return channels
     
-    # 生成每个通道的信号
+    else:
+        # 模拟设备：使用原有的信号生成逻辑
+        channels_config = device_config.get('channels', [])
+        if not channels_config:
+            return None
+        
+        # 按索引排序通道配置
+        sorted_channels = sorted(channels_config, key=lambda x: x.get('index', 0))
+        
+        # 生成每个通道的信号
+        channels = []
+        for channel_config in sorted_channels:
+            signal_value = generate_signal_from_config(channel_config, t, sample_rate)
+            channels.append(signal_value)
+        
+        return channels
+
+
+def _generate_fallback_channels(device_config: Dict, t: float, sample_rate: float) -> List[float]:
+    """生成后备通道数据（当真实设备没有数据时使用）
+    
+    Args:
+        device_config: 设备配置
+        t: 时间（秒）
+        sample_rate: 采样率（Hz）
+    
+    Returns:
+        后备通道数据
+    """
+    # 生成简单的正弦波作为后备数据
     channels = []
-    for channel_config in sorted_channels:
-        signal_value = generate_signal_from_config(channel_config, t, sample_rate)
-        channels.append(signal_value)
+    for i in range(8):  # 默认8个通道
+        frequency = 10.0 + i * 2.0
+        amplitude = 100.0
+        phase = i * 0.3
+        value = amplitude * math.sin(2 * math.pi * frequency * t + phase)
+        channels.append(value)
     
     return channels
 
@@ -155,6 +215,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         self._save_nodes = []  # SAVE节点列表
         self._replay_nodes = []  # REPLAY节点列表
         self._spectrum_buffers = [deque(maxlen=2048) for _ in range(8)]
+        self._stream_task = None  # 数据流任务
         
         # 从 graph_store 获取计算图状态
         from .graph_store import get_graph
@@ -168,10 +229,24 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         
         # 如果计算图已冻结，开始发送数据
         if self.graph_frozen:
-            asyncio.create_task(self.stream_data())
+            self._stream_task = asyncio.create_task(self.stream_data())
+            print(f"[WebSocket] Started stream data task: {self._stream_task}")
     
     async def disconnect(self, code):
+        print(f"[WebSocket] Client disconnecting, code: {code}")
         self.running = False
+        
+        # 取消数据流任务
+        if self._stream_task and not self._stream_task.done():
+            print(f"[WebSocket] Cancelling stream data task: {self._stream_task}")
+            self._stream_task.cancel()
+            try:
+                await self._stream_task
+            except asyncio.CancelledError:
+                print("[WebSocket] Stream task cancelled successfully")
+            except Exception as e:
+                print(f"[WebSocket] Error cancelling stream task: {e}")
+        
         # 停止所有录制和回放
         self._stop_all_save_replay()
         print(f"[WebSocket] Client disconnected, code: {code}")
@@ -307,7 +382,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 print(f"[WebSocket] Subscribed to nodes: {node_ids}")
                 
                 # 如果没有在运行，启动数据流
-                if self.graph_frozen and not self.running:
+                if not self.running:
                     self.running = True
                     asyncio.create_task(self.stream_data())
                     
@@ -622,19 +697,24 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
         # 检查是否有REPLAY节点
         
         while self.running:
-            # 刷新计算图状态
-            graph = get_graph()
-            self.graph_frozen = graph.get('frozen', False)
-            
-            if not self.graph_frozen:
-                # 计算图未冻结，停止发送
-                await asyncio.sleep(0.1)
-                continue
-            
-            if not self.subscribed_nodes:
-                # 没有订阅的节点，等待
-                await asyncio.sleep(0.1)
-                continue
+            try:
+                # 刷新计算图状态
+                graph = get_graph()
+                self.graph_frozen = graph.get('frozen', False)
+                
+                # 检查计算图是否正在运行
+                runtime_state = get_runtime_state()
+                is_graph_running = runtime_state.get('running', False)
+                
+                if not is_graph_running:
+                    # 计算图未运行，停止发送
+                    await asyncio.sleep(0.1)
+                    continue
+                
+                if not self.subscribed_nodes:
+                    # 没有订阅的节点，等待
+                    await asyncio.sleep(0.1)
+                    continue
             
             # 计算应生成的样本数
             now = time.perf_counter()
@@ -802,6 +882,7 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                             await self.send(text_data=json.dumps(payload))
                         except Exception as e:
                             print(f"[WebSocket] Send error: {e}")
+                            # 发送错误，可能是连接已断开
                             self.running = False
                             break
                 
@@ -809,3 +890,14 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 sample_buffer.clear()
                 sample_channel_names.clear()
             await asyncio.sleep(0.001)
+            
+            except asyncio.CancelledError:
+                print("[WebSocket] Stream data task cancelled")
+                break
+            except Exception as e:
+                print(f"[WebSocket] Error in stream_data: {e}")
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(0.1)  # 避免快速循环
+        
+        print("[WebSocket] Stream data task ended")
