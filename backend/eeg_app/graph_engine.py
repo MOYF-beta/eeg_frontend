@@ -176,7 +176,7 @@ class GraphWorker:
                         latest_data = manager.get_latest_data(str(port), count=1)
                         if latest_data:
                             raw_channels = list((latest_data[-1] or {}).get('channels', []))
-                            channels = [float(ch) for ch in raw_channels]
+                            channels = [float(ch) / 1_000_000.0 for ch in raw_channels]
                             if len(channels) < device_channel_count:
                                 channels.extend([0.0] * (device_channel_count - len(channels)))
                             elif len(channels) > device_channel_count:
