@@ -39,7 +39,8 @@
       },
       "id": "node-1771445485867-620",
       "x": 280,
-      "y": 10
+      "y": 10,
+      "deviceId": null
     },
     {
       "type": "SPLIT",
@@ -54,7 +55,8 @@
       },
       "id": "node-1771445485869-406",
       "x": 550,
-      "y": 10
+      "y": 10,
+      "deviceId": null
     },
     {
       "type": "OSC",
@@ -81,7 +83,8 @@
       },
       "id": "node-1771445485871-602",
       "x": 800,
-      "y": 100
+      "y": 100,
+      "deviceId": null
     }
   ],
   "edges": [
@@ -107,5 +110,5 @@
       "targetPort": "in"
     }
   ],
-  "frozen": false
+  "frozen": true
 }

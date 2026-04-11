@@ -1,41 +1,135 @@
-# EEG 脑电系统
+# EEG 脑电系统（Windows CMD 安装与启动指南）
 
-Vue3 + Vite + Django + WebSocket 实时脑电数据可视化系统
+本项目是 Vue3 + Vite 前端与 Django + Channels 后端组成的实时脑电系统。
 
+本文档使用 Windows 的 `cmd` 命令行，按顺序执行即可完成安装和启动。
 
-## 快速开始
+## 0. 准备目录
 
-### 1. 安装依赖
+假设项目目录为：
 
-**前端:**
-```bash
-cd frontend
-npm install
+```cmd
+D:\projects\eeg_frontend
 ```
 
-**后端:**
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate
+后续命令请按你的实际路径替换。
+
+## 1. 安装 Node.js（含 npm）
+
+在 `cmd` 中执行：
+
+```cmd
+winget install -e --id OpenJS.NodeJS.LTS
+```
+
+安装完成后，关闭并重新打开一个 `cmd`，验证：
+
+```cmd
+node -v
+npm -v
+```
+
+## 2. 安装 Conda（Miniconda）
+
+在 `cmd` 中执行：
+
+```cmd
+winget install -e --id Anaconda.Miniconda3
+```
+
+安装完成后，关闭并重新打开一个 `cmd`，验证：
+
+```cmd
+conda --version
+```
+
+## 3. 创建并激活 Python Conda 环境
+
+推荐使用 Python 3.10：
+
+```cmd
+conda create -n eeg_py310 python=3.10 -y
+conda activate eeg_py310
+```
+
+## 4. 安装后端依赖
+
+```cmd
+cd /d D:\projects\eeg_frontend\backend
 pip install -r requirements.txt
 ```
 
-### 2. 启动服务
+## 5. 安装前端依赖
 
-**后端 (端口 8000):**
-```bash
-cd backend
-source venv/bin/activate
+```cmd
+cd /d D:\projects\eeg_frontend\frontend
+npm install
+```
+
+## 6. 启动后端服务（cmd 窗口 1）
+
+新开一个 `cmd`，执行：
+
+```cmd
+conda activate eeg_py310
+cd /d D:\projects\eeg_frontend\backend
+python manage.py migrate
 daphne -b 0.0.0.0 -p 8000 eeg_backend.asgi:application
 ```
 
-**前端 (端口 5173):**
-```bash
-cd frontend
+后端启动后会监听 `8000` 端口。
+
+## 7. 启动前端服务（cmd 窗口 2）
+
+再开一个新的 `cmd`，执行：
+
+```cmd
+cd /d D:\projects\eeg_frontend\frontend
 npm run dev
 ```
 
-### 3. 访问
+前端默认监听 `5173` 端口。
 
+## 8. 打开系统
+
+浏览器访问：
+
+```text
 http://localhost:5173/
+```
+
+## 9. 常见问题
+
+### Q1: `conda activate` 提示不是内部或外部命令
+
+先重开 `cmd`；若仍失败，执行一次：
+
+```cmd
+conda init cmd.exe
+```
+
+然后关闭并重新打开 `cmd`。
+
+### Q2: 前端安装慢或失败
+
+可先清理缓存后重试：
+
+```cmd
+npm cache clean --force
+npm install
+```
+
+### Q3: 端口被占用
+
+查看端口占用：
+
+```cmd
+netstat -ano | findstr :5173
+netstat -ano | findstr :8000
+```
+
+按 PID 结束进程（将 `<PID>` 改为实际数字）：
+
+```cmd
+taskkill /PID <PID> /F
+```

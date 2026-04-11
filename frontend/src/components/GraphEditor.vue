@@ -1639,9 +1639,9 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
 function setGraphInteracting(graph: Graph, enabled: boolean) {
   // X6 2.x: 使用 options 配置交互状态
   if (graph) {
-    // 考虑编辑权限
-    const actuallyEnabled = enabled && canEditGraphLocal.value;
-    graph.options.interacting = actuallyEnabled ? {
+    // 简化逻辑：直接使用传入的enabled参数
+    // 不再额外检查canEditGraphLocal，因为调用者已经考虑了状态
+    graph.options.interacting = enabled ? {
       nodeMovable: true,
       edgeMovable: true,
       edgeLabelMovable: true,
@@ -1652,8 +1652,10 @@ function setGraphInteracting(graph: Graph, enabled: boolean) {
     } : false;
     
     // 更新界面提示
-    if (!actuallyEnabled && enabled) {
-      console.log('[GraphEditor] Graph editing disabled due to permissions');
+    if (!enabled) {
+      console.log('[GraphEditor] Graph editing disabled');
+    } else {
+      console.log('[GraphEditor] Graph editing enabled');
     }
   }
 }
@@ -1667,9 +1669,10 @@ async function applyFrozen() {
 
   console.log(`[GraphEditor] applyFrozen called, frozen: ${frozen.value}, isRunning: ${isRunning.value}`);
 
-  // 更新图形编辑权限
+  // 更新图形编辑权限：只有在未冻结且未运行时才允许编辑
+  const canEdit = !frozen.value && !isRunning.value;
   if (graph) {
-    setGraphInteracting(graph, !frozen.value);
+    setGraphInteracting(graph, canEdit);
   }
   
   if (frozen.value) {
@@ -1682,7 +1685,7 @@ async function applyFrozen() {
       console.log('[GraphEditor] WebSocket connected for running graph');
     }
   } else {
-    console.log('[GraphEditor] Graph is unfrozen, enabling editing');
+    console.log(`[GraphEditor] Graph is unfrozen, editing ${canEdit ? 'enabled' : 'disabled'} (running: ${isRunning.value})`);
     
     // 如果计算图未运行，断开WebSocket连接
     if (!isRunning.value) {
@@ -2312,28 +2315,36 @@ onMounted(async () => {
     });
   });
 
-  // 边悬停显示删除按钮
+  // 边悬停显示删除按钮（仅在可编辑时显示）
   graph.on('edge:mouseenter', ({ edge }) => {
-    edge.addTools({ name: 'button-remove', args: { distance: -40 } });
+    if (canEditGraphLocal.value) {
+      edge.addTools({ name: 'button-remove', args: { distance: -40 } });
+    }
   });
 
   graph.on('edge:mouseleave', ({ edge }) => {
     edge.removeTools();
   });
 
-  // 节点悬停显示删除按钮
+  // 节点悬停显示删除按钮（仅在可编辑时显示）
   graph.on('node:mouseenter', ({ node }) => {
-    node.addTools({
-      name: 'button-remove',
-      args: {
-        x: '100%',
-        y: 0,
-        offset: { x: -10, y: 10 },
-        onClick({ cell }: { cell: any }) {
-          graph.removeCell(cell);
+    if (canEditGraphLocal.value) {
+      node.addTools({
+        name: 'button-remove',
+        args: {
+          x: '100%',
+          y: 0,
+          offset: { x: -10, y: 10 },
+          onClick({ cell }: { cell: any }) {
+            if (canEditGraphLocal.value) {
+              graph.removeCell(cell);
+            } else {
+              alert(`当前状态不允许删除节点: ${statusDescription.value}`);
+            }
+          }
         }
-      }
-    });
+      });
+    }
   });
 
   graph.on('node:mouseleave', ({ node }) => {

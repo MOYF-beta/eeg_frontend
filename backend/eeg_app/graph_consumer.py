@@ -715,182 +715,182 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                     # 没有订阅的节点，等待
                     await asyncio.sleep(0.1)
                     continue
-            
-            # 计算应生成的样本数
-            now = time.perf_counter()
-            elapsed_samples = (now - last_sample_time) * sample_rate
-            last_sample_time = now
-            sample_accumulator += elapsed_samples
-            samples_to_generate = int(sample_accumulator)
+                
+                # 计算应生成的样本数
+                now = time.perf_counter()
+                elapsed_samples = (now - last_sample_time) * sample_rate
+                last_sample_time = now
+                sample_accumulator += elapsed_samples
+                samples_to_generate = int(sample_accumulator)
 
-            if samples_to_generate <= 0:
-                await asyncio.sleep(0.001)
-                continue
-
-            if samples_to_generate > max_samples_per_loop:
-                samples_to_generate = max_samples_per_loop
-                sample_accumulator = 0.0
-            else:
-                sample_accumulator -= samples_to_generate
-
-            # 获取计算图节点并缓冲数据
-            nodes = graph.get('nodes', [])
-            edges = graph.get('edges', [])
-            nodes_by_id = {node.get('id'): node for node in nodes if node.get('id')}
-            incoming_by_target: Dict[str, List[Dict]] = {}
-            for edge in edges:
-                target = edge.get('target')
-                if not target:
+                if samples_to_generate <= 0:
+                    await asyncio.sleep(0.001)
                     continue
-                incoming_by_target.setdefault(target, []).append(edge)
 
-            osc_nodes = [node for node in nodes if node.get('type') == 'OSC' and node.get('id') in self.subscribed_nodes]
-            spectrum_nodes = [node for node in nodes if node.get('type') == 'SPECTRUM' and node.get('id') in self.subscribed_nodes]
-            output_nodes = osc_nodes + spectrum_nodes
-
-            fft_size = self._extract_fft_size(nodes)
-
-            for _ in range(samples_to_generate):
-                # 获取数据源（每个样本一次，支持REPLAY）
-                replay_channels = self._get_source_channels()
-
-                if replay_channels is not None:
-                    # 使用回放数据
-                    raw_channels = replay_channels
+                if samples_to_generate > max_samples_per_loop:
+                    samples_to_generate = max_samples_per_loop
+                    sample_accumulator = 0.0
                 else:
-                    # 获取SOURCE节点绑定的设备配置
-                    source_nodes = [node for node in nodes if node.get('type') == 'SOURCE']
-                    device_channels = None
-                    
-                    if source_nodes:
-                        # 使用第一个SOURCE节点的设备配置
-                        source_node = source_nodes[0]
-                        device_id = source_node.get('params', {}).get('deviceId')
-                        if device_id:
-                            # 根据设备配置生成信号
-                            device_channels = get_device_channels(device_id, t, float(sample_rate))
-                    
-                    if device_channels is not None:
-                        # 使用设备配置生成的信号
-                        raw_channels = device_channels
+                    sample_accumulator -= samples_to_generate
+
+                # 获取计算图节点并缓冲数据
+                nodes = graph.get('nodes', [])
+                edges = graph.get('edges', [])
+                nodes_by_id = {node.get('id'): node for node in nodes if node.get('id')}
+                incoming_by_target: Dict[str, List[Dict]] = {}
+                for edge in edges:
+                    target = edge.get('target')
+                    if not target:
+                        continue
+                    incoming_by_target.setdefault(target, []).append(edge)
+
+                osc_nodes = [node for node in nodes if node.get('type') == 'OSC' and node.get('id') in self.subscribed_nodes]
+                spectrum_nodes = [node for node in nodes if node.get('type') == 'SPECTRUM' and node.get('id') in self.subscribed_nodes]
+                output_nodes = osc_nodes + spectrum_nodes
+
+                fft_size = self._extract_fft_size(nodes)
+
+                for _ in range(samples_to_generate):
+                    # 获取数据源（每个样本一次，支持REPLAY）
+                    replay_channels = self._get_source_channels()
+
+                    if replay_channels is not None:
+                        # 使用回放数据
+                        raw_channels = replay_channels
                     else:
-                        # 如果没有设备配置，使用默认模拟数据（方波 + 噪声，25Hz方波用于测试）
-                        raw_channels = []
-                        for i in range(8):
-                            # 方波信号 - 25Hz
-                            freq = 25
-                            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-                            square_signal = square * 30
+                        # 获取SOURCE节点绑定的设备配置
+                        source_nodes = [node for node in nodes if node.get('type') == 'SOURCE']
+                        device_channels = None
+                        
+                        if source_nodes:
+                            # 使用第一个SOURCE节点的设备配置
+                            source_node = source_nodes[0]
+                            device_id = source_node.get('params', {}).get('deviceId')
+                            if device_id:
+                                # 根据设备配置生成信号
+                                device_channels = get_device_channels(device_id, t, float(sample_rate))
+                        
+                        if device_channels is not None:
+                            # 使用设备配置生成的信号
+                            raw_channels = device_channels
+                        else:
+                            # 如果没有设备配置，使用默认模拟数据（方波 + 噪声，25Hz方波用于测试）
+                            raw_channels = []
+                            for i in range(8):
+                                # 方波信号 - 25Hz
+                                freq = 25
+                                square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
+                                square_signal = square * 30
 
-                            # 高频噪声
-                            high_freq1 = 50 + i * 10
-                            high_freq2 = 120 + i * 5
-                            noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
-                                    math.sin(2 * math.pi * high_freq2 * t) * 15
+                                # 高频噪声
+                                high_freq1 = 50 + i * 10
+                                high_freq2 = 120 + i * 5
+                                noise = math.sin(2 * math.pi * high_freq1 * t) * 20 + \
+                                        math.sin(2 * math.pi * high_freq2 * t) * 15
 
-                            # 随机噪声
-                            random_noise = random.uniform(-5, 5)
+                                # 随机噪声
+                                random_noise = random.uniform(-5, 5)
 
-                            raw_channels.append(square_signal + noise + random_noise)
+                                raw_channels.append(square_signal + noise + random_noise)
 
-                # 应用50Hz低通滤波器
-                channels = []
-                for i in range(8):
-                    if first_sample[i]:
-                        filtered_values[i] = raw_channels[i]
-                        first_sample[i] = False
-                    else:
-                        # 一阶低通滤波器
-                        filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
-                    channels.append(filtered_values[i])
-                    self._spectrum_buffers[i].append(filtered_values[i])
+                    # 应用50Hz低通滤波器
+                    channels = []
+                    for i in range(8):
+                        if first_sample[i]:
+                            filtered_values[i] = raw_channels[i]
+                            first_sample[i] = False
+                        else:
+                            # 一阶低通滤波器
+                            filtered_values[i] = alpha * raw_channels[i] + (1 - alpha) * filtered_values[i]
+                        channels.append(filtered_values[i])
+                        self._spectrum_buffers[i].append(filtered_values[i])
 
-                base_signal = {
-                    'channels': channels,
-                    'channelNames': self._default_channel_names(len(channels)),
-                }
-                memo: Dict[str, Dict[str, Dict]] = {}
+                    base_signal = {
+                        'channels': channels,
+                        'channelNames': self._default_channel_names(len(channels)),
+                    }
+                    memo: Dict[str, Dict[str, Dict]] = {}
 
-                # 保存节点：写入其输入通道
-                for save_node_id in self._save_nodes:
-                    save_out = self._compute_node_outputs(
-                        save_node_id,
-                        nodes_by_id,
-                        incoming_by_target,
-                        base_signal,
-                        memo,
-                        set(),
-                    )
-                    in_sig = save_out.get('in') or {}
-                    save_channels = in_sig.get('channels') or []
-                    if save_channels:
-                        self._save_channels(save_channels, [save_node_id])
+                    # 保存节点：写入其输入通道
+                    for save_node_id in self._save_nodes:
+                        save_out = self._compute_node_outputs(
+                            save_node_id,
+                            nodes_by_id,
+                            incoming_by_target,
+                            base_signal,
+                            memo,
+                            set(),
+                        )
+                        in_sig = save_out.get('in') or {}
+                        save_channels = in_sig.get('channels') or []
+                        if save_channels:
+                            self._save_channels(save_channels, [save_node_id])
 
-                for node in output_nodes:
-                    node_id = node['id']
-                    node_outputs = self._compute_node_outputs(
-                        node_id,
-                        nodes_by_id,
-                        incoming_by_target,
-                        base_signal,
-                        memo,
-                        set(),
-                    )
-                    in_sig = node_outputs.get('in') or node_outputs.get('out') or {}
-                    node_channels = list(in_sig.get('channels') or [])
-                    node_names = [str(v) for v in (in_sig.get('channelNames') or [])]
+                    for node in output_nodes:
+                        node_id = node['id']
+                        node_outputs = self._compute_node_outputs(
+                            node_id,
+                            nodes_by_id,
+                            incoming_by_target,
+                            base_signal,
+                            memo,
+                            set(),
+                        )
+                        in_sig = node_outputs.get('in') or node_outputs.get('out') or {}
+                        node_channels = list(in_sig.get('channels') or [])
+                        node_names = [str(v) for v in (in_sig.get('channelNames') or [])]
 
-                    if node_id not in sample_buffer:
-                        sample_buffer[node_id] = []
-                    sample_buffer[node_id].append(node_channels)
-                    sample_channel_names[node_id] = node_names
+                        if node_id not in sample_buffer:
+                            sample_buffer[node_id] = []
+                        sample_buffer[node_id].append(node_channels)
+                        sample_channel_names[node_id] = node_names
 
-                t += dt
-            
-            # 检查是否到达发送时间（30fps）
-            current_time = time.time()
-            elapsed = current_time - last_send_time
-            
-            if elapsed >= FRAME_INTERVAL:
-                last_send_time = current_time
-                node_type_map = {node.get('id'): node.get('type') for node in nodes}
-                spectrum_bundle = self._compute_spectrum_bundle(sample_rate, fft_size)
+                    t += dt
                 
-                # 发送缓冲的数据
-                for node_id, samples in list(sample_buffer.items()):
-                    if samples:
-                        # 使用最新的样本作为兼容字段，同时发送批量样本
-                        latest_channels = samples[-1]
-
-                        # 发送数据包（批量样本）
-                        payload = {
-                            'type': 'data',
-                            'timestamp': int(time.time() * 1000),
-                            'nodeId': node_id,
-                            'nodeType': node_type_map.get(node_id),
-                            'channels': latest_channels,
-                            'samples': samples,
-                            'channelNames': sample_channel_names.get(node_id, []),
-                            'sampleRate': sample_rate,
-                        }
-
-                        # 频谱数据由后端统一计算，供频谱/时频谱前端直接消费
-                        if spectrum_bundle is not None:
-                            payload.update(spectrum_bundle)
-
-                        try:
-                            await self.send(text_data=json.dumps(payload))
-                        except Exception as e:
-                            print(f"[WebSocket] Send error: {e}")
-                            # 发送错误，可能是连接已断开
-                            self.running = False
-                            break
+                # 检查是否到达发送时间（30fps）
+                current_time = time.time()
+                elapsed = current_time - last_send_time
                 
-                # 清空缓冲区
-                sample_buffer.clear()
-                sample_channel_names.clear()
-            await asyncio.sleep(0.001)
-            
+                if elapsed >= FRAME_INTERVAL:
+                    last_send_time = current_time
+                    node_type_map = {node.get('id'): node.get('type') for node in nodes}
+                    spectrum_bundle = self._compute_spectrum_bundle(sample_rate, fft_size)
+                    
+                    # 发送缓冲的数据
+                    for node_id, samples in list(sample_buffer.items()):
+                        if samples:
+                            # 使用最新的样本作为兼容字段，同时发送批量样本
+                            latest_channels = samples[-1]
+
+                            # 发送数据包（批量样本）
+                            payload = {
+                                'type': 'data',
+                                'timestamp': int(time.time() * 1000),
+                                'nodeId': node_id,
+                                'nodeType': node_type_map.get(node_id),
+                                'channels': latest_channels,
+                                'samples': samples,
+                                'channelNames': sample_channel_names.get(node_id, []),
+                                'sampleRate': sample_rate,
+                            }
+
+                            # 频谱数据由后端统一计算，供频谱/时频谱前端直接消费
+                            if spectrum_bundle is not None:
+                                payload.update(spectrum_bundle)
+
+                            try:
+                                await self.send(text_data=json.dumps(payload))
+                            except Exception as e:
+                                print(f"[WebSocket] Send error: {e}")
+                                # 发送错误，可能是连接已断开
+                                self.running = False
+                                break
+                    
+                    # 清空缓冲区
+                    sample_buffer.clear()
+                    sample_channel_names.clear()
+                    await asyncio.sleep(0.001)
+        
             except asyncio.CancelledError:
                 print("[WebSocket] Stream data task cancelled")
                 break
@@ -899,5 +899,5 @@ class EegGraphConsumer(AsyncWebsocketConsumer):
                 import traceback
                 traceback.print_exc()
                 await asyncio.sleep(0.1)  # 避免快速循环
-        
-        print("[WebSocket] Stream data task ended")
+    
+    print("[WebSocket] Stream data task ended")
