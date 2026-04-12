@@ -14,6 +14,11 @@ from .real_device_manager import (
     get_all_connected_devices,
     get_debug_output
 )
+from .serial_simulator import (
+    start_wearable_serial_simulator,
+    stop_wearable_serial_simulator,
+    list_wearable_serial_simulators,
+)
 from .device_store import get_all_devices, update_device, create_device
 
 
@@ -481,3 +486,85 @@ def debug_output(request):
             'code': 500,
             'message': f'Failed to get debug output: {str(e)}'
         }, status=500)
+
+
+@csrf_exempt
+def simulator_start(request):
+    """启动可穿戴串口模拟器。
+
+    POST /api/real-devices/simulator/start/
+    body: {"sample_rate": 1000, "channels": 8}
+    """
+    if request.method != 'POST':
+        return JsonResponse({'code': 405, 'message': 'Method not allowed'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+        sample_rate = int(payload.get('sample_rate', 1000))
+        channels = int(payload.get('channels', 8))
+        status = start_wearable_serial_simulator(sample_rate=sample_rate, channels=channels)
+        return JsonResponse({
+            'code': 0,
+            'message': 'success',
+            'data': {
+                'port': status.port,
+                'sample_rate': status.sample_rate,
+                'channels': status.channels,
+                'running': status.running,
+                'streaming': status.streaming,
+                'frames_sent': status.frames_sent,
+            }
+        })
+    except Exception as e:
+        return JsonResponse({'code': 500, 'message': f'Failed to start simulator: {str(e)}'}, status=500)
+
+
+@csrf_exempt
+def simulator_stop(request, port=None):
+    """停止指定串口模拟器。
+
+    POST /api/real-devices/simulator/stop/
+    POST /api/real-devices/simulator/<path:port>/stop/
+    """
+    if request.method != 'POST':
+        return JsonResponse({'code': 405, 'message': 'Method not allowed'}, status=405)
+
+    try:
+        if not port:
+            payload = json.loads(request.body or '{}')
+            port = payload.get('port')
+        if not port:
+            return JsonResponse({'code': 400, 'message': 'port is required'}, status=400)
+
+        ok = stop_wearable_serial_simulator(str(port))
+        if not ok:
+            return JsonResponse({'code': 404, 'message': f'simulator not found: {port}'}, status=404)
+        return JsonResponse({'code': 0, 'message': 'success', 'data': {'port': str(port), 'stopped': True}})
+    except Exception as e:
+        return JsonResponse({'code': 500, 'message': f'Failed to stop simulator: {str(e)}'}, status=500)
+
+
+@csrf_exempt
+def simulator_status(request):
+    """获取所有串口模拟器状态。
+
+    GET /api/real-devices/simulator/status/
+    """
+    if request.method != 'GET':
+        return JsonResponse({'code': 405, 'message': 'Method not allowed'}, status=405)
+
+    try:
+        simulators = list_wearable_serial_simulators()
+        data = []
+        for _, status in simulators.items():
+            data.append({
+                'port': status.port,
+                'sample_rate': status.sample_rate,
+                'channels': status.channels,
+                'running': status.running,
+                'streaming': status.streaming,
+                'frames_sent': status.frames_sent,
+            })
+        return JsonResponse({'code': 0, 'message': 'success', 'data': {'simulators': data, 'count': len(data)}})
+    except Exception as e:
+        return JsonResponse({'code': 500, 'message': f'Failed to get simulator status: {str(e)}'}, status=500)

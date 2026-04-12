@@ -45,6 +45,7 @@ class DeviceConnection:
     stop_event: threading.Event = None
     data_listeners: Set[Callable] = None
     acquisition_task: Optional[asyncio.Task] = None
+    frame_seq: int = 0
 
     def __post_init__(self):
         self.data_queue = deque(maxlen=1000)
@@ -85,9 +86,11 @@ class BCIAsyncProtocol(asyncio.Protocol):
                         # 解析8个通道的数据
                         channel_data = struct.unpack('<8i', data_bytes)
                         self.conn.data_count += 1
+                        self.conn.frame_seq += 1
                         
                         # 将数据放入队列
                         self.conn.data_queue.append({
+                            'seq': self.conn.frame_seq,
                             'timestamp': time.time(),
                             'channels': list(channel_data),
                             'port': self.conn.port,
@@ -127,6 +130,38 @@ class RealDeviceManager:
         self._connections: Dict[str, DeviceConnection] = {}
         self._lock = threading.RLock()
         self._data_listeners: Set[callable] = set()
+        self._async_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._async_thread: Optional[threading.Thread] = None
+        self._async_loop_ready = threading.Event()
+
+    def _ensure_async_loop(self) -> asyncio.AbstractEventLoop:
+        """确保存在长期运行的后台事件循环，避免串口连接绑定到一次性 asyncio.run。"""
+        with self._lock:
+            if self._async_loop and self._async_loop.is_running() and self._async_thread and self._async_thread.is_alive():
+                return self._async_loop
+
+            self._async_loop_ready.clear()
+
+            def _loop_runner():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                self._async_loop = loop
+                self._async_loop_ready.set()
+                loop.run_forever()
+
+            self._async_thread = threading.Thread(target=_loop_runner, name='real-device-async-loop', daemon=True)
+            self._async_thread.start()
+
+        self._async_loop_ready.wait(timeout=3.0)
+        if not self._async_loop or not self._async_loop.is_running():
+            raise RuntimeError('Failed to start background async loop for real device manager')
+        return self._async_loop
+
+    def _run_coro_on_async_loop(self, coro):
+        """将协程提交到长期运行的后台事件循环并阻塞等待结果。"""
+        loop = self._ensure_async_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=15.0)
 
     @staticmethod
     def _run_async_blocking(coro):
@@ -154,7 +189,6 @@ class RealDeviceManager:
                     raise result_holder['error']
                 return result_holder['result']
         except RuntimeError:
-            # 当前线程没有事件循环
             pass
 
         return asyncio.run(coro)
@@ -408,7 +442,7 @@ class RealDeviceManager:
             try:
                 if use_async:
                     # 异步连接
-                    ok = self._run_async_blocking(self._connect_device_async(conn))
+                    ok = self._run_coro_on_async_loop(self._connect_device_async(conn))
                     print(f"[RealDeviceManager] Async connect completed for {port}: success={ok}, status={conn.status.value}")
                     return bool(ok)
                 else:
@@ -487,7 +521,7 @@ class RealDeviceManager:
     async def _connect_device_async(self, conn: DeviceConnection) -> bool:
         """异步连接设备（使用serial_asyncio）"""
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             
             print(f"[RealDeviceManager] Creating async serial connection for {conn.port}...")
             transport, protocol = await serial_asyncio.create_serial_connection(
@@ -518,7 +552,7 @@ class RealDeviceManager:
                 fixed, fix_reason = self._try_fix_linux_serial_permission(conn.port)
                 if fixed:
                     try:
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         transport, protocol = await serial_asyncio.create_serial_connection(
                             loop, 
                             lambda: BCIAsyncProtocol(conn), 
@@ -682,9 +716,11 @@ class RealDeviceManager:
                                     try:
                                         channel_data = struct.unpack('<8i', data_bytes)
                                         conn.data_count += 1
+                                        conn.frame_seq += 1
                                         
                                         # 将数据放入队列
                                         conn.data_queue.append({
+                                            'seq': conn.frame_seq,
                                             'timestamp': time.time(),
                                             'channels': list(channel_data),
                                             'port': conn.port,
@@ -777,7 +813,10 @@ class RealDeviceManager:
             # 关闭异步连接
             if conn.async_transport:
                 try:
-                    conn.async_transport.close()
+                    if self._async_loop and self._async_loop.is_running():
+                        self._async_loop.call_soon_threadsafe(conn.async_transport.close)
+                    else:
+                        conn.async_transport.close()
                 except Exception as e:
                     print(f"[RealDeviceManager] Error closing async transport on {port}: {e}")
             
@@ -833,6 +872,24 @@ class RealDeviceManager:
             # 从队列中获取最新的数据
             data_list = list(conn.data_queue)
             return data_list[-count:] if data_list else []
+
+    def drain_data(self, port: str, count: int = 200) -> List[Dict[str, Any]]:
+        """从设备队列按时间顺序出队数据，供实时图引擎消费。"""
+        with self._lock:
+            if port not in self._connections:
+                return []
+
+            conn = self._connections[port]
+            if not conn.data_queue:
+                return []
+
+            out: List[Dict[str, Any]] = []
+            max_count = max(1, int(count))
+            for _ in range(max_count):
+                if not conn.data_queue:
+                    break
+                out.append(conn.data_queue.popleft())
+            return out
 
     def get_latest_raw_input(self, port: str, count: int = 100) -> List[Dict[str, Any]]:
         """获取串口原始输入（按读取块）"""

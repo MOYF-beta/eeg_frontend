@@ -4,6 +4,14 @@
 
 本文档使用 Windows 的 `cmd` 命令行，按顺序执行即可完成安装和启动。
 
+## 最近更新（2026-04）
+
+1. 实时链路优化：真实设备数据从“最新值轮询”改为“队列顺序消费（drain）”，减少丢帧和时序抖动。
+2. 图引擎改造：接入真实设备时不再注入零值兜底，避免前端出现异常平线/跳变。
+3. 调试能力增强：新增后端“真实协议串口模拟器”接口，可用于无硬件情况下复现实时链路。
+4. 前端波形修复：示波器绘制逻辑修复，去除导致异常条纹的填充行为；Debug 场景默认开启自动增益。
+5. E2E 调试脚本：新增 20 秒采样+截图的 Playwright 用例，用于“测试-观察-修复”循环。
+
 ## 0. 准备目录
 
 假设项目目录为：
@@ -98,6 +106,48 @@ npm run dev
 http://localhost:5173/
 ```
 
+## 8.1 实时调试（推荐）
+
+用于复现和验证“真实设备数据链路 + 前端波形显示”。
+
+### A. 启动服务
+
+后端（窗口 1）：
+
+```cmd
+conda activate eeg_py310
+cd /d D:\projects\eeg_frontend\backend
+daphne -b 127.0.0.1 -p 8000 eeg_backend.asgi:application
+```
+
+前端（窗口 2）：
+
+```cmd
+cd /d D:\projects\eeg_frontend\frontend
+npm run dev
+```
+
+### B. 执行 20 秒截图调试用例
+
+```cmd
+cd /d D:\projects\eeg_frontend\frontend
+npm run test:e2e:real-debug
+```
+
+输出截图位置：
+
+```text
+frontend/e2e/screenshots/debug-real-device-20s.png
+```
+
+### C. 可用后端调试接口（串口模拟器）
+
+- `POST /api/real-devices/simulator/start/`：启动模拟器并返回虚拟串口。
+- `POST /api/real-devices/simulator/stop/`：停止模拟器。
+- `GET /api/real-devices/simulator/status/`：查看模拟器状态。
+
+说明：模拟器按真实设备帧协议输出 8 通道 int32 数据，适合回归测试和前端波形验证。
+
 ## 9. 常见问题
 
 ### Q1: `conda activate` 提示不是内部或外部命令
@@ -132,4 +182,19 @@ netstat -ano | findstr :8000
 
 ```cmd
 taskkill /PID <PID> /F
+```
+
+### Q4: Playwright 用例找不到浏览器
+
+先安装 Playwright 浏览器：
+
+```cmd
+cd /d D:\projects\eeg_frontend\frontend
+npx playwright install chromium
+```
+
+然后重试：
+
+```cmd
+npm run test:e2e:real-debug
 ```

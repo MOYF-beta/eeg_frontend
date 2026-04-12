@@ -148,7 +148,7 @@ class GraphWorker:
             except Exception:
                 pass
 
-    def _generate_source_channels(self, node_id: str) -> Tuple[List[float], int]:
+    def _generate_source_channels(self, node_id: str) -> Tuple[List[float], Optional[int]]:
         node = self.nodes_by_id.get(node_id) or {}
         params = node.get('params') or {}
 
@@ -168,21 +168,30 @@ class GraphWorker:
                 device_channel_count = int(device_info.get('channel_count') or params.get('channels') or 8)
                 device_channel_count = max(1, device_channel_count)
 
-                # 真实设备未产出数据时，不回退到模拟信号，避免误导。
+                # 真实设备按队列顺序消费数据，避免 latest-only 导致阶梯状波形。
                 if device_type == 'wearable_eeg':
                     port = (device_info.get('config') or {}).get('port')
                     if port:
                         manager = get_real_device_manager()
-                        latest_data = manager.get_latest_data(str(port), count=1)
-                        if latest_data:
-                            raw_channels = list((latest_data[-1] or {}).get('channels', []))
-                            channels = [float(ch) / 1_000_000.0 for ch in raw_channels]
+                        state = self.node_states[node_id]
+                        pending = state.setdefault('realPendingSamples', [])
+
+                        if not pending:
+                            drained = manager.drain_data(str(port), count=max(8, min(1024, int(self.sample_rate * 0.2))))
+                            for frame in drained:
+                                raw_channels = list((frame or {}).get('channels', []))
+                                channels = [float(ch) for ch in raw_channels]
+                                frame_ts = int(((frame or {}).get('timestamp') or time.time()) * 1000)
+                                pending.append((channels, frame_ts))
+
+                        if pending:
+                            channels, frame_ts = pending.pop(0)
                             if len(channels) < device_channel_count:
                                 channels.extend([0.0] * (device_channel_count - len(channels)))
                             elif len(channels) > device_channel_count:
                                 channels = channels[:device_channel_count]
-                            return channels, int(time.time() * 1000)
-                    return [0.0] * device_channel_count, int(time.time() * 1000)
+                            return channels, frame_ts
+                    return [], None
             except Exception as exc:
                 print(f'[GraphWorker] Failed to read channels from device {device_id}: {exc}')
 
