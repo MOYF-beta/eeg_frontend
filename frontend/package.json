@@ -3,20 +3,15 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "main": "electron/main.js",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
     "test:e2e": "playwright test",
+    "test:e2e:real-debug": "playwright test e2e/real-device-debug.spec.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",
-    "test:e2e:report": "playwright show-report",
-    "electron:dev": "vite --mode=electron & electron .",
-    "electron:build": "npm run build && electron-builder",
-    "electron:build:linux": "npm run build && electron-builder --linux",
-    "electron:build:win": "npm run build && electron-builder --win",
-    "electron:build:all": "npm run build && electron-builder --linux --win"
+    "test:e2e:report": "playwright show-report"
   },
   "dependencies": {
     "@antv/x6": "^3.0.0",
@@ -31,60 +26,7 @@
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@vitejs/plugin-vue": "^5.0.4",
-    "electron": "^30.0.0",
-    "electron-builder": "^24.13.0",
     "typescript": "^5.3.3",
     "vite": "^5.1.6"
-  },
-  "build": {
-    "appId": "com.eeg.app",
-    "productName": "EEG脑电系统",
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "dist/**/*",
-      "electron/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "../backend",
-        "to": "backend",
-        "filter": ["**/*", "!venv", "!__pycache__", "!*.pyc"]
-      }
-    ],
-    "linux": {
-      "target": [
-        {
-          "target": "AppImage",
-          "arch": ["x64"]
-        },
-        {
-          "target": "deb",
-          "arch": ["x64"]
-        }
-      ],
-      "category": "Science",
-      "icon": "public/icon.png"
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        },
-        {
-          "target": "portable",
-          "arch": ["x64"]
-        }
-      ],
-      "icon": "public/icon.ico"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
   }
 }

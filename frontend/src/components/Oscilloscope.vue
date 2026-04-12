@@ -242,7 +242,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
@@ -258,6 +258,7 @@ const emit = defineEmits<{
 }>();
 
 const router = useRouter();
+const route = useRoute();
 
 // 配置
 const channelCount = ref(8);
@@ -312,7 +313,12 @@ const gainFineByCh = ref<number[]>(Array.from({ length: channelCount.value }, ()
 const gainExpByCh = ref<number[]>(Array.from({ length: channelCount.value }, () => 0));
 const autoGainDisplay = ref<number[]>(Array.from({ length: channelCount.value }, () => 1));
 const centerEnabled = ref(false);
-const autoGainEnabled = ref(false);
+const isDebugAutoGainDefault = computed(() => {
+  const debugFlag = String(route.query.debug || '').toLowerCase();
+  const traceTag = String(route.query._t || '').toLowerCase();
+  return debugFlag === '1' || debugFlag === 'true' || traceTag.includes('debug');
+});
+const autoGainEnabled = ref(isDebugAutoGainDefault.value);
 let isAutoGainSync = false;
 const channelAbsDisplay = ref<number[]>(Array.from({ length: channelCount.value }, () => 1));
 const sidebarCollapsed = ref(false);
@@ -799,7 +805,7 @@ const buildChannelStats = (running: RunningChannelStats): ChannelStats => {
 };
 
 const syncAutoGainDisplay = (stats: ChannelStats, channelSpacing: number) => {
-  if (!autoGainEnabled.value || !centerEnabled.value) return;
+  if (!autoGainEnabled.value) return;
   const targetHalfHeight = (channelSpacing * 0.5) / 1.1;
   const amplitudeScale = plotMetrics.value.amplitudeScale || 1;
 
@@ -835,7 +841,7 @@ const drawSamples = (
   const { left, top, width: plotWidth, channelSpacing, amplitudeScale } = plotMetrics.value;
   const windowSize = Math.max(1, timeWindowSec.value * currentSampleRate.value);
   const baseX = (pos: number) => left + (plotWidth * pos) / (windowSize - 1 || 1);
-  const useAuto = centerEnabled.value && autoGainEnabled.value;
+  const useAuto = autoGainEnabled.value;
   const targetHalfHeight = (channelSpacing * 0.5) / 1.1;
 
   for (let ch = 0; ch < channelCount.value; ch++) {
@@ -893,7 +899,7 @@ const drawFullWindow = () => {
 
   const { left, top, width: plotWidth, channelSpacing, amplitudeScale } = plotMetrics.value;
   const baseX = (pos: number) => left + (plotWidth * pos) / (windowSize - 1 || 1);
-  const useAuto = centerEnabled.value && autoGainEnabled.value;
+  const useAuto = autoGainEnabled.value;
   const targetHalfHeight = (channelSpacing * 0.5) / 1.1;
 
   syncAutoGainDisplay(statsCurrent, channelSpacing);
@@ -1130,16 +1136,7 @@ const handleDataPacket = (packet: EegDataPacket) => {
     totalReceivedSamples.value++;
   };
 
-  // 填充丢包导致的间隙，避免图像显示“稀薄”或出现 0 值闪烁
-  const lastPos = scanPosition.value;
-  if (targetCycle === scanCycle && targetPos > lastPos && targetPos - lastPos < sr * 0.2) {
-    // 对于短时间（<200ms）的抖动或落后，填充上一个采样值以保持连贯
-    for (let p = lastPos; p < targetPos; p++) {
-      const prevIdx = (p > 0 ? p - 1 : 0) % windowSize;
-      const fillChannels = samplesCurrent.map(ch => ch[prevIdx] || 0);
-      pushSampleAt(fillChannels, p);
-    }
-  }
+  // 不再使用“复制上一点”补样，避免在真实设备链路抖动时人为制造水平离散线。
 
   if (packet.samples && packet.samples.length > 0) {
     // 批量模式：顺序从起始 targetPos 开始填充

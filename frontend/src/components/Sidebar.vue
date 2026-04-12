@@ -4,6 +4,7 @@
     :rail="rail"
     :permanent="true"
     :width="sidebarWidth"
+    data-testid="sidebar-drawer"
     class="sidebar"
   >
     <!-- 侧边栏头部 -->
@@ -64,8 +65,8 @@
         </v-chip>
       </div>
       
-      <!-- 运行控制按钮 -->
-      <div class="px-3 py-2">
+      <!-- 展开态运行控制按钮 -->
+      <div v-if="!rail" class="px-3 py-2" data-testid="sidebar-expanded-controls">
         
         <!-- 运行按钮组 -->
         <div class="d-flex flex-column ga-2">
@@ -75,6 +76,7 @@
             @click="handleRunClick('live')"
             :disabled="!canRunGraph"
             :title="!canRunGraph ? '计算图正在运行中' : 'Live运行计算图'"
+            data-testid="sidebar-live-run-btn"
             block
           >
             <v-icon left size="small" class="mr-1">mdi-play</v-icon>
@@ -97,6 +99,7 @@
             @click="stopRun"
             :disabled="!isRunning"
             :title="!isRunning ? '计算图未运行' : '停止运行计算图'"
+            data-testid="sidebar-stop-run-btn"
             block
           >
             <v-icon left size="small" class="mr-1">mdi-stop</v-icon>
@@ -142,6 +145,44 @@
           {{ runtimeWarning }}
         </v-alert>
       </div>
+
+      <!-- 折叠态运行控制按钮：保留实时运行/停止入口 -->
+      <div v-else class="rail-controls px-1 py-2" data-testid="sidebar-rail-controls">
+        <v-tooltip location="right">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              size="small"
+              color="success"
+              class="mb-2"
+              :disabled="!canRunGraph"
+              @click="handleRunClick('live')"
+              data-testid="sidebar-live-run-btn"
+            >
+              <v-icon size="small">mdi-play</v-icon>
+            </v-btn>
+          </template>
+          <span>Live/实时运行</span>
+        </v-tooltip>
+
+        <v-tooltip location="right">
+          <template #activator="{ props }">
+            <v-btn
+              v-bind="props"
+              icon
+              size="small"
+              color="error"
+              :disabled="!isRunning"
+              @click="stopRun"
+              data-testid="sidebar-stop-run-btn"
+            >
+              <v-icon size="small">mdi-stop</v-icon>
+            </v-btn>
+          </template>
+          <span>停止运行</span>
+        </v-tooltip>
+      </div>
     </div>
 
     <!-- 折叠/展开按钮（固定在底部） -->
@@ -149,6 +190,7 @@
       <v-list-item
         :title="rail ? '' : '折叠侧边栏'"
         @click="toggleRail"
+        data-testid="sidebar-toggle-btn"
         class="toggle-button"
       >
         <template v-slot:prepend>
@@ -272,10 +314,14 @@ onUnmounted(() => {
 }
 
 .graph-controls-collapsed {
-  opacity: 0;
-  height: 0;
-  padding: 0 !important;
-  margin: 0 !important;
+  opacity: 1;
+  height: auto;
+}
+
+.rail-controls {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
 
 /* 悬停效果（仅背景色变化，不展开） */

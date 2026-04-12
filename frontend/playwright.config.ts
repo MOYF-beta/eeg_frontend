@@ -14,7 +14,7 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     video: 'off',
     launchOptions: {
-      executablePath: '/usr/bin/chromium',
+      executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH || undefined,
       args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
     },
   },
