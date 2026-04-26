@@ -233,12 +233,13 @@ const {
 
 // 导航项配置
 const navItems = [
+  { title: '计算图工作台', path: '/cpgraph', icon: 'mdi-graph-outline' },
   { title: '设备', path: '/devices', icon: 'mdi-devices' },
   { title: '示波器', path: '/oscilloscope', icon: 'mdi-oscilloscope' },
   { title: '可视化', path: '/visualization', icon: 'mdi-chart-line' },
-  { title: '计算图', path: '/cpgraph', icon: 'mdi-graph-outline' },
-  { title: '串口调试', path: '/serial-debug', icon: 'mdi-console-line' },
-  { title: '测试', path: '/test', icon: 'mdi-test-tube' },
+  { title: '开发目录', path: '/dev', icon: 'mdi-folder-wrench' },
+  { title: '串口调试', path: '/dev/serial-debug', icon: 'mdi-console-line' },
+  { title: '测试', path: '/dev/test', icon: 'mdi-test-tube' },
 ];
 
 // 计算侧边栏属性

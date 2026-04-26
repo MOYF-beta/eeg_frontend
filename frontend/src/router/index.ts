@@ -6,15 +6,19 @@ import CpgraphView from '../views/CpgraphView.vue';
 import TestView from '../views/TestView.vue';
 import FullscreenView from '../views/FullscreenView.vue';
 import SerialDebugView from '../views/SerialDebugView.vue';
+import DevHubView from '../views/DevHubView.vue';
 
 const routes = [
-  { path: '/', redirect: '/devices' },
+  { path: '/', redirect: '/cpgraph' },
   { path: '/devices', name: 'Devices', component: DevicesView },
   { path: '/oscilloscope', name: 'Oscilloscope', component: OscilloscopeView },
   { path: '/visualization', name: 'Visualization', component: VisualizationView },
   { path: '/cpgraph', name: 'Cpgraph', component: CpgraphView },
-  { path: '/serial-debug', name: 'SerialDebug', component: SerialDebugView },
-  { path: '/test', name: 'Test', component: TestView },
+  { path: '/dev', name: 'DevHub', component: DevHubView },
+  { path: '/dev/serial-debug', name: 'SerialDebug', component: SerialDebugView },
+  { path: '/dev/test', name: 'Test', component: TestView },
+  { path: '/serial-debug', redirect: '/dev/serial-debug' },
+  { path: '/test', redirect: '/dev/test' },
   {
     path: '/fullscreen/:type/:nodeId',
     name: 'Fullscreen',

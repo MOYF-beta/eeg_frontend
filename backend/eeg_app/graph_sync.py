@@ -5,7 +5,7 @@ import time
 from asgiref.sync import async_to_sync
 from channels.layers import get_channel_layer
 
-from .graph_store import get_graph
+from .graph_store import get_graph, get_graph_revision, get_persisted_revision
 
 
 GRAPH_SYNC_GROUP = 'graph_sync'
@@ -19,7 +19,11 @@ def broadcast_graph_state(reason: str = 'updated') -> None:
 
     payload = {
         'type': 'graph.state',
-        'graph': get_graph(),
+        'graph': {
+            **get_graph(),
+            'revision': get_graph_revision(),
+            'persistedRevision': get_persisted_revision(),
+        },
         'reason': reason,
         'timestamp': int(time.time() * 1000),
     }

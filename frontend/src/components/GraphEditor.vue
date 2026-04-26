@@ -67,6 +67,30 @@
           <div class="palette-title">节点库</div>
 
           <div class="palette-group">
+            <div class="group-title d-flex align-center justify-space-between">
+              <span>设备集合</span>
+              <v-btn size="x-small" variant="text" @click="openCreateDeviceDialog" :disabled="!canEditGraphLocal">
+                新建设备
+              </v-btn>
+            </div>
+            <div
+              v-for="device in runningDevices"
+              :key="device.id"
+              class="palette-item"
+              :class="{ 'palette-item-disabled': !canEditGraphLocal }"
+              :draggable="canEditGraphLocal"
+              @dragstart="onDragStartDevice($event, device.id)"
+              :title="!canEditGraphLocal ? `当前状态不允许拖拽设备: ${statusDescription}` : `拖拽 ${device.name} 作为数据源节点`"
+            >
+              <span class="item-icon" style="background: #e3f2fd; color: #1976d2;">DEV</span>
+              <span class="item-name">{{ device.name }}</span>
+            </div>
+            <div v-if="runningDevices.length === 0" class="palette-empty">
+              暂无在线设备
+            </div>
+          </div>
+
+          <div class="palette-group">
             <div class="group-title">数据来源</div>
             <div
               v-for="node in sourceNodes"
@@ -148,6 +172,16 @@
               <v-icon :color="sidebarIconColor" class="mr-2">{{ sidebarIcon }}</v-icon>
               {{ sidebarTitle }}
             </div>
+            <v-btn
+              v-if="sidebarExpanded"
+              icon
+              size="small"
+              variant="text"
+              @click="pinnedNodePanel = true"
+              title="固定到悬浮面板"
+            >
+              <v-icon>mdi-pin</v-icon>
+            </v-btn>
           </div>
 
           <!-- 边栏内容 -->
@@ -280,6 +314,70 @@
     style="display: none"
     @change="loadGraphFromFile"
   />
+
+  <v-dialog v-model="createDeviceDialogOpen" max-width="560">
+    <v-card>
+      <v-card-title>新建设备</v-card-title>
+      <v-card-text class="pt-3">
+        <v-text-field v-model="newDeviceForm.name" label="设备名称" density="compact" variant="outlined" />
+        <v-select
+          v-model="newDeviceForm.type"
+          :items="['simulated', 'wearable_eeg']"
+          label="设备类型"
+          density="compact"
+          variant="outlined"
+        />
+        <v-text-field v-model.number="newDeviceForm.sampling_rate" type="number" label="采样率" density="compact" variant="outlined" />
+        <v-text-field v-model.number="newDeviceForm.channel_count" type="number" label="通道数" density="compact" variant="outlined" />
+      </v-card-text>
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="createDeviceDialogOpen = false">取消</v-btn>
+        <v-btn color="primary" @click="createDeviceFromGraphEditor">创建并加入设备集合</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <v-dialog v-model="pinnedNodePanel" max-width="880">
+    <v-card>
+      <v-card-title class="d-flex align-center">
+        <span>节点固定面板</span>
+        <v-spacer />
+        <v-btn icon size="small" variant="text" @click="pinnedNodePanel = false"><v-icon>mdi-close</v-icon></v-btn>
+      </v-card-title>
+      <v-divider />
+      <v-card-text>
+        <v-tabs v-model="pinnedTab" density="compact" class="mb-3">
+          <v-tab value="edit">编辑</v-tab>
+          <v-tab value="preview">预览</v-tab>
+        </v-tabs>
+        <v-window v-model="pinnedTab">
+          <v-window-item value="edit">
+            <NodeEditDialog
+              v-model="nodeEditDialogOpen"
+              :node-data="editingNode"
+              :all-nodes="allNodes"
+              :all-edges="allEdges"
+              mode="sidebar"
+              @save="handleNodeSave"
+              @bindOscilloscope="handleBindOscilloscope"
+            />
+          </v-window-item>
+          <v-window-item value="preview">
+            <Oscilloscope
+              v-if="editingNode && editingNode.type === 'OSC'"
+              :initial-node-id="editingNode.id"
+            />
+            <FrequencyView
+              v-else-if="editingNode && editingNode.type === 'SPECTRUM'"
+              :initial-node-id="editingNode.id"
+            />
+            <v-alert v-else type="info" variant="tonal">当前节点暂无预览视图</v-alert>
+          </v-window-item>
+        </v-window>
+      </v-card-text>
+    </v-card>
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -288,16 +386,20 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { Graph, Snapline } from '@antv/x6';
 import {
   fetchGraph,
-  saveGraph,
+  syncGraph,
+  persistGraph,
   type GraphNode,
   type GraphNodeType,
   type GraphPayload,
 } from '../services/graph';
+import { deviceApi } from '../services/deviceApi';
 import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
+import Oscilloscope from './Oscilloscope.vue';
+import FrequencyView from './FrequencyView.vue';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
 
@@ -310,6 +412,32 @@ const hasNodes = ref(false);
 const hasUnsavedChanges = ref(false);
 const isApplyingBackendGraph = ref(false);
 const lastSyncedSignature = ref('');
+const lastPersistedSignature = ref('');
+const currentRevision = ref(0);
+const persistedRevision = ref(0);
+let realtimeSyncTimer: number | null = null;
+const realtimeSyncInFlight = ref(false);
+let isNodeDragging = false;
+let dragDebounceTimer: number | null = null;
+
+type PaletteDevice = {
+  id: string;
+  name: string;
+  status: string;
+};
+
+const paletteDevices = ref<PaletteDevice[]>([]);
+const runningDevices = computed(() => paletteDevices.value.filter((d) => d.status === 'online' || d.status === 'ready'));
+const createDeviceDialogOpen = ref(false);
+const newDeviceForm = ref({
+  name: '新设备',
+  type: 'simulated',
+  sampling_rate: 1000,
+  channel_count: 8,
+});
+
+const pinnedNodePanel = ref(false);
+const pinnedTab = ref<'edit' | 'preview'>('edit');
 
 function sortValueDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -339,8 +467,77 @@ function payloadSignature(payload: GraphPayload): string {
 
 function syncUnsavedState() {
   if (isApplyingBackendGraph.value) return;
+  if (isNodeDragging) return;
   const current = buildPayload();
-  hasUnsavedChanges.value = payloadSignature(current) !== lastSyncedSignature.value;
+  const signature = payloadSignature(current);
+  hasUnsavedChanges.value = signature !== lastPersistedSignature.value;
+
+  console.log('[GraphEditor][sync] syncUnsavedState, sig changed:', signature !== lastSyncedSignature.value,
+    'hasUnsaved:', hasUnsavedChanges.value,
+    'lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
+    'lastPersistedSig:', lastPersistedSignature.value.slice(0, 40));
+
+  if (signature !== lastSyncedSignature.value) {
+    scheduleRealtimeSync(current, signature);
+  }
+}
+
+function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
+  if (isRunning.value || isApplyingBackendGraph.value) return;
+  if (realtimeSyncTimer) {
+    clearTimeout(realtimeSyncTimer);
+  }
+  realtimeSyncTimer = window.setTimeout(async () => {
+    if (realtimeSyncInFlight.value) return;
+    realtimeSyncInFlight.value = true;
+    try {
+      const result = await syncGraph(payload, currentRevision.value);
+      console.log('[GraphEditor][sync] syncGraph result, conflict:', result.conflict, 'rev:', result.revision);
+      if (result.conflict && result.graph) {
+        applyPayloadToCanvas(result.graph, { fromBackend: true, reason: 'conflict' });
+        currentRevision.value = Number(result.revision || currentRevision.value);
+        persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
+        return;
+      }
+      currentRevision.value = Number(result.revision || currentRevision.value);
+      persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
+      lastSyncedSignature.value = signature;
+    } catch (err) {
+      console.warn('[GraphEditor] Realtime sync failed:', err);
+    } finally {
+      realtimeSyncInFlight.value = false;
+    }
+  }, 250);
+}
+
+async function loadPaletteDevices() {
+  try {
+    const devices = await deviceApi.getDevices();
+    paletteDevices.value = devices.map((d) => ({ id: d.id, name: d.name, status: d.status }));
+  } catch (err) {
+    console.warn('[GraphEditor] Failed to load palette devices:', err);
+    paletteDevices.value = [];
+  }
+}
+
+function openCreateDeviceDialog() {
+  createDeviceDialogOpen.value = true;
+}
+
+async function createDeviceFromGraphEditor() {
+  try {
+    await deviceApi.createDevice({
+      name: String(newDeviceForm.value.name || '新设备'),
+      type: newDeviceForm.value.type as 'simulated' | 'physical',
+      address: 'graph-editor',
+      sampling_rate: Number(newDeviceForm.value.sampling_rate || 1000),
+      channel_count: Number(newDeviceForm.value.channel_count || 8),
+    });
+    createDeviceDialogOpen.value = false;
+    await loadPaletteDevices();
+  } catch (err) {
+    alert('创建设备失败: ' + (err as Error).message);
+  }
 }
 
 // 从全局状态管理获取状态
@@ -376,6 +573,20 @@ function stopRuntimeStatePolling() {
 // 右侧边栏状态
 const sidebarExpanded = ref(true);
 const selectedNodeId = ref<string | null>(null);
+
+// 侧边栏切换后刷新画布尺寸，避免残影
+watch(sidebarExpanded, () => {
+  nextTick(() => {
+    const graph = graphRef.value;
+    if (graph) {
+      // 等待 CSS transition 完成后重绘
+      setTimeout(() => {
+        graph.resize();
+        graph.centerContent();
+      }, 350);
+    }
+  });
+});
 
 // 计算属性：边栏标题、图标和颜色
 const sidebarTitle = computed(() => {
@@ -1423,7 +1634,7 @@ function updateAllEdgeLabels() {
 }
 
 // 添加节点 - 使用 rect 形状配合 attrs
-function addNode(type: GraphNodeType, x: number, y: number, name?: string, params?: Record<string, unknown>, existingId?: string) {
+function addNode(type: GraphNodeType, x: number, y: number, name?: string, params?: Record<string, unknown>, existingId?: string, boundDeviceId?: string) {
   const graph = graphRef.value;
   if (!graph) return null;
 
@@ -1471,7 +1682,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
       },
     },
     ports: createPorts(type, nodeParams),
-    data: { type, name: name || config.name, params: nodeParams },
+    data: { type, name: name || config.name, params: nodeParams, deviceId: boundDeviceId },
   });
 
   hasNodes.value = true;
@@ -1569,11 +1780,22 @@ function onDragStart(e: DragEvent, type: GraphNodeType) {
   e.dataTransfer!.effectAllowed = 'copy';
 }
 
+function onDragStartDevice(e: DragEvent, deviceId: string) {
+  if (!canEditGraphLocal.value) {
+    e.preventDefault();
+    return;
+  }
+  e.dataTransfer?.setData('device-id', deviceId);
+  e.dataTransfer!.effectAllowed = 'copy';
+}
+
 // 从后端加载数据
 async function loadFromBackend() {
   try {
     console.log('[GraphEditor] Loading graph from backend...');
     const backendPayload = await fetchGraph();
+    currentRevision.value = Number(backendPayload.revision || 0);
+    persistedRevision.value = Number(backendPayload.persistedRevision || 0);
 
     // 立即获取运行时状态
     try {
@@ -1582,16 +1804,27 @@ async function loadFromBackend() {
       console.warn('[GraphEditor] Failed to poll runtime state on load:', e);
     }
 
-    applyPayloadToCanvas(backendPayload, { fromBackend: true });
+    applyPayloadToCanvas(backendPayload, { fromBackend: true, reason: 'initial' });
+    console.log('[GraphEditor][init] loadFromBackend done, lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
+      'lastPersistedSig:', lastPersistedSignature.value.slice(0, 40));
   } catch (err) {
     console.error('Failed to load graph:', err);
     hasNodes.value = false;
   }
 }
 
-function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: boolean }) {
+function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: boolean; reason?: string }) {
   const graph = graphRef.value;
   if (!graph) return;
+
+  // 节点拖拽期间跳过后端同步重绘，避免残留影像
+  if (isNodeDragging) {
+    console.warn('[GraphEditor][ghost] applyPayloadToCanvas SKIPPED during drag, reason:', options?.reason);
+    return;
+  }
+
+  console.log('[GraphEditor][ghost] applyPayloadToCanvas CALLED, reason:', options?.reason, 'isNodeDragging:', isNodeDragging);
+  console.trace('[GraphEditor][ghost] applyPayloadToCanvas call stack');
 
   isApplyingBackendGraph.value = true;
   try {
@@ -1629,7 +1862,12 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
 
     if (options?.fromBackend) {
       lastSyncedSignature.value = payloadSignature(safePayload);
-      hasUnsavedChanges.value = false;
+      if (['initial', 'pull', 'persisted', 'saved'].includes(String(options.reason || ''))) {
+        lastPersistedSignature.value = payloadSignature(safePayload);
+        hasUnsavedChanges.value = false;
+      } else {
+        hasUnsavedChanges.value = payloadSignature(safePayload) !== lastPersistedSignature.value;
+      }
     }
   } finally {
     isApplyingBackendGraph.value = false;
@@ -1870,10 +2108,23 @@ async function save() {
   
   try {
     const payload = buildPayload();
-    console.log('[GraphEditor] Saving graph with payload:', payload);
-    await saveGraph(payload);
+    console.log('[GraphEditor] Persisting graph with payload:', payload);
+
+    // 保存语义为持久化，确保先把本地编辑推到后端权威图。
+    const syncResult = await syncGraph(payload, currentRevision.value);
+    if (syncResult.conflict && syncResult.graph) {
+      applyPayloadToCanvas(syncResult.graph, { fromBackend: true, reason: 'conflict' });
+      currentRevision.value = Number(syncResult.revision || currentRevision.value);
+      persistedRevision.value = Number(syncResult.persistedRevision || persistedRevision.value);
+      throw new Error('保存前同步发生冲突，已回退到后端最新版本，请确认后重试保存');
+    }
+    currentRevision.value = Number(syncResult.revision || currentRevision.value);
+
+    const persistResult = await persistGraph();
+    persistedRevision.value = Number(persistResult.persistedRevision || persistedRevision.value);
     console.log('[GraphEditor] Graph saved successfully');
 
+    lastPersistedSignature.value = payloadSignature(payload);
     lastSyncedSignature.value = payloadSignature(payload);
     hasUnsavedChanges.value = false;
     
@@ -2266,15 +2517,44 @@ onMounted(async () => {
 
   unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
     const incomingSignature = payloadSignature(backendGraph);
+    console.log('[GraphEditor][ws] onGraph received, reason:', reason,
+      'incomingSig:', incomingSignature.slice(0, 40),
+      'lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
+      'hasUnsaved:', hasUnsavedChanges.value,
+      'isNodeDragging:', isNodeDragging);
     if (incomingSignature === lastSyncedSignature.value && !hasUnsavedChanges.value) {
+      console.log('[GraphEditor][ws] onGraph → signature match & no unsaved changes, skipping');
       return;
     }
+
+    // 初始加载尚未完成时，跳过 initial/pull 推送（由 loadFromBackend 负责）
+    if (!lastSyncedSignature.value && (reason === 'initial' || reason === 'pull')) {
+      console.log('[GraphEditor][ws] onGraph → skipping initial/pull before loadFromBackend completes');
+      return;
+    }
+
+    // 'synced' 回声：后端确认了自己提交的更改，本地画布已是最新，跳过 clearCells() 重绘
+    if (reason === 'synced') {
+      console.log('[GraphEditor][ws] onGraph → synced echo, updating signatures only');
+      currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
+      persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
+      lastSyncedSignature.value = incomingSignature;
+      lastPersistedSignature.value = incomingSignature;
+      hasUnsavedChanges.value = false;
+      return;
+    }
+
+    console.warn('[GraphEditor][ws] onGraph → will call applyPayloadToCanvas, reason:', reason,
+      'hasUnsavedChanges:', hasUnsavedChanges.value);
     if (hasUnsavedChanges.value) {
       console.warn('[GraphEditor] Local unsaved changes were replaced by backend graph sync update:', reason);
     }
-    applyPayloadToCanvas(backendGraph, { fromBackend: true });
+    currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
+    persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
+    applyPayloadToCanvas(backendGraph, { fromBackend: true, reason });
   });
-  graphSyncWebSocket.connect();
+
+  // 注意：connect() 移到 loadFromBackend() 之后，避免 WebSocket initial 推送与 HTTP 加载竞争
 
   // 添加对齐线
   graph.use(new Snapline({ enabled: true }));
@@ -2287,6 +2567,15 @@ onMounted(async () => {
 
   container.value.addEventListener('drop', (e) => {
     e.preventDefault();
+    const deviceId = e.dataTransfer?.getData('device-id');
+    if (deviceId && container.value) {
+      const rect = container.value.getBoundingClientRect();
+      const x = e.clientX - rect.left - 90;
+      const y = e.clientY - rect.top - 35;
+      addNode('SOURCE', x, y, `设备源:${deviceId}`, { sourceMode: 'live' }, undefined, deviceId);
+      return;
+    }
+
     const type = e.dataTransfer?.getData('node-type') as GraphNodeType;
     if (!type || !container.value) return;
 
@@ -2375,7 +2664,21 @@ onMounted(async () => {
   });
 
   graph.on('node:change:position', () => {
-    syncUnsavedState();
+    if (!isNodeDragging) {
+      console.log('[GraphEditor][drag] First position change → isNodeDragging = true');
+      isNodeDragging = true;
+    }
+    // 清除之前的防抖计时器
+    if (dragDebounceTimer) {
+      clearTimeout(dragDebounceTimer);
+    }
+    // 拖拽结束后同步状态
+    dragDebounceTimer = window.setTimeout(() => {
+      console.log('[GraphEditor][drag] Debounce ended → isNodeDragging = false, calling syncUnsavedState');
+      isNodeDragging = false;
+      dragDebounceTimer = null;
+      syncUnsavedState();
+    }, 300);
   });
 
   graph.on('node:added', () => {
@@ -2425,6 +2728,10 @@ onMounted(async () => {
   // 加载数据
   await nextTick();
   await loadFromBackend();
+  await loadPaletteDevices();
+  
+  // 初始加载完成后再连接 WebSocket，避免 initial 推送与 loadFromBackend 竞争导致 clearCells 双重重绘
+  graphSyncWebSocket.connect();
   
   // 启动运行时状态轮询
   startRuntimeStatePolling();
@@ -2446,6 +2753,9 @@ onUnmounted(() => {
   unsubscribeSessionStore?.();
   unsubscribeGraphSync?.();
   graphSyncWebSocket.disconnect();
+  if (realtimeSyncTimer) {
+    clearTimeout(realtimeSyncTimer);
+  }
 });
 </script>
 
@@ -2462,6 +2772,12 @@ onUnmounted(() => {
   flex-shrink: 0;
   border-bottom: 1px solid #e0e0e0;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.palette-empty {
+  color: #90a4ae;
+  font-size: 12px;
+  padding: 8px 4px;
 }
 
 .graph-content {
@@ -2691,8 +3007,7 @@ onUnmounted(() => {
   min-height: 0; /* 确保flex容器可以收缩 */
   background: #fafafa;
   position: relative;
-  transition: width 0.3s ease;
-  overflow: auto; /* 添加滚动 */
+  overflow: hidden; /* 隐藏溢出，避免残影 */
 }
 
 /* 确保X6画布充分利用空间 */

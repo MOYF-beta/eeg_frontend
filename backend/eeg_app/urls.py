@@ -7,6 +7,8 @@ urlpatterns = [
     path('devices/', views.devices),
     path('devices/<str:device_id>/', views.devices),
     path('graph/', views.graph),
+    path('graph/sync/', views.graph_sync),
+    path('graph/save/', views.graph_save),
     path('graph/python/prototype/', views.graph_python_prototype),
     path('graph/python/library/', views.graph_python_library),
     path('graph/freeze/', views.graph_freeze),

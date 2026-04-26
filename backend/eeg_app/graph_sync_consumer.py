@@ -5,7 +5,7 @@ import time
 
 from channels.generic.websocket import AsyncWebsocketConsumer
 
-from .graph_store import get_graph
+from .graph_store import get_graph, get_graph_revision, get_persisted_revision
 from .graph_sync import GRAPH_SYNC_GROUP
 
 
@@ -35,7 +35,11 @@ class GraphSyncConsumer(AsyncWebsocketConsumer):
     async def graph_state(self, event):
         await self.send(text_data=json.dumps({
             'type': 'graph_state',
-            'graph': event.get('graph', get_graph()),
+            'graph': event.get('graph', {
+                **get_graph(),
+                'revision': get_graph_revision(),
+                'persistedRevision': get_persisted_revision(),
+            }),
             'reason': event.get('reason', 'updated'),
             'timestamp': int(event.get('timestamp', int(time.time() * 1000))),
         }))
@@ -43,7 +47,11 @@ class GraphSyncConsumer(AsyncWebsocketConsumer):
     async def _send_graph_state(self, reason: str):
         await self.send(text_data=json.dumps({
             'type': 'graph_state',
-            'graph': get_graph(),
+            'graph': {
+                **get_graph(),
+                'revision': get_graph_revision(),
+                'persistedRevision': get_persisted_revision(),
+            },
             'reason': reason,
             'timestamp': int(time.time() * 1000),
         }))

@@ -63,13 +63,51 @@ class BCIAsyncProtocol(asyncio.Protocol):
         self.data_received_count = 0
         self.valid_frame_count = 0
         self.transport = None
+        self._raw_dump_count = 0  # 记录已转储的原始数据块数
+        self._raw_first_bytes = b''  # 记录串口最先收到的原始字节
+        self._total_a5_seen = 0  # 累计看到过多少个 \xa5 字节（诊断用）
         
     def connection_made(self, transport):
         self.transport = transport
+        serial_port = transport.serial  # serial_asyncio 提供的底层 pyserial 对象
         print(f"[BCIAsyncProtocol] Connection made to {self.conn.port}")
+        print(f"[BCIAsyncProtocol] Serial details: baudrate={serial_port.baudrate}, "
+              f"bytesize={serial_port.bytesize}, parity={serial_port.parity}, "
+              f"stopbits={serial_port.stopbits}")
+        print(f"[BCIAsyncProtocol] DTR={serial_port.dtr}, RTS={serial_port.rts}")
+        print(f"[BCIAsyncProtocol] Timeout={serial_port.timeout}, write_timeout={serial_port.write_timeout}")
+        # 确保 DTR/RTS 为高电平（某些设备需要这些信号才能正常工作）
+        if not serial_port.dtr:
+            serial_port.dtr = True
+            print(f"[BCIAsyncProtocol] Set DTR=True")
+        if not serial_port.rts:
+            serial_port.rts = True
+            print(f"[BCIAsyncProtocol] Set RTS=True")
         
     def data_received(self, data):
         self.data_received_count += 1
+        
+        # 统计 \xa5 字节出现次数（诊断：设备是否曾发送过二进制帧头）
+        a5_count = data.count(0xa5)
+        if a5_count > 0:
+            self._total_a5_seen += a5_count
+            if self.valid_frame_count == 0 and self._total_a5_seen <= 10:
+                print(f"[BCIAsyncProtocol] Found 0xa5 byte! total_a5={self._total_a5_seen}, "
+                      f"this chunk has {a5_count}, data hex={data[:40].hex()}")
+        
+        # 保留最先收到的原始字节用于调试
+        if self._raw_dump_count < 5:
+            self._raw_first_bytes += data
+            self._raw_dump_count += 1
+            print(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count}: "
+                  f"{len(data)} bytes, hex={data[:60].hex()}")
+            if len(data) <= 60:
+                try:
+                    print(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count} ascii: "
+                          f"{data.decode('ascii', errors='replace')!r}")
+                except Exception:
+                    pass
+        
         self.buffer += data
         
         # 解析完整的数据帧
@@ -108,9 +146,15 @@ class BCIAsyncProtocol(asyncio.Protocol):
                     except struct.error as e:
                         print(f"[BCIAsyncProtocol] Error unpacking data: {e}")
             else:
-                # 调试：打印无效帧信息
-                if self.valid_frame_count % 100 == 0:  # 每100个有效帧打印一次
-                    print(f"[BCIAsyncProtocol] Invalid frame: starts with {line[:10].hex()}, len={len(line)}")
+                # 设备在未初始化时会发送 ASCII 文本消息
+                if self.valid_frame_count == 0 and self.data_received_count <= 30:
+                    try:
+                        ascii_text = line.decode('ascii', errors='replace')
+                        print(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
+                              f"len={len(line)}, first3={line[:3].hex()}, text={ascii_text[:80]!r}")
+                    except Exception:
+                        print(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
+                              f"hex={line[:20].hex()}, len={len(line)}")
     
     def connection_lost(self, exc):
         print(f"[BCIAsyncProtocol] Connection lost to {self.conn.port}: {exc}")
@@ -539,8 +583,53 @@ class RealDeviceManager:
             
             print(f"[RealDeviceManager] Successfully connected to device on {conn.port} (async)")
             
-            # 异步初始化设备
-            await self._initialize_device_async(conn)
+            # ===== 关键调试：验证 transport.write 实际写入了数据 =====
+            serial_port = transport.serial
+            print(f"[RealDeviceManager] Transport type: {type(transport).__name__}")
+            print(f"[RealDeviceManager] Serial port is_open: {serial_port.is_open}")
+            
+            # 与驱动脚本完全一致：连接后立即发送初始化命令
+            # 驱动脚本 main() 中 create_serial_connection 后立即 create_task(init_eeg_acquiring)
+            print(f"[RealDeviceManager] Sending init commands immediately...")
+            for i in range(3):
+                cmd = b"C005\r\n"
+                written = transport.write(cmd)
+                print(f"[RealDeviceManager] C005 #{i+1}: write returned {written}, cmd={cmd!r}")
+                await asyncio.sleep(0.05)
+            
+            for i in range(2):
+                cmd = b"C002\r\n"
+                written = transport.write(cmd)
+                print(f"[RealDeviceManager] C002 #{i+1}: write returned {written}, cmd={cmd!r}")
+                await asyncio.sleep(0.01)
+            
+            print(f"[RealDeviceManager] Init commands sent to {conn.port}")
+            
+            # 等待设备响应
+            for check in range(30):  # 最多等 3 秒
+                await asyncio.sleep(0.1)
+                if protocol.valid_frame_count > 0:
+                    print(f"[RealDeviceManager] ✓ Got valid frames after init on {conn.port} "
+                          f"(after {(check+1)*0.1:.1f}s)")
+                    break
+                # 每 0.5s 汇报一次状态
+                if (check + 1) % 5 == 0:
+                    # 扫描 buffer 中是否有 \xa5 字节
+                    has_a5 = b'\xa5' in protocol.buffer
+                    print(f"[RealDeviceManager] Waiting... received={protocol.data_received_count}, "
+                          f"valid={protocol.valid_frame_count}, "
+                          f"buffer_len={len(protocol.buffer)}, has_0xa5_in_buffer={has_a5}")
+            
+            if protocol.valid_frame_count == 0:
+                # 最终诊断
+                print(f"[RealDeviceManager] ⚠ NO valid frames on {conn.port}")
+                print(f"[RealDeviceManager]   Total received callbacks: {protocol.data_received_count}")
+                print(f"[RealDeviceManager]   Valid frames: {protocol.valid_frame_count}")
+                print(f"[RealDeviceManager]   Total 0xa5 bytes seen: {protocol._total_a5_seen}")
+                print(f"[RealDeviceManager]   Raw first bytes (hex): {protocol._raw_first_bytes[:100].hex()}")
+                print(f"[RealDeviceManager]   Buffer remaining: {len(protocol.buffer)} bytes")
+                if protocol.buffer:
+                    print(f"[RealDeviceManager]   Buffer tail (hex): {protocol.buffer[-50:].hex()}")
             
             return True
             
@@ -566,7 +655,13 @@ class RealDeviceManager:
                         conn.connected_at = time.time()
                         conn.last_error = None
                         print(f"[RealDeviceManager] Connected after sudo askpass permission fix: {conn.port}")
-                        await self._initialize_device_async(conn)
+                        for i in range(3):
+                            transport.write(b"C005\r\n")
+                            await asyncio.sleep(0.05)
+                        for i in range(2):
+                            transport.write(b"C002\r\n")
+                            await asyncio.sleep(0.01)
+                        print(f"[RealDeviceManager] Init commands sent after permission fix on {conn.port}")
                         return True
                     except Exception as retry_e:
                         error_msg = f"{error_msg}; retry failed: {retry_e}"
@@ -610,33 +705,6 @@ class RealDeviceManager:
         except Exception as e:
             print(f"[RealDeviceManager] Error initializing device on {conn.port}: {e}")
             conn.last_error = f"Initialization error: {e}"
-    
-    async def _initialize_device_async(self, conn: DeviceConnection):
-        """异步初始化设备（从驱动脚本移植）"""
-        try:
-            if not conn.async_transport:
-                return
-            
-            print(f"[RealDeviceManager] Starting async initialization for {conn.port}...")
-            
-            # 发送初始化命令序列（从驱动脚本移植）
-            for i in range(3):
-                cmd = f"C005\r\n"
-                print(f"[RealDeviceManager] Sending C005 command #{i+1}")
-                conn.async_transport.write(cmd.encode('utf-8'))
-                await asyncio.sleep(0.05)
-            
-            for i in range(2):
-                cmd = f"C002\r\n"
-                print(f"[RealDeviceManager] Sending C002 command #{i+1}")
-                conn.async_transport.write(cmd.encode('utf-8'))
-                await asyncio.sleep(0.01)
-            
-            print(f"[RealDeviceManager] Async initialization complete for {conn.port}!")
-            
-        except Exception as e:
-            print(f"[RealDeviceManager] Error in async initialization on {conn.port}: {e}")
-            conn.last_error = f"Async initialization error: {e}"
     
     def start_acquisition(self, port: str, use_async: bool = True) -> bool:
         """开始数据采集

@@ -4,7 +4,19 @@ import time
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .graph_store import get_graph, run_graph, stop_graph, get_runtime_state, set_frozen, set_graph, validate_graph
+from .graph_store import (
+    get_graph,
+    run_graph,
+    stop_graph,
+    get_runtime_state,
+    set_frozen,
+    set_graph,
+    validate_graph,
+    persist_graph,
+    get_graph_revision,
+    get_persisted_revision,
+    apply_graph_sync,
+)
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
@@ -194,7 +206,10 @@ def replayable_files(request):
 @csrf_exempt
 def graph(request):
     if request.method == 'GET':
-        return JsonResponse(get_graph())
+        payload = dict(get_graph())
+        payload['revision'] = get_graph_revision()
+        payload['persistedRevision'] = get_persisted_revision()
+        return JsonResponse(payload)
 
     if request.method == 'POST':
         try:
@@ -211,15 +226,53 @@ def graph(request):
                     'errors': ['Cannot save graph while it is running']
                 }, status=403)
             
-            set_graph(payload)
-            broadcast_graph_state(reason='saved')
-            return JsonResponse({'ok': True})
+            result = apply_graph_sync(payload, base_revision=payload.get('baseRevision'))
+            if result.get('conflict'):
+                return JsonResponse(result, status=409)
+            broadcast_graph_state(reason='synced')
+            return JsonResponse(result)
         except json.JSONDecodeError:
             return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
         except RuntimeError as e:
             return JsonResponse({'ok': False, 'errors': [str(e)]}, status=403)
 
     return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+
+
+@csrf_exempt
+def graph_sync(request):
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+
+    try:
+        payload = json.loads(request.body or '{}')
+    except json.JSONDecodeError:
+        return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
+
+    errors = validate_graph(payload)
+    if errors:
+        return JsonResponse({'ok': False, 'errors': errors}, status=400)
+
+    try:
+        result = apply_graph_sync(payload, base_revision=payload.get('baseRevision'))
+        if result.get('conflict'):
+            return JsonResponse(result, status=409)
+        broadcast_graph_state(reason='synced')
+        return JsonResponse(result)
+    except RuntimeError as e:
+        return JsonResponse({'ok': False, 'errors': [str(e)]}, status=403)
+
+
+@csrf_exempt
+def graph_save(request):
+    if request.method != 'POST':
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+    try:
+        result = persist_graph()
+        broadcast_graph_state(reason='persisted')
+        return JsonResponse({'ok': True, **result})
+    except Exception as e:
+        return JsonResponse({'ok': False, 'errors': [str(e)]}, status=500)
 
 
 @csrf_exempt

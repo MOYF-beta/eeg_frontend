@@ -124,6 +124,9 @@ _GRAPH: GraphPayload = {
     'frozen': False,
 }
 
+_GRAPH_REVISION = 0
+_PERSISTED_REVISION = 0
+
 # 运行时状态
 _RUNTIME_STATE = {
     'running': False,
@@ -200,8 +203,9 @@ def get_graph() -> GraphPayload:
     return _GRAPH
 
 
-def set_graph(payload: GraphPayload) -> None:
-    """设置图数据并保存到文件"""
+def set_graph(payload: GraphPayload, persist: bool = False) -> None:
+    """设置图数据，persist=True 时同时落盘。"""
+    global _GRAPH_REVISION, _PERSISTED_REVISION
     # 检查计算图是否正在运行
     if _RUNTIME_STATE['running']:
         raise RuntimeError('Cannot modify graph while it is running')
@@ -209,7 +213,51 @@ def set_graph(payload: GraphPayload) -> None:
     _GRAPH['nodes'] = payload.get('nodes', [])
     _GRAPH['edges'] = payload.get('edges', [])
     _GRAPH['frozen'] = payload.get('frozen', False)
+    _GRAPH_REVISION += 1
+    if persist:
+        _save_to_file(_GRAPH)
+        _PERSISTED_REVISION = _GRAPH_REVISION
+
+
+def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None) -> Dict:
+    """应用前端实时同步，支持基于 revision 的冲突检测。"""
+    current_revision = get_graph_revision()
+    if base_revision is not None and int(base_revision) != current_revision:
+        return {
+            'ok': False,
+            'conflict': True,
+            'revision': current_revision,
+            'persistedRevision': get_persisted_revision(),
+            'graph': get_graph(),
+            'error': 'revision conflict',
+        }
+
+    set_graph(payload, persist=False)
+    return {
+        'ok': True,
+        'conflict': False,
+        'revision': get_graph_revision(),
+        'persistedRevision': get_persisted_revision(),
+    }
+
+
+def persist_graph() -> Dict:
+    """将当前内存图持久化到文件。"""
+    global _PERSISTED_REVISION
     _save_to_file(_GRAPH)
+    _PERSISTED_REVISION = _GRAPH_REVISION
+    return {
+        'revision': _GRAPH_REVISION,
+        'persistedRevision': _PERSISTED_REVISION,
+    }
+
+
+def get_graph_revision() -> int:
+    return int(_GRAPH_REVISION)
+
+
+def get_persisted_revision() -> int:
+    return int(_PERSISTED_REVISION)
 
 
 def set_frozen(value: bool) -> None:
@@ -368,3 +416,5 @@ def get_runtime_state() -> Dict:
 
 # 初始化时从文件加载数据
 _GRAPH = _load_from_file()
+_GRAPH_REVISION = 1
+_PERSISTED_REVISION = 1
