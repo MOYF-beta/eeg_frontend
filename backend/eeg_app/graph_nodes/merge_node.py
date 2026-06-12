@@ -17,7 +17,7 @@ class MergeNode(GraphNode):
         used_signals: List[Dict[str, Any]] = []
 
         sorted_items = sorted(inputs.items(), key=lambda item: item[0])
-        for idx, (_, sigs) in enumerate(sorted_items):
+        for port_name, sigs in sorted_items:
             if not sigs:
                 continue
             sig = sigs[0]
@@ -25,10 +25,17 @@ class MergeNode(GraphNode):
             if not channels:
                 continue
             names = list(sig.get('channelNames', []))
-            gain = 1.0
-            if idx < len(input_cfg) and isinstance(input_cfg[idx], dict):
+            # 从端口名 'in-<N>' 提取序号以匹配 input_cfg 配置
+            cfg_idx = 0
+            if port_name.startswith('in-'):
                 try:
-                    gain = float(input_cfg[idx].get('gain', 1.0))
+                    cfg_idx = int(port_name.split('-', 1)[1]) - 1
+                except Exception:
+                    cfg_idx = 0
+            gain = 1.0
+            if 0 <= cfg_idx < len(input_cfg) and isinstance(input_cfg[cfg_idx], dict):
+                try:
+                    gain = float(input_cfg[cfg_idx].get('gain', 1.0))
                 except Exception:
                     gain = 1.0
             out_channels.extend([v * gain for v in channels])

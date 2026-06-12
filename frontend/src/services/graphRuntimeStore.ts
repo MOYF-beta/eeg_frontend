@@ -100,12 +100,6 @@ async function pollRuntimeState() {
         console.log('[GraphRuntimeStore] Graph is running but WebSocket not connected, connecting...');
         eegWebSocket.connect();
       }
-      
-      // 如果计算图停止运行，更新WebSocket订阅
-      if (wasRunning && !newState.isRunning) {
-        console.log('[GraphRuntimeStore] Graph stopped, updating WebSocket subscription');
-        eegWebSocket.updateSubscription();
-      }
     } else {
       console.warn('[GraphRuntimeStore] Failed to get runtime state:', res);
     }

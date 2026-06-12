@@ -47,11 +47,11 @@
               </v-chip>
             </v-card-title>
             <v-card-subtitle>
-              地址: {{ device.port || device.address || 'N/A' }}
+              地址: {{ device.config?.port || 'N/A' }}
             </v-card-subtitle>
             <v-card-text class="text-body-2">
-              <div>采样率: {{ device.sampleRate }}Hz</div>
-              <div>通道数: {{ device.channels }}{{ Array.isArray(device.channels) ? '通道' : 'ch' }}</div>
+              <div>采样率: {{ device.samplingRate }}Hz</div>
+              <div>通道数: {{ device.channelCount }}ch</div>
               
               <!-- 显示绑定状态 -->
               <v-divider class="my-2" />
@@ -293,16 +293,18 @@ async function refreshDevices() {
     const apiDevices = await deviceApi.getDevices();
     
     // 转换API设备格式为前端格式
-    const convertedDevices: Device[] = apiDevices.map(apiDevice => {
+    const convertedDevices: Device[] = apiDevices.map((apiDevice: any) => {
       const device: Device = {
-        id: apiDevice.id,
-        name: apiDevice.name,
-        status: 'online', // 默认在线状态
-        sampleRate: apiDevice.sampling_rate || 1000,
-        channels: apiDevice.channel_count || 8,
-        port: apiDevice.port || apiDevice.address,
-        address: apiDevice.port || apiDevice.address,
-        type: apiDevice.type as 'simulated' | 'physical'
+        id: String(apiDevice.id || ''),
+        name: String(apiDevice.name || apiDevice.id || ''),
+        status: 'online',
+        samplingRate: Number(apiDevice.sampling_rate || 1000),
+        channelCount: Number(apiDevice.channel_count || 8),
+        type: apiDevice.type === 'wearable_eeg' ? 'real' : 'simulated',
+        config: {
+          port: apiDevice.port || (apiDevice.config && apiDevice.config.port) || '',
+          baudrate: apiDevice.baudrate || (apiDevice.config && apiDevice.config.baudrate) || 460800,
+        },
       };
       
       // 如果有配置，转换配置格式
@@ -316,18 +318,12 @@ async function refreshDevices() {
     if (convertedDevices.length > 0) {
       devices.value = convertedDevices;
       sessionStore.setDevices(convertedDevices);
-    } else {
-      // 如果没有设备，使用默认模拟设备
-      loadDefaultDevices();
     }
   } catch (error) {
     console.error('Failed to fetch devices from API:', error);
-    // 如果API失败，回退到本地存储
     const storedDevices = sessionStore.getDevices();
     if (storedDevices.length > 0) {
       devices.value = storedDevices;
-    } else {
-      loadDefaultDevices();
     }
   }
   
@@ -349,54 +345,15 @@ async function loadGraphNodes() {
   }
 }
 
-// 加载默认设备
-function loadDefaultDevices() {
-  const defaultDevices: Device[] = [
-    {
-      id: 'mock-1',
-      name: '模拟设备 1',
-      status: 'online',
-      sampleRate: 1000,
-      channels: 8,
-      port: 'COM3',
-      address: 'SIM-001',
-      type: 'simulated',
-      config: {
-        channels: Array.from({ length: 8 }, (_, index) => ({
-          index,
-          enabled: true,
-          signal: {
-            type: 'sine',
-            frequency: 10 + index * 2, // 不同频率
-            amplitude: 100,
-            phase: 0
-          },
-          noise: {
-            type: 'white',
-            amplitude: 5
-          }
-        })),
-        globalNoise: {
-          type: 'none',
-          amplitude: 0
-        }
-      }
-    },
-  ];
-  
-  devices.value = defaultDevices;
-  sessionStore.setDevices(defaultDevices);
-}
-
 // 编辑设备
 function editDevice(device: Device) {
   editingDevice.value = device;
   deviceForm.value = {
     name: device.name,
-    type: 'simulated',
-    address: device.port || device.address || '',
-    sampleRate: device.sampleRate,
-    channels: device.channels,
+    type: device.type === 'real' ? 'physical' : 'simulated',
+    address: device.config?.port || '',
+    sampleRate: device.samplingRate,
+    channels: device.channelCount,
     simulatedConfig: device.config || {
       channels: [],
       globalNoise: {

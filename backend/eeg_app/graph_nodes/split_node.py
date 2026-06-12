@@ -31,12 +31,18 @@ class SplitNode(GraphNode):
             if indices:
                 channels = [in_channels[i] for i in indices if 0 <= i < len(in_channels)]
                 names = [in_names[i] if i < len(in_names) else f'CH{i + 1}' for i in indices if 0 <= i < len(in_channels)]
+                if not channels:
+                    # 所有索引越界时跳过此端口，不产生空信号
+                    continue
             else:
                 channels = list(in_channels)
                 names = list(in_names)
 
-            if len(names) == 1 and label:
-                names = [label]
+            if label:
+                if len(channels) == 1:
+                    names = [label]
+                else:
+                    names = [f'{label}.{n}' for n in names]
             outputs[port] = make_signal(channels, names, utc_ms)
 
         return outputs

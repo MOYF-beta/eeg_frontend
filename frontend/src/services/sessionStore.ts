@@ -114,6 +114,16 @@ export interface EegSessionState {
 
 const STORAGE_KEY = 'eeg_session_state';
 
+// 运行时状态快照
+export interface RuntimeState {
+  running: boolean;
+  mode: 'live' | 'offline';
+  progress: number | null;
+  processingDelayMs: number;
+  nonRealtime: boolean;
+  warning: string | null;
+}
+
 // 默认状态
 const defaultState: EegSessionState = {
   devices: [],
@@ -134,6 +144,14 @@ const defaultState: EegSessionState = {
 class SessionStore {
   private state: EegSessionState;
   private listeners: Set<(state: EegSessionState) => void>;
+
+  // 全局轮询控制
+  private _pollTimer: number | null = null;
+  private _pollInterval = 0;
+  public runtime: RuntimeState = {
+    running: false, mode: 'live', progress: null,
+    processingDelayMs: 0, nonRealtime: false, warning: null,
+  };
 
   constructor() {
     this.state = this.loadFromStorage();
@@ -467,6 +485,84 @@ class SessionStore {
   }
 
   // ========== 工具方法 ==========
+
+  // ========== 全局轮询（单一计时器，避免多组件重复请求）==========
+
+  startGlobalPolling() {
+    if (this._pollTimer !== null) return;
+    // 首次立即拉取一次图结构，确保初始状态不为空
+    this._initialFetch();
+    this._pollTick();
+    this._pollTimer = window.setInterval(() => this._pollTick(), 2000);
+    console.log('[SessionStore] Global polling started (2s interval)');
+  }
+
+  private async _initialFetch() {
+    try {
+      const graphRes = await fetch('/api/graph/');
+      if (graphRes.ok) {
+        const graphData = await graphRes.json();
+        if (Array.isArray(graphData.nodes) && Array.isArray(graphData.edges)) {
+          this.state.graph.nodes = graphData.nodes;
+          this.state.graph.edges = graphData.edges;
+          this.state.graph.frozen = Boolean(graphData.frozen);
+          this.saveToStorage();
+          this.notify();
+        }
+      }
+    } catch (e) {
+      console.warn('[SessionStore] Initial graph fetch failed:', e);
+    }
+  }
+
+  stopGlobalPolling() {
+    if (this._pollTimer !== null) {
+      clearInterval(this._pollTimer);
+      this._pollTimer = null;
+    }
+  }
+
+  private async _pollTick() {
+    try {
+      const runRes = await fetch('/api/graph/run/');
+      if (runRes.ok) {
+        const runData = await runRes.json();
+        if (runData.ok && runData.state) {
+          const s = runData.state;
+          this.runtime = {
+            running: Boolean(s.running),
+            mode: String(s.mode || 'live') as 'live' | 'offline',
+            progress: s.progress != null ? Number(s.progress) : null,
+            processingDelayMs: Number(s.processingDelayMs || 0),
+            nonRealtime: Boolean(s.nonRealtime),
+            warning: s.warning ? String(s.warning) : null,
+          };
+          const backendFrozen = Boolean(s.frozen);
+          if (this.state.graph.frozen !== backendFrozen) {
+            this.state.graph.frozen = backendFrozen;
+            this.saveToStorage();
+          }
+          this.notify();
+        }
+      }
+
+      if (!this.state.graph.frozen) {
+        const graphRes = await fetch('/api/graph/');
+        if (graphRes.ok) {
+          const graphData = await graphRes.json();
+          if (Array.isArray(graphData.nodes) && Array.isArray(graphData.edges)) {
+            this.state.graph.nodes = graphData.nodes;
+            this.state.graph.edges = graphData.edges;
+            this.state.graph.frozen = Boolean(graphData.frozen);
+            this.saveToStorage();
+            this.notify();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[SessionStore] Poll tick failed:', e);
+    }
+  }
 
   // 清空所有状态
   clear() {

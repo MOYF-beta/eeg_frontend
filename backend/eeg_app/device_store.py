@@ -78,44 +78,41 @@ class DeviceStore:
         self._initialize_devices()
     
     def _initialize_devices(self) -> None:
-        """初始化设备：扫描真实设备并创建模拟设备"""
+        """初始化设备：扫描真实设备并自动连接。"""
         print('[DeviceStore] Initializing devices...')
-        
-        # 1. 扫描真实设备
+
+        # 扫描并自动连接真实设备
         self._scan_real_devices()
-        
-        # 2. 创建默认模拟设备
-        self._create_default_devices()
-        
+
         print(f'[DeviceStore] Initialized {len(self._devices)} devices')
     
     def _scan_real_devices(self) -> None:
-        """扫描真实设备（CH340和其他USB串口设备）"""
+        """扫描真实设备（CH340和其他USB串口设备），逐个连接以确保即插即用。"""
         try:
-            # 获取所有串口设备
+            from .real_device_manager import get_real_device_manager
             available_ports = serial.tools.list_ports.comports()
             print(f'[DeviceStore] Found {len(available_ports)} serial ports')
-            
+
             for port_info in available_ports:
                 device_name = port_info.device
-                
-                # 检查是否是USB串口设备
+
                 if not self._is_usb_serial_port(port_info):
                     continue
-                
-                # 检查是否是CH340设备
+
                 is_ch340 = self._is_ch340_port(port_info)
-                
-                # 创建设备ID（使用端口名和设备信息）
+
                 device_id = f'real-{device_name.replace("/", "-")}'
-                
-                # 创建设备配置
+
+                # 如果已经存在则跳过，避免重复添加
+                if device_id in self._devices:
+                    continue
+
                 device = DeviceConfig(
                     device_id=device_id,
-                    name=f'真实设备 {device_name}',
+                    name=f'{port_info.description or "USB 串口"} ({device_name})',
                     device_type='wearable_eeg',
-                    sampling_rate=250,  # 默认采样率
-                    channel_count=8,    # 默认通道数
+                    sampling_rate=250,
+                    channel_count=8,
                     config={
                         'port': device_name,
                         'baudrate': 460800,
@@ -125,13 +122,17 @@ class DeviceStore:
                         'hwid': port_info.hwid or '',
                         'is_ch340': is_ch340,
                         'vid': getattr(port_info, 'vid', None),
-                        'pid': getattr(port_info, 'pid', None)
-                    }
+                        'pid': getattr(port_info, 'pid', None),
+                    },
                 )
-                
+
                 self._devices[device_id] = device
                 print(f'[DeviceStore] Added real device: {device_name} (CH340: {is_ch340})')
-                
+
+                # 自动连接设备
+                manager = get_real_device_manager()
+                manager.connect_device(device_name, baudrate=460800)
+
         except Exception as e:
             print(f'[DeviceStore] Error scanning real devices: {e}')
             import traceback
@@ -190,99 +191,6 @@ class DeviceStore:
             return False
         except Exception:
             return False
-    
-    def _create_default_devices(self) -> None:
-        """创建默认模拟设备"""
-        default_devices = [
-            DeviceConfig(
-                device_id='mock-1',
-                name='模拟设备 1',
-                device_type='simulated',
-                sampling_rate=1000,
-                channel_count=8,
-                config={
-                    'channels': [
-                        {
-                            'index': 0,
-                            'wave_type': 'sine',
-                            'frequency': 10,
-                            'amplitude': 100,
-                            'alias': 'CH1',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 1,
-                            'wave_type': 'sine',
-                            'frequency': 15,
-                            'amplitude': 80,
-                            'alias': 'CH2',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 2,
-                            'wave_type': 'square',
-                            'frequency': 5,
-                            'amplitude': 120,
-                            'alias': 'CH3',
-                            'duty_cycle': 0.5,
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 3,
-                            'wave_type': 'triangle',
-                            'frequency': 8,
-                            'amplitude': 90,
-                            'alias': 'CH4',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 4,
-                            'wave_type': 'sine',
-                            'frequency': 20,
-                            'amplitude': 70,
-                            'alias': 'CH5',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 5,
-                            'wave_type': 'sine',
-                            'frequency': 25,
-                            'amplitude': 110,
-                            'alias': 'CH6',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 6,
-                            'wave_type': 'sine',
-                            'frequency': 30,
-                            'amplitude': 85,
-                            'alias': 'CH7',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        },
-                        {
-                            'index': 7,
-                            'wave_type': 'sine',
-                            'frequency': 35,
-                            'amplitude': 95,
-                            'alias': 'CH8',
-                            'noise_type': 'white',
-                            'noise_amplitude': 5
-                        }
-                    ]
-                }
-            )
-        ]
-        
-        for device in default_devices:
-            self._devices[device.id] = device
-            print(f'[DeviceStore] Added simulated device: {device.name}')
     
     def get_device(self, device_id: str) -> Optional[DeviceConfig]:
         """获取设备配置"""

@@ -56,6 +56,31 @@
         >
           清空
         </v-btn>
+
+        <v-divider vertical class="mx-1" />
+
+        <v-btn
+          size="small"
+          color="teal"
+          variant="tonal"
+          @click="quickScanDevices"
+          :disabled="!canEditGraphLocal"
+          :loading="scanLoading"
+          title="自动扫描串口设备并添加"
+        >
+          <v-icon size="small" class="mr-1">mdi-magnify-scan</v-icon>
+          一键扫描
+        </v-btn>
+
+        <v-btn
+          size="small"
+          variant="tonal"
+          @click="openDeviceManager"
+          title="管理所有设备"
+        >
+          <v-icon size="small" class="mr-1">mdi-devices</v-icon>
+          设备管理
+        </v-btn>
       </div>
     </v-toolbar>
 
@@ -91,7 +116,7 @@
           </div>
 
           <div class="palette-group">
-            <div class="group-title">数据来源</div>
+            <div class="group-title">数据回放</div>
             <div
               v-for="node in sourceNodes"
               :key="node.type"
@@ -378,6 +403,88 @@
       </v-card-text>
     </v-card>
   </v-dialog>
+
+  <!-- 设备管理弹窗 -->
+  <v-dialog v-model="deviceManagerOpen" max-width="700">
+    <v-card>
+      <v-card-title class="d-flex align-center">
+        <v-icon class="mr-2">mdi-devices</v-icon>
+        设备管理
+        <v-spacer />
+        <v-btn size="small" variant="text" @click="quickScanDevices" :loading="scanLoading" title="扫描串口并自动添加">
+          <v-icon size="small" class="mr-1">mdi-magnify-scan</v-icon>
+          一键扫描
+        </v-btn>
+        <v-btn size="small" variant="text" color="primary" @click="deviceFormDialogOpen = true" :disabled="!canEditGraphLocal">
+          <v-icon size="small" class="mr-1">mdi-plus</v-icon>
+          新建设备
+        </v-btn>
+        <v-btn size="small" variant="text" @click="refreshManagedDevices">
+          <v-icon size="small">mdi-refresh</v-icon>
+        </v-btn>
+        <v-btn icon size="small" variant="text" @click="deviceManagerOpen = false"><v-icon>mdi-close</v-icon></v-btn>
+      </v-card-title>
+      <v-divider />
+      <v-card-text class="pt-4">
+        <v-table density="compact">
+          <thead>
+            <tr>
+              <th>名称</th>
+              <th>类型</th>
+              <th>端口</th>
+              <th>采样率</th>
+              <th>通道</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="dev in managedDevices" :key="dev.id">
+              <td>{{ dev.name }}</td>
+              <td>
+                <v-chip size="x-small" :color="dev.type === 'wearable_eeg' ? 'purple' : 'blue'">
+                  {{ dev.type === 'wearable_eeg' ? '真实设备' : '模拟设备' }}
+                </v-chip>
+              </td>
+              <td class="text-caption">{{ dev.config?.port || '—' }}</td>
+              <td>{{ dev.sampling_rate }}Hz</td>
+              <td>{{ dev.channel_count }}</td>
+              <td>
+                <v-btn size="x-small" variant="text" color="error" @click="deleteManagedDevice(dev.id)" :disabled="!canEditGraphLocal">删除</v-btn>
+              </td>
+            </tr>
+            <tr v-if="managedDevices.length === 0">
+              <td colspan="6" class="text-center text-grey py-4">暂无设备，点击"新建设备"或"一键扫描"添加</td>
+            </tr>
+          </tbody>
+        </v-table>
+      </v-card-text>
+      <v-divider />
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="deviceManagerOpen = false">关闭</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
+
+  <!-- 新建设备弹窗 -->
+  <v-dialog v-model="deviceFormDialogOpen" max-width="500">
+    <v-card>
+      <v-card-title>新建设备</v-card-title>
+      <v-divider />
+      <v-card-text class="pt-4">
+        <v-text-field v-model="deviceForm.name" label="设备名称" density="compact" variant="outlined" class="mb-3" />
+        <v-select v-model="deviceForm.type" :items="['simulated', 'wearable_eeg']" label="设备类型" density="compact" variant="outlined" class="mb-3" />
+        <v-text-field v-model.number="deviceForm.sampling_rate" label="采样率 (Hz)" type="number" density="compact" variant="outlined" class="mb-3" />
+        <v-text-field v-model.number="deviceForm.channel_count" label="通道数" type="number" density="compact" variant="outlined" class="mb-3" />
+      </v-card-text>
+      <v-divider />
+      <v-card-actions>
+        <v-spacer />
+        <v-btn variant="text" @click="deviceFormDialogOpen = false">取消</v-btn>
+        <v-btn color="primary" @click="createDevice">创建</v-btn>
+      </v-card-actions>
+    </v-card>
+  </v-dialog>
 </template>
 
 <script setup lang="ts">
@@ -393,6 +500,7 @@ import {
   type GraphPayload,
 } from '../services/graph';
 import { deviceApi } from '../services/deviceApi';
+import { realDeviceApi, type SerialPort, type DeviceInfo } from '../services/realDeviceApi';
 import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
@@ -468,6 +576,7 @@ function payloadSignature(payload: GraphPayload): string {
 function syncUnsavedState() {
   if (isApplyingBackendGraph.value) return;
   if (isNodeDragging) return;
+  if (nodeEditDialogOpen.value) return;
   const current = buildPayload();
   const signature = payloadSignature(current);
   hasUnsavedChanges.value = signature !== lastPersistedSignature.value;
@@ -512,8 +621,23 @@ function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
 
 async function loadPaletteDevices() {
   try {
-    const devices = await deviceApi.getDevices();
-    paletteDevices.value = devices.map((d) => ({ id: d.id, name: d.name, status: d.status }));
+    const apiDevices = await deviceApi.getDevices();
+    paletteDevices.value = apiDevices.map((d: any) => ({ id: d.id, name: d.name, status: d.status ?? 'online' }));
+
+    // 同步填充 sessionStore，避免 NodeEditFormContent 中的设备选择器无数据
+    const converted: Array<{ id: string; name: string; status: 'online' | 'offline'; samplingRate: number; channelCount: number; type: 'simulated' | 'real'; config: any }> = apiDevices.map((apiDevice: any) => ({
+      id: String(apiDevice.id || ''),
+      name: String(apiDevice.name || apiDevice.id || ''),
+      status: (apiDevice.status === 'offline' ? 'offline' : 'online') as 'online' | 'offline',
+      samplingRate: Number(apiDevice.sampling_rate || 1000),
+      channelCount: Number(apiDevice.channel_count || 8),
+      type: (apiDevice.type === 'wearable_eeg' ? 'real' : 'simulated') as 'simulated' | 'real',
+      config: {
+        port: apiDevice.port || (apiDevice.config && apiDevice.config.port) || '',
+        baudrate: apiDevice.baudrate || (apiDevice.config && apiDevice.config.baudrate) || 460800,
+      },
+    }));
+    sessionStore.setDevices(converted as any);
   } catch (err) {
     console.warn('[GraphEditor] Failed to load palette devices:', err);
     paletteDevices.value = [];
@@ -535,10 +659,115 @@ async function createDeviceFromGraphEditor() {
     });
     createDeviceDialogOpen.value = false;
     await loadPaletteDevices();
+    await refreshManagedDevices();
   } catch (err) {
     alert('创建设备失败: ' + (err as Error).message);
   }
 }
+
+// ==================== 设备管理弹窗 ====================
+const deviceManagerOpen = ref(false);
+const deviceFormDialogOpen = ref(false);
+const managedDevices = ref<DeviceInfo[]>([]);
+const scanLoading = ref(false);
+
+const deviceForm = ref({
+  name: '新设备',
+  type: 'simulated',
+  sampling_rate: 1000,
+  channel_count: 8,
+});
+
+function openDeviceManager() {
+  deviceManagerOpen.value = true;
+  refreshManagedDevices();
+}
+
+async function refreshManagedDevices() {
+  try {
+    const apiDevices = await deviceApi.getDevices();
+    managedDevices.value = (apiDevices as any[]).map((d: any) => ({
+      id: d.id, name: d.name, type: d.type,
+      sampling_rate: d.sampling_rate ?? 1000,
+      channel_count: d.channel_count ?? 8,
+      config: d.config,
+    })) as DeviceInfo[];
+    // 同步 palette
+    await loadPaletteDevices();
+  } catch (err) {
+    console.warn('[GraphEditor] Failed to refresh managed devices:', err);
+  }
+}
+
+async function deleteManagedDevice(deviceId: string) {
+  if (!confirm('确定要删除此设备吗？')) return;
+  try {
+    await deviceApi.deleteDevice(deviceId);
+    await refreshManagedDevices();
+  } catch (err) {
+    alert('删除失败: ' + (err as Error).message);
+  }
+}
+
+async function createDevice() {
+  try {
+    await deviceApi.createDevice({
+      name: String(deviceForm.value.name || '新设备'),
+      type: deviceForm.value.type as 'simulated' | 'physical',
+      address: '',
+      sampling_rate: Number(deviceForm.value.sampling_rate || 1000),
+      channel_count: Number(deviceForm.value.channel_count || 8),
+    });
+    deviceFormDialogOpen.value = false;
+    await refreshManagedDevices();
+  } catch (err) {
+    alert('创建设备失败: ' + (err as Error).message);
+  }
+}
+
+async function quickScanDevices() {
+  if (scanLoading.value) return;
+  scanLoading.value = true;
+  try {
+    const ports = await realDeviceApi.scanPorts();
+    if (ports.length === 0) {
+      alert('未扫描到可用串口设备');
+      return;
+    }
+    let addedCount = 0;
+    for (const portInfo of ports) {
+      try {
+        // 检查是否已存在同端口设备
+        const existing = managedDevices.value.find(
+          (d) => d.config?.port === portInfo.port
+        );
+        if (existing) continue;
+
+        await deviceApi.createDevice({
+          name: `${portInfo.description || '串口设备'} (${portInfo.port})`,
+          type: 'physical',
+          address: portInfo.port,
+          sampling_rate: 250,
+          channel_count: 8,
+        });
+        addedCount++;
+      } catch (err) {
+        console.warn(`[GraphEditor] Failed to add device for port ${portInfo.port}:`, err);
+      }
+    }
+    if (addedCount > 0) {
+      await refreshManagedDevices();
+      alert(`已添加 ${addedCount} 个新设备`);
+    } else {
+      alert('所有扫描到的设备已存在');
+    }
+  } catch (err) {
+    alert('扫描失败: ' + (err as Error).message);
+  } finally {
+    scanLoading.value = false;
+  }
+}
+// ==================== 设备管理弹窗 END ====================
 
 // 从全局状态管理获取状态
 const {
@@ -996,6 +1225,7 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
   DOWNSAMPLE: { name: '降采样', color: '#6D4C41', bg: '#EFEBE9', icon: 'DS', hasInput: true, hasOutput: true },
   UPSAMPLE: { name: '升采样', color: '#455A64', bg: '#ECEFF1', icon: 'US', hasInput: true, hasOutput: true },
   SUM: { name: '求和器', color: '#7B1FA2', bg: '#F3E5F5', icon: 'SUM', hasInput: true, hasOutput: true },
+  AVERAGE: { name: '平均器', color: '#6A1B9A', bg: '#F3E5F5', icon: 'AVG', hasInput: true, hasOutput: true },
   SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
   MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
   OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
@@ -1006,7 +1236,7 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
 };
 
 const sourceNodes = [
-  { type: 'SOURCE' as GraphNodeType, name: '数据源', icon: 'SRC', color: '#1976D2', bg: '#E3F2FD' },
+  { type: 'REPLAY' as GraphNodeType, name: '文件回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD' },
 ];
 
 const processNodes = [
@@ -1014,6 +1244,7 @@ const processNodes = [
   { type: 'DOWNSAMPLE' as GraphNodeType, name: '降采样', icon: 'DS', color: '#6D4C41', bg: '#EFEBE9' },
   { type: 'UPSAMPLE' as GraphNodeType, name: '升采样', icon: 'US', color: '#455A64', bg: '#ECEFF1' },
   { type: 'SUM' as GraphNodeType, name: '求和器', icon: 'SUM', color: '#7B1FA2', bg: '#F3E5F5' },
+  { type: 'AVERAGE' as GraphNodeType, name: '平均器', icon: 'AVG', color: '#6A1B9A', bg: '#F3E5F5' },
   { type: 'SPLIT' as GraphNodeType, name: '分离器', icon: 'SPT', color: '#F9A825', bg: '#FFF8E1' },
   { type: 'MERGE' as GraphNodeType, name: '合并器', icon: 'MRG', color: '#EF6C00', bg: '#FFF3E0' },
   { type: 'CUSTOM_PYFUNC' as GraphNodeType, name: 'Python函数', icon: 'PY', color: '#5E35B1', bg: '#EDE7F6' },
@@ -1181,7 +1412,7 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
     normalized.format = String(normalized.format || 'CSV');
   }
 
-  if (type === 'SUM') {
+  if (type === 'SUM' || type === 'AVERAGE') {
     const existingInputs = Array.isArray(normalized.inputs) ? normalized.inputs as Array<Record<string, unknown>> : [];
     const legacyWeights = parseLegacyNumberList(normalized.weights);
     const inputs = existingInputs.length > 0
@@ -1265,7 +1496,7 @@ function safePortCount(raw: unknown, fallback = 1): number {
 }
 
 function getInputPortIds(type: GraphNodeType, params: Record<string, unknown>): string[] {
-  if (type === 'SUM' || type === 'MERGE') {
+  if (type === 'SUM' || type === 'AVERAGE' || type === 'MERGE') {
     const inputs = Array.isArray(params.inputs) ? params.inputs : [];
     const count = Math.max(1, inputs.length || 1);
     return Array.from({ length: count }, (_, idx) => `in-${idx + 1}`);
@@ -1448,8 +1679,8 @@ function inferNodeOutputChannels(nodeId: string, sourcePort?: string, visited = 
     return upstreamChannels;
   }
 
-  if (data.type === 'SUM') {
-    return [data.name || 'SUM'];
+  if (data.type === 'SUM' || data.type === 'AVERAGE') {
+    return [data.name || data.type];
   }
 
   if (data.type === 'MERGE') {
@@ -1573,8 +1804,8 @@ function inferEdgeChannelNames(edge: import('@antv/x6').Edge): string[] {
     return [];
   }
 
-  if (sourceData.type === 'SUM') {
-    return [sourceData.name || 'SUM'];
+  if (sourceData.type === 'SUM' || sourceData.type === 'AVERAGE') {
+    return [sourceData.name || sourceData.type];
   }
 
   return inferNodeOutputChannels(sourceNodeId, sourcePort);
@@ -1735,6 +1966,10 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const format = params['format'] || 'edf';
       return `.${format}`;
     case 'SUM': {
+      const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
+      return `${inputs.length || 0}路输入`;
+    }
+    case 'AVERAGE': {
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
       return `${inputs.length || 0}路输入`;
     }

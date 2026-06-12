@@ -217,8 +217,14 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 print(f"[WebSocket] Subscribed to nodes: {node_ids}")
 
             elif msg_type == 'unsubscribe':
-                self.subscribed_nodes.clear()
-                print("[WebSocket] Unsubscribed from all nodes")
+                node_ids = message.get('nodeIds', [])
+                if node_ids:
+                    for nid in node_ids:
+                        self.subscribed_nodes.discard(str(nid))
+                    print(f"[WebSocket] Unsubscribed from nodes: {node_ids}, remaining: {list(self.subscribed_nodes)}")
+                else:
+                    self.subscribed_nodes.clear()
+                    print("[WebSocket] Unsubscribed from all nodes")
 
             elif msg_type == 'ping':
                 await self.send(text_data=json.dumps({'type': 'pong'}))
@@ -304,7 +310,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             now = time.time()
             if (now - last_send_time) >= FRAME_INTERVAL:
                 last_send_time = now
+                t_send_start = time.perf_counter_ns()
                 fft_size = self._extract_fft_size(nodes)
+                ws_send_us = 0
 
                 for node_id, samples in list(self._sample_buffer.items()):
                     if not samples:
@@ -327,6 +335,8 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                         'nonRealtime': bool(max_processing_delay_ms > 10000),
                         'performanceWarning': '非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
                     }
+                    if len(samples) <= 2:
+                        print(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
 
                     if node_type in {'SPECTRUM', 'OSC'}:
                         bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
@@ -339,6 +349,15 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                         print(f"[WebSocket] Send error: {exc}")
                         self.running = False
                         break
+
+                ws_send_us = int((time.perf_counter_ns() - t_send_start) // 1000)
+
+                from .perf_monitor import get_perf_monitor, PipelineMetrics
+                perf = get_perf_monitor()
+                perf.record_pipeline(PipelineMetrics(
+                    ws_send_us=ws_send_us,
+                    total_pipeline_us=ws_send_us,
+                ))
 
                 self._sample_buffer.clear()
                 self._sample_channel_names.clear()

@@ -42,6 +42,7 @@ BUILTIN_NODE_TYPES = {
     'DOWNSAMPLE',
     'UPSAMPLE',
     'SUM',
+    'AVERAGE',
     'SPLIT',
     'MERGE',
     'OSC',
@@ -68,7 +69,7 @@ def _node_input_ports(node: Dict) -> List[str]:
     if node_type in _NO_INPUT_NODE_TYPES:
         return []
 
-    if node_type in {'SUM', 'MERGE'}:
+    if node_type in {'SUM', 'MERGE', 'AVERAGE'}:
         inputs = params.get('inputs')
         count = len(inputs) if isinstance(inputs, list) else 1
         count = max(1, count)
@@ -82,8 +83,6 @@ def _node_input_ports(node: Dict) -> List[str]:
     if count == 1:
         return ['in']
     return [f'in-{i + 1}' for i in range(count)]
-
-    return ['in']
 
 
 def _node_output_ports(node: Dict) -> List[str]:
@@ -107,8 +106,6 @@ def _node_output_ports(node: Dict) -> List[str]:
     if count == 1:
         return ['out']
     return [f'out-{i + 1}' for i in range(count)]
-
-    return ['out']
 
 # 默认空图
 _DEFAULT_GRAPH: GraphPayload = {

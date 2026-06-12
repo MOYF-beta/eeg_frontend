@@ -277,7 +277,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { sessionStore } from '../services/sessionStore';
-import { fetchGraph, type GraphNode } from '../services/graph';
+import type { GraphNode } from '../services/graph';
 
 const emit = defineEmits<{
   (e: 'remove'): void;
@@ -349,7 +349,7 @@ let delayHistoryTimer: number | null = null;
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
-let graphStateTimer: number | null = null;
+// ========== 图状态：通过 sessionStore 全局订阅 — 无需组件轮询。 ==========
 const channelCount = ref(8);
 const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 
@@ -1162,7 +1162,18 @@ const updateDelayHistory = (delayMs: number) => {
 };
 
 const handleDataPacket = (packet: EegDataPacket) => {
-  if (!selectedNodeId.value || String(packet.nodeId) !== String(selectedNodeId.value)) return;
+  try {
+    const packetNodeId = String(packet.nodeId);
+    const selectedId = selectedNodeId.value ? String(selectedNodeId.value) : null;
+
+    if (!selectedId || packetNodeId !== selectedId) {
+      if (selectedId && packetNodeId && packetNodeId !== 'undefined' && selectedId !== 'undefined') {
+        console.warn(`[FrequencyView] Mismatched packet nodeId="${packetNodeId}" vs selected="${selectedId}" — filtered out`);
+      }
+      return;
+    }
+
+  console.log(`[FrequencyView] Matched packet nodeId="${packetNodeId}" channels=${packet.channels?.length} spectra=${packet.spectra?.length} fftSize=${packet.fftSize}`);
 
   isGraphFrozen.value = true;
 
@@ -1182,14 +1193,13 @@ const handleDataPacket = (packet: EegDataPacket) => {
     const lagMs = Date.now() - packetTs;
     if (lagMs > MAX_DISPLAY_LAG_MS) {
       spectrogramPendingFrames.value = [];
-      return;
+      // 不在此处 return — 频谱数据仍然可用，只是时频谱需丢弃积压帧
+    } else {
+      lastDataTimestamp = packetTs;
+      lastDataWallTime = performance.now();
+      processingDelayMs.value = lagMs;
+      updateDelayHistory(lagMs);
     }
-    lastDataTimestamp = packetTs;
-    lastDataWallTime = performance.now();
-    
-    // 更新延迟数据
-    processingDelayMs.value = lagMs;
-    updateDelayHistory(lagMs);
   } else {
     lastDataTimestamp = Date.now();
     lastDataWallTime = performance.now();
@@ -1262,79 +1272,47 @@ const handleDataPacket = (packet: EegDataPacket) => {
   packetCount.value += 1;
   computeSpectra();
   requestRender();
-};
-
-const updateGraphState = async () => {
-  try {
-    const graph = await fetchGraph();
-    graphNodes.value = graph.nodes || [];
-    isGraphFrozen.value = Boolean(graph.frozen);
-
-    if (selectedNodeId.value) {
-      const node = graphNodes.value.find((n) => n.id === selectedNodeId.value);
-      const paramNames = Array.isArray(node?.params?.availableChannels)
-        ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
-        : null;
-      if (paramNames && paramNames.length > 0) {
-        ensureChannelSchema(paramNames.length, paramNames);
-      }
-    }
-
-    if (isGraphFrozen.value && selectedNodeId.value) {
-      eegWebSocket.subscribe([selectedNodeId.value]);
-    }
-  } catch (error) {
-    console.error('Failed to fetch graph state', error);
+  } catch (err) {
+    console.error('[FrequencyView] Error in handleDataPacket:', err);
   }
 };
 
-const startGraphStatePolling = () => {
-  if (graphStateTimer) return;
-  graphStateTimer = window.setInterval(() => {
-    updateGraphState().catch((error) => {
-      console.error('[FrequencyView] Failed to refresh graph state', error);
-    });
-  }, 1000);
-};
-
-const stopGraphStatePolling = () => {
-  if (graphStateTimer) {
-    clearInterval(graphStateTimer);
-    graphStateTimer = null;
-  }
-};
-
+// ========== 图状态：通过 sessionStore 全局订阅 ==========
 let unsubData: (() => void) | null = null;
 let unsubStatus: (() => void) | null = null;
+let unsubStore: (() => void) | null = null;
 
 onMounted(async () => {
   sessionStore.bindViewToNode(viewId, selectedNodeId.value);
-  // 不再直接调用connect()，由runtime统一管理WebSocket连接
   initCanvas();
-  await updateGraphState();
-  startGraphStatePolling();
+
+  // 从 sessionStore 获取初始图状态
+  const graph = sessionStore.getGraph();
+  graphNodes.value = graph.nodes || [];
+  isGraphFrozen.value = graph.frozen || false;
+
+  // 订阅 sessionStore 全局状态
+  unsubStore = sessionStore.subscribe((state) => {
+    graphNodes.value = state.graph.nodes || [];
+    isGraphFrozen.value = state.graph.frozen || false;
+  });
 
   unsubData = eegWebSocket.onData(handleDataPacket);
   unsubStatus = eegWebSocket.onStatusChange((status) => {
     wsStatus.value = status;
-    
-    // 当WebSocket连接成功时，如果计算图已冻结且选择了节点，则订阅该节点
     if (status === 'connected' && isGraphFrozen.value && selectedNodeId.value) {
-      console.log(`[FrequencyView] WebSocket connected, subscribing to node: ${selectedNodeId.value}`);
       eegWebSocket.subscribe([selectedNodeId.value]);
     }
   });
-  
-  // 如果WebSocket已经连接，立即订阅
+
   if (eegWebSocket.isConnected() && isGraphFrozen.value && selectedNodeId.value) {
-    console.log(`[FrequencyView] WebSocket already connected, subscribing to node: ${selectedNodeId.value}`);
     eegWebSocket.subscribe([selectedNodeId.value]);
   }
   wsStatus.value = eegWebSocket.getStatus();
 });
 
 onUnmounted(() => {
-  stopGraphStatePolling();
+  unsubStore?.();
   if (selectedNodeId.value) {
     eegWebSocket.unsubscribe([selectedNodeId.value]);
   }

@@ -9,11 +9,25 @@
         <router-view />
       </div>
     </v-main>
+
+    <!-- 通用底栏：性能监控 -->
+    <StatusBar />
   </v-app>
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUnmounted } from 'vue';
 import Sidebar from './components/Sidebar.vue';
+import StatusBar from './components/StatusBar.vue';
+import { sessionStore } from './services/sessionStore';
+
+onMounted(() => {
+  sessionStore.startGlobalPolling();
+});
+
+onUnmounted(() => {
+  sessionStore.stopGlobalPolling();
+});
 </script>
 
 <style>

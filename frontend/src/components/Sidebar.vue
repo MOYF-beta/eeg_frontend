@@ -239,7 +239,6 @@ const navItems = [
   { title: '可视化', path: '/visualization', icon: 'mdi-chart-line' },
   { title: '开发目录', path: '/dev', icon: 'mdi-folder-wrench' },
   { title: '串口调试', path: '/dev/serial-debug', icon: 'mdi-console-line' },
-  { title: '测试', path: '/dev/test', icon: 'mdi-test-tube' },
 ];
 
 // 计算侧边栏属性

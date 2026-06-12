@@ -358,8 +358,8 @@ function resolveNodeOutputChannels(nodeId: string, sourcePort?: string, visited 
     return resolveNodeOutputChannels(inEdge.source, inEdge.sourcePort, visited);
   }
 
-  if (node.type === 'SUM') {
-    return [node.name || 'SUM'];
+  if (node.type === 'SUM' || node.type === 'AVERAGE') {
+    return [node.name || node.type];
   }
 
   if (node.type === 'MERGE') {
@@ -883,7 +883,7 @@ const save = async () => {
   
   if (jsonError.value) return;
 
-  if (nodeType.value === 'SUM') {
+  if (nodeType.value === 'SUM' || nodeType.value === 'AVERAGE') {
     form.value.params.inputs = sumInputs.value.map((item) => ({
       label: item.label || '输入',
       weight: Number(item.weight ?? 1),

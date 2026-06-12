@@ -4,6 +4,7 @@ from . import real_device_views
 
 urlpatterns = [
     path('health/', views.health),
+    path('status/', views.status),
     path('devices/', views.devices),
     path('devices/<str:device_id>/', views.devices),
     path('graph/', views.graph),

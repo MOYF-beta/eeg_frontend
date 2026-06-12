@@ -1,37 +1,151 @@
 {
   "nodes": [
     {
-      "id": "debug-source-1",
-      "type": "SOURCE",
-      "name": "调试数据源",
-      "x": 100,
-      "y": 120,
-      "deviceId": "dev-1775885428047",
-      "params": {
-        "sourceMode": "live",
-        "sampleRate": 1000,
-        "channels": 8,
-        "deviceId": "dev-1775885428047"
-      }
-    },
-    {
-      "id": "debug-osc-1",
       "type": "OSC",
       "name": "调试示波器",
-      "x": 420,
-      "y": 120,
       "params": {
         "timeWindow": 5,
-        "mode": "scroll"
-      }
+        "yScale": 1,
+        "mode": "scroll",
+        "saveEnabled": false,
+        "filename": "",
+        "format": "CSV",
+        "selectedChannels": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "availableChannels": [
+          "CH1",
+          "CH2",
+          "CH3",
+          "CH4",
+          "CH5",
+          "CH6",
+          "CH7",
+          "CH8"
+        ]
+      },
+      "id": "debug-osc-1",
+      "x": 810,
+      "y": 460,
+      "deviceId": null
+    },
+    {
+      "type": "SOURCE",
+      "name": "数据源",
+      "params": {
+        "sampleRate": 1000,
+        "channels": 8,
+        "deviceId": "real--dev-ttyUSB0",
+        "sourceMode": "live",
+        "filePath": "",
+        "loop": false,
+        "channelNames": [
+          "CH1",
+          "CH2",
+          "CH3",
+          "CH4",
+          "CH5",
+          "CH6",
+          "CH7",
+          "CH8"
+        ]
+      },
+      "id": "node-1777203809726-227",
+      "x": -90,
+      "y": 380,
+      "deviceId": null
+    },
+    {
+      "type": "CUSTOM_CONV",
+      "name": "卷积节点",
+      "params": {
+        "kernel": [
+          0.25,
+          0.5,
+          0.25
+        ],
+        "pythonCode": "import numpy as np\n\ndef process(inputs, params):\n    x = np.asarray(inputs.get('in-1', np.array([])), dtype=float)\n    if x.ndim == 0:\n        x = np.array([float(x)])\n    kernel = np.asarray(params.get('kernel', [0.25, 0.5, 0.25]), dtype=float)\n    if kernel.size == 0:\n        kernel = np.array([1.0], dtype=float)\n    kernel = kernel / np.sum(kernel)\n    y = np.convolve(x, kernel, mode='same') if x.size > 0 else x\n    print('conv in shape:', x.shape)\n    print('conv out shape:', y.shape)\n    return {'out-1': y}\n"
+      },
+      "id": "node-1777211845138-758",
+      "x": 220,
+      "y": 380,
+      "deviceId": null
+    },
+    {
+      "type": "FILTER",
+      "name": "滤波器",
+      "params": {
+        "type": "lowpass",
+        "cutoff": 50,
+        "order": 4
+      },
+      "id": "node-1777211905622-234",
+      "x": 220,
+      "y": 490,
+      "deviceId": null
+    },
+    {
+      "type": "SUM",
+      "name": "求和器",
+      "params": {
+        "inputs": [
+          {
+            "label": "输入1",
+            "weight": 1
+          },
+          {
+            "label": "输入2",
+            "weight": 1
+          }
+        ]
+      },
+      "id": "node-1777211937471-257",
+      "x": 540,
+      "y": 460,
+      "deviceId": null
     }
   ],
   "edges": [
     {
-      "id": "debug-edge-1",
-      "source": "debug-source-1",
+      "id": "7d75fccd-13ed-4fc7-8879-7a5d94509012",
+      "source": "node-1777203809726-227",
+      "target": "node-1777211845138-758",
       "sourcePort": "out",
+      "targetPort": "in"
+    },
+    {
+      "id": "c7726412-aa1c-428d-a6c9-36e6edaa0d6f",
+      "source": "node-1777203809726-227",
+      "target": "node-1777211905622-234",
+      "sourcePort": "out",
+      "targetPort": "in"
+    },
+    {
+      "id": "dc5e4a57-9b3b-4163-afd8-2cadf918e01c",
+      "source": "node-1777211845138-758",
+      "target": "node-1777211937471-257",
+      "sourcePort": "out",
+      "targetPort": "in-1"
+    },
+    {
+      "id": "15c44185-af4f-4302-ab34-479fad4d95e9",
+      "source": "node-1777211905622-234",
+      "target": "node-1777211937471-257",
+      "sourcePort": "out",
+      "targetPort": "in-2"
+    },
+    {
+      "id": "7888a304-50c5-4278-8c53-da1db8551ee9",
+      "source": "node-1777211937471-257",
       "target": "debug-osc-1",
+      "sourcePort": "out",
       "targetPort": "in"
     }
   ],

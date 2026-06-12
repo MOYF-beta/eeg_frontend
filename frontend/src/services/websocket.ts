@@ -1,4 +1,3 @@
-import { sessionStore } from './sessionStore';
 
 // WebSocket连接状态
 type WsStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
@@ -49,7 +48,8 @@ class EegWebSocket {
   private reconnectTimer: number | null = null;
   private heartbeatTimer: number | null = null;
   private isManualDisconnect = false; // 标记是否是主动断开
-  private connectionCount = 0; // 连接计数器，用于管理多个组件的连接请求
+  private connectionCount = 0;
+  private _subRefCounts: Map<string, number> = new Map();
   private listeners: {
     onData: Set<(packet: EegDataPacket) => void>;
     onStatusChange: Set<(status: WsStatus) => void>;
@@ -104,10 +104,8 @@ class EegWebSocket {
         this.reconnectAttempts = 0;
         this.startHeartbeat();
 
-        setTimeout(() => {
-          console.log('[WebSocket] Delayed subscription after connection');
-          this.subscribeToNodes();
-        }, 500);
+        // 重连后恢复所有引用计数 >0 的节点订阅
+        this._resubscribeAll();
       };
 
       this.ws.onmessage = (event) => {
@@ -258,101 +256,71 @@ class EegWebSocket {
     }
   }
 
-  // ========== 订阅管理 ==========
+  // ========== 订阅管理（以节点为单位的引用计数）==========
 
-  private subscribeToNodes() {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('[WebSocket] Cannot subscribe: WebSocket not open');
-      return;
+  private _refAdd(nodeId: string): boolean {
+    const prev = this._subRefCounts.get(nodeId) || 0;
+    this._subRefCounts.set(nodeId, prev + 1);
+    return prev === 0;
+  }
+
+  private _refRemove(nodeId: string): boolean {
+    const prev = this._subRefCounts.get(nodeId) || 0;
+    if (prev <= 1) {
+      this._subRefCounts.delete(nodeId);
+      return true;
     }
+    this._subRefCounts.set(nodeId, prev - 1);
+    return false;
+  }
 
-    // 获取所有需要订阅的OSC节点ID
-    const mappings = sessionStore.getOutputMappings();
-    const nodeIds = Object.keys(mappings);
+  private _sendWire(action: 'subscribe' | 'unsubscribe', nodeIds: string[]) {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.ws.send(JSON.stringify({ type: action, nodeIds }));
+  }
 
-    if (nodeIds.length > 0) {
-      try {
-        this.ws.send(
-          JSON.stringify({
-            type: 'subscribe',
-            nodeIds: nodeIds,
-          })
-        );
-        console.log('[WebSocket] Subscribed to nodes:', nodeIds);
-      } catch (error) {
-        console.error('[WebSocket] Failed to send subscribe message:', error);
-      }
-    } else {
-      console.warn('[WebSocket] No nodes to subscribe to. Output mappings:', mappings);
-      
-      // 如果没有映射，尝试从计算图中获取OSC节点
-      const graph = sessionStore.getGraph();
-      const oscNodes = graph.nodes.filter((n) => n.type === 'OSC').map((n) => n.id);
-      
-      if (oscNodes.length > 0) {
-        console.log('[WebSocket] Found OSC nodes in graph, subscribing:', oscNodes);
-        try {
-          this.ws.send(
-            JSON.stringify({
-              type: 'subscribe',
-              nodeIds: oscNodes,
-            })
-          );
-          console.log('[WebSocket] Subscribed to OSC nodes from graph:', oscNodes);
-        } catch (error) {
-          console.error('[WebSocket] Failed to subscribe to OSC nodes:', error);
-        }
-      }
+  private _resubscribeAll() {
+    const ids = Array.from(this._subRefCounts.keys());
+    if (ids.length > 0) {
+      this._sendWire('subscribe', ids);
+      console.log('[WebSocket] Re-subscribed after reconnect:', ids);
     }
   }
 
+  subscribe(nodeIds: string[]) {
+    const newSubs: string[] = [];
+    for (const nid of nodeIds) {
+      if (this._refAdd(nid)) newSubs.push(nid);
+    }
+    if (newSubs.length > 0) {
+      this._sendWire('subscribe', newSubs);
+      console.log('[WebSocket] Subscribe (new refs):', newSubs);
+    }
+  }
+
+  unsubscribe(nodeIds: string[]) {
+    const removals: string[] = [];
+    for (const nid of nodeIds) {
+      if (this._refRemove(nid)) removals.push(nid);
+    }
+    if (removals.length > 0) {
+      this._sendWire('unsubscribe', removals);
+      console.log('[WebSocket] Unsubscribe (last refs):', removals);
+    }
+  }
+
+  // 保留向后兼容：断开时清空所有订阅
   private unsubscribeFromNodes() {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-
-    this.ws.send(
-      JSON.stringify({
-        type: 'unsubscribe',
-      })
-    );
-    console.log('Unsubscribed from all nodes');
+    this._subRefCounts.clear();
+    this.ws.send(JSON.stringify({ type: 'unsubscribe' }));
+    console.log('[WebSocket] Unsubscribed from all nodes');
   }
 
-  // 动态更新订阅（当计算图变化时调用）
   updateSubscription() {
     if (this.status === 'connected') {
-      this.subscribeToNodes();
+      this._resubscribeAll();
     }
-  }
-
-  // 公开方法：订阅指定节点（供可视化组件使用）
-  subscribe(nodeIds: string[]) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      console.warn('WebSocket not connected, cannot subscribe');
-      return;
-    }
-
-    this.ws.send(
-      JSON.stringify({
-        type: 'subscribe',
-        nodeIds: nodeIds,
-      })
-    );
-    console.log('Subscribed to nodes:', nodeIds);
-  }
-
-  // 公开方法：取消订阅指定节点
-  unsubscribe(nodeIds: string[]) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return;
-    }
-
-    this.ws.send(
-      JSON.stringify({
-        type: 'unsubscribe',
-        nodeIds: nodeIds,
-      })
-    );
-    console.log('Unsubscribed from nodes:', nodeIds);
   }
 
   // ========== 事件监听 ==========

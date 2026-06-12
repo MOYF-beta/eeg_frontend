@@ -192,7 +192,7 @@
     </template>
 
     <!-- 求和器专用表单 -->
-    <template v-else-if="nodeType === 'SUM'">
+    <template v-else-if="nodeType === 'SUM' || nodeType === 'AVERAGE'">
       <div class="mb-3">
         <div class="d-flex align-center justify-space-between mb-1">
           <span class="text-body-2">输入配置</span>

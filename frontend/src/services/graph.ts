@@ -5,6 +5,7 @@ export type GraphNodeType =
   | 'DOWNSAMPLE'
   | 'UPSAMPLE'
   | 'SUM'
+  | 'AVERAGE'
   | 'SPLIT'
   | 'MERGE'
   | 'OSC'

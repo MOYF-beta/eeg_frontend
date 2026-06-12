@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .average_node import AverageNode
 from .filter_node import FilterNode
 from .downsample_node import DownsampleNode
 from .loader import DEFAULT_CUSTOM_NODE_PATH, load_custom_nodes
@@ -24,6 +25,7 @@ def _register_builtin_nodes() -> None:
         DownsampleNode,
         UpsampleNode,
         SumNode,
+        AverageNode,
         SplitNode,
         MergeNode,
         OscNode,

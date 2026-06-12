@@ -12,8 +12,6 @@ class FilterNode(GraphNode):
     def compute(self, node: Dict[str, Any], inputs: NodeInputs, context: NodeExecutionContext) -> NodeOutputs:
         in_sig = pick_signal_by_port(inputs, 'in')
         channels = list(in_sig.get('channels', []))
-        if not channels:
-            return {'out': in_sig}
 
         params = node.get('params') or {}
         filter_type = str(params.get('type') or 'lowpass').lower()
@@ -27,6 +25,17 @@ class FilterNode(GraphNode):
         state = context.node_state
         low_state: List[float] = list(state.get('lowState') or [])
         high_state: List[float] = list(state.get('highState') or [])
+
+        if not channels:
+            # 输入为空时衰减滤波器状态以趋近于零，避免虚假信号延续
+            decay = max(0.0, 1.0 - alpha * 0.1)
+            for i in range(len(low_state)):
+                low_state[i] *= decay
+            for i in range(len(high_state)):
+                high_state[i] *= decay
+            state['lowState'] = low_state
+            state['highState'] = high_state
+            return {'out': in_sig}
 
         if len(low_state) < len(channels):
             low_state.extend([channels[0] if channels else 0.0] * (len(channels) - len(low_state)))

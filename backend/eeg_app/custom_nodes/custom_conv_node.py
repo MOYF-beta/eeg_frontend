@@ -48,6 +48,4 @@ class ConvolutionNode(GraphNode):
         weights = k[:used].reshape(-1, 1)
         filtered = np.sum(window[-used:, :] * weights, axis=0)
 
-        print(f'[ConvolutionNode] in={channels.shape}, win={window.shape}, out={filtered.shape}, kernel={kernel.shape}')
-
         return {'out': make_signal(filtered.tolist(), channel_names, utc_ms, sample_rate=sample_rate)}

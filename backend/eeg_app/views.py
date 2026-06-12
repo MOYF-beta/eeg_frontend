@@ -22,10 +22,26 @@ from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
 from .device_store import get_all_devices, create_device, update_device, delete_device, get_device_config
 from .graph_sync import broadcast_graph_state
+from .perf_monitor import get_perf_monitor
 
 
 def health(request):
     return JsonResponse({'status': 'ok'})
+
+
+def status(request):
+    """返回系统性能指标"""
+    monitor = get_perf_monitor()
+    data = {'ok': True, **monitor.snapshot()}
+    # 附加计算图运行时状态
+    runtime = get_runtime_state()
+    data['runtime'] = {
+        'running': runtime.get('running', False),
+        'mode': runtime.get('mode', 'live'),
+        'frozen': runtime.get('frozen', False),
+        'processingDelayMs': runtime.get('processingDelayMs', 0),
+    }
+    return JsonResponse(data)
 
 
 @csrf_exempt

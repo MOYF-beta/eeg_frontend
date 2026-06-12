@@ -117,7 +117,13 @@ class GraphWorker:
 
         if len(order) < len(indegree):
             unresolved = [nid for nid in indegree if nid not in order]
-            order.extend(sorted(unresolved))
+            print(
+                f'[GraphWorker] Cycle detected in graph component! '
+                f'Unresolved node ids: {sorted(unresolved)}. '
+                f'Stopping worker to prevent zero-value injection.'
+            )
+            self.stop_event.set()
+            return []
         return order
 
     def start(self) -> None:
@@ -246,16 +252,22 @@ class GraphWorker:
         if preferred_port in outputs:
             return outputs[preferred_port]
         if outputs:
-            return next(iter(outputs.values()))
+            print(
+                f'[GraphWorker] Port "{preferred_port}" not found in outputs, '
+                f'available ports: {sorted(outputs.keys())}. '
+                'Returning empty signal to prevent cross-channel data corruption.'
+            )
         return {'channels': [], 'channelNames': [], 'utcFirstFrameMs': None}
 
     def _run(self) -> None:
         from .data_recorder import write_sample
+        from .perf_monitor import get_perf_monitor, PipelineMetrics
 
         dt = 1.0 / max(1, self.sample_rate)
         max_samples_per_loop = max(1, int(self.sample_rate * 0.2))
         last_sample_time = time.perf_counter()
         sample_accumulator = 0.0
+        perf = get_perf_monitor()
 
         while not self.stop_event.is_set():
             now = time.perf_counter()
@@ -269,10 +281,15 @@ class GraphWorker:
                 continue
 
             if samples_to_generate > max_samples_per_loop:
+                sample_accumulator -= float(max_samples_per_loop)
                 samples_to_generate = max_samples_per_loop
-                sample_accumulator = 0.0
             else:
                 sample_accumulator -= samples_to_generate
+
+            loop_start = time.perf_counter_ns()
+            source_gen_total_ns = 0
+            node_compute_total_ns = 0
+            event_samples = 0
 
             for _ in range(samples_to_generate):
                 self.generated_sample_count += 1
@@ -288,10 +305,12 @@ class GraphWorker:
                     node_type = str(node.get('type') or '').upper()
                     node_state = self.node_states[node_id]
 
+                    t0 = time.perf_counter_ns()
                     if node_type in {'SOURCE', 'REPLAY'}:
                         generated_channels, generated_utc = self._resolve_source_signal(node_id, node_type)
                         node_state['generatedChannels'] = generated_channels
                         node_state['generatedUtcMs'] = generated_utc
+                    source_gen_total_ns += time.perf_counter_ns() - t0
 
                     inputs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
                     for edge in self.incoming_by_target.get(node_id, []):
@@ -303,6 +322,7 @@ class GraphWorker:
                         src_sig = self._pick_source_output(node_outputs[src], src_port)
                         inputs[tgt_port].append(src_sig)
 
+                    t1 = time.perf_counter_ns()
                     node_cls = get_node_class(node_type) or get_node_class('PASSTHROUGH')
                     processor = node_cls()
                     context = NodeExecutionContext(
@@ -316,6 +336,7 @@ class GraphWorker:
                     except Exception as exc:
                         print(f'[GraphWorker] Node compute failed: {node_id}({node_type}) -> {exc}')
                         node_outputs[node_id] = {}
+                    node_compute_total_ns += time.perf_counter_ns() - t1
 
                 # SAVE 写入
                 for save_node_id in self.spec.save_node_ids:
@@ -358,8 +379,21 @@ class GraphWorker:
                             'sampleRate': self.sample_rate,
                             'utcFirstFrameMs': int(utc_ms),
                             'processingDelayMs': processing_delay_ms,
+                            'pipelineSourceGenUs': int(source_gen_total_ns // 1000),
+                            'pipelineNodeComputeUs': int(node_compute_total_ns // 1000),
                         }
                     )
+                    event_samples += 1
+
+            loop_total_us = int((time.perf_counter_ns() - loop_start) // 1000)
+            perf.record_pipeline(PipelineMetrics(
+                source_gen_us=int(source_gen_total_ns // 1000),
+                node_compute_us=int(node_compute_total_ns // 1000),
+                event_put_us=loop_total_us,
+                total_pipeline_us=loop_total_us,
+                samples_per_second=float(self.sample_rate),
+            ))
+            perf.add_samples(event_samples)
 
             time.sleep(min(0.001, dt / 2))
 

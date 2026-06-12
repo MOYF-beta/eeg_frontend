@@ -362,7 +362,7 @@ const isGraphFrozen = ref(false);
 const packetCount = ref(0);
 const processingDelayMs = ref(0);
 const isNonRealtime = ref(false);
-let graphStateTimer: number | null = null;
+// ========== 图状态：通过 sessionStore 全局订阅 — 无需组件轮询。 ==========
 
 // 延迟历史数据
 const delayHistory = ref<Array<{timestamp: number, delay: number}>>([]); // 存储最近1秒的延迟数据
@@ -495,8 +495,9 @@ const ensureChannelSchema = (count: number, names?: string[]) => {
     return names?.[i] || channelNames.value[i] || `CH${i + 1}`;
   });
 
-  if (channelCount.value === normalizedCount) {
-    channelNames.value = normalizedNames;
+  const namesChanged = normalizedNames.some((name, i) => name !== channelNames.value[i]);
+
+  if (channelCount.value === normalizedCount && !namesChanged) {
     return;
   }
 
@@ -1045,11 +1046,18 @@ const updateDelayHistory = (delayMs: number) => {
 };
 
 const handleDataPacket = (packet: EegDataPacket) => {
-  // 宽松匹配：支持字符串和数字类型的 nodeId
   const packetNodeId = String(packet.nodeId);
   const selectedId = selectedNodeId.value ? String(selectedNodeId.value) : null;
-  
-  if (!selectedId || packetNodeId !== selectedId) return;
+
+  if (!selectedId || packetNodeId !== selectedId) {
+    // 仅在 ID 不匹配且两个 ID 都非空时警告，帮助诊断跳变问题
+    if (selectedId && packetNodeId && packetNodeId !== 'undefined' && selectedId !== 'undefined') {
+      console.warn(`[Oscilloscope] Mismatched packet nodeId="${packetNodeId}" vs selected="${selectedId}" — filtered out`);
+    }
+    return;
+  }
+
+  console.log(`[Oscilloscope] Matched packet nodeId="${packetNodeId}" channels=${packet.channels?.length} names=${JSON.stringify(packet.channelNames?.slice(0, 3))}`);
 
   isGraphFrozen.value = true;
 
@@ -1179,50 +1187,10 @@ const requestRenderFrame = () => {
   });
 };
 
-// 更新计算图状态
-const updateGraphState = async () => {
-  try {
-    const graph = await fetchGraph();
-    graphNodes.value = graph.nodes || [];
-    isGraphFrozen.value = graph.frozen || false;
-
-    if (selectedNodeId.value) {
-      const node = graphNodes.value.find((n) => n.id === selectedNodeId.value);
-      const paramNames = Array.isArray(node?.params?.availableChannels)
-        ? (node?.params?.availableChannels as unknown[]).map((name, idx) => String(name || `CH${idx + 1}`))
-        : null;
-      if (paramNames && paramNames.length > 0) {
-        ensureChannelSchema(paramNames.length, paramNames);
-      }
-    }
-
-    if (isGraphFrozen.value && selectedNodeId.value) {
-      subscribeToNode(selectedNodeId.value);
-    }
-  } catch (e) {
-    console.error('Failed to fetch graph:', e);
-  }
-};
-
-const startGraphStatePolling = () => {
-  if (graphStateTimer) return;
-  graphStateTimer = window.setInterval(() => {
-    updateGraphState().catch((e) => {
-      console.error('[Oscilloscope] Failed to refresh graph state:', e);
-    });
-  }, 1000);
-};
-
-const stopGraphStatePolling = () => {
-  if (graphStateTimer) {
-    clearInterval(graphStateTimer);
-    graphStateTimer = null;
-  }
-};
-
 // 清理函数
 let unsubConnected: (() => void) | null = null;
 let unsubData: (() => void) | null = null;
+let unsubStore: (() => void) | null = null;
 
 console.log('[Oscilloscope] Component code loaded - v5 scan sweep mode');
 
@@ -1232,9 +1200,12 @@ onMounted(async () => {
     createSamplesBuffer(DEFAULT_WINDOW_SEC * currentSampleRate.value);
     initCanvas();
 
-    await updateGraphState();
-    startGraphStatePolling();
-    // restore any previously bound node for this view
+    // 从 sessionStore 获取初始图状态
+    const graph = sessionStore.getGraph();
+    graphNodes.value = graph.nodes || [];
+    isGraphFrozen.value = graph.frozen || false;
+
+    // 恢复绑定的节点
     try {
       const bound = sessionStore.getViewBoundNode(viewId);
       if (bound) {
@@ -1243,6 +1214,12 @@ onMounted(async () => {
     } catch (e) {
       console.warn('[Oscilloscope] Failed to restore bound node:', e);
     }
+
+    // 订阅 sessionStore 全局状态，替代独立的 graphState 轮询
+    unsubStore = sessionStore.subscribe((state) => {
+      graphNodes.value = state.graph.nodes || [];
+      isGraphFrozen.value = state.graph.frozen || false;
+    });
 
     unsubConnected = eegWebSocket.onStatusChange((status) => {
       if (status === 'connected') {
@@ -1270,7 +1247,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
-  stopGraphStatePolling();
+  unsubStore?.();
   resizeObserver?.disconnect();
   resizeObserver = null;
   if (selectedNodeId.value) {
