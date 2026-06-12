@@ -61,19 +61,6 @@
 
         <v-btn
           size="small"
-          color="teal"
-          variant="tonal"
-          @click="quickScanDevices"
-          :disabled="!canEditGraphLocal"
-          :loading="scanLoading"
-          title="自动扫描串口设备并添加"
-        >
-          <v-icon size="small" class="mr-1">mdi-magnify-scan</v-icon>
-          一键扫描
-        </v-btn>
-
-        <v-btn
-          size="small"
           variant="tonal"
           @click="openDeviceManager"
           title="管理所有设备"
@@ -388,10 +375,6 @@
         <v-icon class="mr-2">mdi-devices</v-icon>
         设备管理
         <v-spacer />
-        <v-btn size="small" variant="text" @click="quickScanDevices" :loading="scanLoading" title="扫描串口并自动添加">
-          <v-icon size="small" class="mr-1">mdi-magnify-scan</v-icon>
-          一键扫描
-        </v-btn>
         <v-btn size="small" variant="text" color="primary" @click="deviceFormDialogOpen = true" :disabled="!canEditGraphLocal">
           <v-icon size="small" class="mr-1">mdi-plus</v-icon>
           新建设备
@@ -477,7 +460,7 @@ import {
   type GraphPayload,
 } from '../services/graph';
 import { deviceApi } from '../services/deviceApi';
-import { realDeviceApi, type SerialPort, type DeviceInfo } from '../services/realDeviceApi';
+import { realDeviceApi, type DeviceInfo } from '../services/realDeviceApi';
 import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
@@ -645,7 +628,6 @@ async function createDeviceFromGraphEditor() {
 const deviceManagerOpen = ref(false);
 const deviceFormDialogOpen = ref(false);
 const managedDevices = ref<DeviceInfo[]>([]);
-const scanLoading = ref(false);
 
 const deviceForm = ref({
   name: '新设备',
@@ -701,49 +683,67 @@ async function createDevice() {
   }
 }
 
-async function quickScanDevices() {
-  if (scanLoading.value) return;
-  scanLoading.value = true;
-  try {
-    const ports = await realDeviceApi.scanPorts();
-    if (ports.length === 0) {
-      alert('未扫描到可用串口设备');
-      return;
-    }
-    let addedCount = 0;
-    for (const portInfo of ports) {
-      try {
-        // 检查是否已存在同端口设备
-        const existing = managedDevices.value.find(
-          (d) => d.config?.port === portInfo.port
-        );
-        if (existing) continue;
+// ==================== 自动设备扫描与连接（即插即用）====================
+let autoScanTimer: number | null = null;
 
+async function autoScanAndConnectDevices() {
+  try {
+    // 扫描可用端口
+    const ports = await realDeviceApi.scanPorts();
+    if (ports.length === 0) return;
+
+    // 获取现有设备列表
+    const existingDevices = await deviceApi.getDevices();
+    const existingPorts = new Set(
+      (existingDevices as any[])
+        .map((d: any) => d.config?.port)
+        .filter(Boolean)
+    );
+
+    for (const portInfo of ports) {
+      const port = portInfo.port;
+
+      // 如果设备记录不存在，先创建设备记录
+      if (!existingPorts.has(port)) {
         await deviceApi.createDevice({
-          name: `${portInfo.description || '串口设备'} (${portInfo.port})`,
+          name: `${portInfo.description || '串口设备'} (${port})`,
           type: 'physical',
-          address: portInfo.port,
+          address: port,
           sampling_rate: 250,
           channel_count: 8,
         });
-        addedCount++;
-      } catch (err) {
-        console.warn(`[GraphEditor] Failed to add device for port ${portInfo.port}:`, err);
+      }
+
+      // 尝试连接（后端会幂等处理）
+      try {
+        await realDeviceApi.connectDevice(port);
+      } catch (e) {
+        // 连接失败也继续
       }
     }
-    if (addedCount > 0) {
-      await refreshManagedDevices();
-      alert(`已添加 ${addedCount} 个新设备`);
-    } else {
-      alert('所有扫描到的设备已存在');
-    }
+
+    // 同步 palette 设备列表
+    await loadPaletteDevices();
   } catch (err) {
-    alert('扫描失败: ' + (err as Error).message);
-  } finally {
-    scanLoading.value = false;
+    console.warn('[GraphEditor] Auto-scan failed:', err);
   }
 }
-// ==================== 设备管理弹窗 END ====================
+
+function startAutoScan() {
+  stopAutoScan();
+  // 立即执行一次
+  autoScanAndConnectDevices();
+  // 每 15 秒扫描一次
+  autoScanTimer = window.setInterval(autoScanAndConnectDevices, 15000);
+}
+
+function stopAutoScan() {
+  if (autoScanTimer !== null) {
+    clearInterval(autoScanTimer);
+    autoScanTimer = null;
+  }
+}
+// ==================== 自动设备扫描 END ====================
 
 // 从全局状态管理获取状态
 const {
@@ -758,6 +758,20 @@ const {
   canRunGraph,
   statusDescription
 } = graphRuntimeStore;
+
+// 监听冻结状态变化，启动/停止自动扫描
+watch(frozen, (isFrozen) => {
+  if (isFrozen) {
+    stopAutoScan();
+  } else {
+    startAutoScan();
+  }
+}, { immediate: true });
+
+// 组件卸载时清除自动扫描定时器
+onUnmounted(() => {
+  stopAutoScan();
+});
 
 const setRuntimeState = (patch: Record<string, unknown>) => {
   graphRuntimeStore.updateState(patch as any);

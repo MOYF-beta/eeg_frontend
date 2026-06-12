@@ -12,8 +12,8 @@
           @click="scanPorts"
           :loading="realDeviceApi.isLoading.value"
         >
-          <v-icon left>mdi-magnify</v-icon>
-          扫描串口
+          <v-icon left>mdi-magnify-scan</v-icon>
+          一键扫描
         </v-btn>
         <v-btn 
           color="secondary" 
