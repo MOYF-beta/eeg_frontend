@@ -73,11 +73,52 @@
 
 <script setup lang="ts">
 import ViewContainer from '../components/ViewContainer.vue';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import Oscilloscope from '../components/Oscilloscope.vue';
 import FrequencyView from '../components/FrequencyView.vue';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
+
+// ========== localStorage 持久化 ==========
+const STORAGE_KEY = 'viz_layout_settings';
+
+interface VizLayout {
+  gridColumns: number;
+  oscilloscopes: ViewerItem[];
+  spectrums: ViewerItem[];
+}
+
+const loadLayout = (): VizLayout | null => {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (data && typeof data.gridColumns === 'number' && Array.isArray(data.oscilloscopes) && Array.isArray(data.spectrums)) {
+      return data as VizLayout;
+    }
+  } catch (e) {
+    console.warn('[VisualizationView] Failed to load layout:', e);
+  }
+  return null;
+};
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+const saveLayout = () => {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const data: VizLayout = {
+        gridColumns: gridColumns.value,
+        oscilloscopes: oscilloscopes.value.map(o => ({ id: o.id, initialNodeId: o.initialNodeId })),
+        spectrums: spectrums.value.map(s => ({ id: s.id, initialNodeId: s.initialNodeId })),
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+    } catch (e) {
+      console.warn('[VisualizationView] Failed to save layout:', e);
+    }
+    saveTimer = null;
+  }, 300);
+};
 
 // 计算图节点
 const graphNodes = ref<GraphNode[]>([]);
@@ -158,6 +199,15 @@ const loadGraph = async () => {
 onMounted(() => {
   loadGraph();
   
+  // 恢复保存的布局
+  const savedLayout = loadLayout();
+  if (savedLayout && (savedLayout.oscilloscopes.length > 0 || savedLayout.spectrums.length > 0)) {
+    gridColumns.value = savedLayout.gridColumns;
+    oscilloscopes.value = savedLayout.oscilloscopes;
+    spectrums.value = savedLayout.spectrums;
+    return;
+  }
+
   // 默认添加一个示波器和一个频谱（如果有节点）
   setTimeout(() => {
     if (hasOscNodes.value && oscilloscopes.value.length === 0) {
@@ -168,6 +218,11 @@ onMounted(() => {
     }
   }, 500);
 });
+
+// 监听布局变化自动保存
+watch(gridColumns, () => saveLayout());
+watch(oscilloscopes, () => saveLayout(), { deep: true });
+watch(spectrums, () => saveLayout(), { deep: true });
 </script>
 
 <style scoped>

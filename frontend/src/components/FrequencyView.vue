@@ -592,6 +592,7 @@ const onNodeSelected = (nodeId: string | null) => {
   }
 
   resetData();
+  loadFreqSettings();
   if (isGraphFrozen.value) {
     eegWebSocket.subscribe([nodeId]);
   }
@@ -1277,12 +1278,116 @@ const handleDataPacket = (packet: EegDataPacket) => {
   }
 };
 
+// ========== localStorage 持久化 ==========
+const FREQ_STORAGE_PREFIX = 'freq_settings_';
+
+interface FreqSettings {
+  fftWindowSec: number;
+  freqRange: [number, number];
+  selectedChannels: number[];
+  averageEnabled: boolean;
+  displayMode: 'spectrum' | 'spectrogram';
+}
+
+let _isLoadingFreqSettings = false;
+
+const getFreqStorageKey = () => {
+  const nodeId = selectedNodeId.value;
+  return nodeId ? `${FREQ_STORAGE_PREFIX}${nodeId}` : `${FREQ_STORAGE_PREFIX}global`;
+};
+
+const loadFreqSettings = () => {
+  try {
+    _isLoadingFreqSettings = true;
+    let key = getFreqStorageKey();
+    let raw = localStorage.getItem(key);
+    if (!raw && selectedNodeId.value) {
+      raw = localStorage.getItem(`${FREQ_STORAGE_PREFIX}global`);
+    }
+    if (!raw) { _isLoadingFreqSettings = false; return; }
+    const saved: Partial<FreqSettings> = JSON.parse(raw);
+    if (typeof saved.fftWindowSec === 'number') {
+      fftWindowSec.value = saved.fftWindowSec;
+    }
+    if (Array.isArray(saved.freqRange) && saved.freqRange.length === 2) {
+      freqRange.value = [saved.freqRange[0], saved.freqRange[1]];
+    }
+    if (Array.isArray(saved.selectedChannels)) {
+      selectedChannels.value = saved.selectedChannels;
+    }
+    if (typeof saved.averageEnabled === 'boolean') {
+      averageEnabled.value = saved.averageEnabled;
+    }
+    if (saved.displayMode === 'spectrum' || saved.displayMode === 'spectrogram') {
+      displayMode.value = saved.displayMode;
+    }
+    // 等待所有 watcher 同步执行完毕后再允许保存
+    Promise.resolve().then(() => {
+      _isLoadingFreqSettings = false;
+    });
+  } catch (e) {
+    _isLoadingFreqSettings = false;
+    console.warn('[FrequencyView] Failed to load settings:', e);
+  }
+};
+
+let freqSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const saveFreqSettings = () => {
+  if (_isLoadingFreqSettings) return;
+  if (freqSaveTimer) clearTimeout(freqSaveTimer);
+  freqSaveTimer = setTimeout(() => {
+    try {
+      const settings: FreqSettings = {
+        fftWindowSec: fftWindowSec.value,
+        freqRange: [...freqRange.value],
+        selectedChannels: [...selectedChannels.value],
+        averageEnabled: averageEnabled.value,
+        displayMode: displayMode.value,
+      };
+      localStorage.setItem(getFreqStorageKey(), JSON.stringify(settings));
+      if (selectedNodeId.value) {
+        localStorage.setItem(`${FREQ_STORAGE_PREFIX}global`, JSON.stringify(settings));
+      }
+    } catch (e) {
+      console.warn('[FrequencyView] Failed to save settings:', e);
+    }
+    freqSaveTimer = null;
+  }, 300);
+};
+
+// 页面关闭前强制保存
+const onBeforeUnload = () => {
+  if (freqSaveTimer) {
+    clearTimeout(freqSaveTimer);
+    freqSaveTimer = null;
+  }
+  try {
+    const settings: FreqSettings = {
+      fftWindowSec: fftWindowSec.value,
+      freqRange: [...freqRange.value],
+      selectedChannels: [...selectedChannels.value],
+      averageEnabled: averageEnabled.value,
+      displayMode: displayMode.value,
+    };
+    localStorage.setItem(getFreqStorageKey(), JSON.stringify(settings));
+    if (selectedNodeId.value) {
+      localStorage.setItem(`${FREQ_STORAGE_PREFIX}global`, JSON.stringify(settings));
+    }
+  } catch {}
+};
+
 // ========== 图状态：通过 sessionStore 全局订阅 ==========
 let unsubData: (() => void) | null = null;
 let unsubStatus: (() => void) | null = null;
 let unsubStore: (() => void) | null = null;
 
 onMounted(async () => {
+  // 从 localStorage 恢复设置
+  loadFreqSettings();
+
+  // 页面关闭前强制保存
+  window.addEventListener('beforeunload', onBeforeUnload);
+
   sessionStore.bindViewToNode(viewId, selectedNodeId.value);
   initCanvas();
 
@@ -1312,6 +1417,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  window.removeEventListener('beforeunload', onBeforeUnload);
   unsubStore?.();
   if (selectedNodeId.value) {
     eegWebSocket.unsubscribe([selectedNodeId.value]);
@@ -1337,12 +1443,14 @@ watch(selectedChannels, (channels) => {
     selectedChannels.value = normalized;
     return;
   }
+  saveFreqSettings();
   computeSpectra();
   drawGrid();
   requestRender();
 }, { deep: true });
 
 watch(averageEnabled, () => {
+  saveFreqSettings();
   computeSpectra();
   drawGrid();
   requestRender();
@@ -1353,12 +1461,14 @@ watch([sampleRate, fftWindowSec], () => {
   if (freqRange.value[1] > maxDisplayFreq.value) {
     freqRange.value = [0, maxDisplayFreq.value];
   }
+  saveFreqSettings();
   computeSpectra();
   drawGrid();
   requestRender();
 });
 
 watch(freqRange, () => {
+  saveFreqSettings();
   drawGrid();
   requestRender();
 }, { deep: true });
@@ -1385,6 +1495,7 @@ watch(displayMode, () => {
   } else if (spectrumCtx) {
     spectrumCtx.clearRect(0, 0, canvasSize.value.width, canvasSize.value.height);
   }
+  saveFreqSettings();
   drawGrid();
   requestRender();
 });

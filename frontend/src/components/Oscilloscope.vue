@@ -1194,10 +1194,95 @@ let unsubStore: (() => void) | null = null;
 
 console.log('[Oscilloscope] Component code loaded - v5 scan sweep mode');
 
+// ========== localStorage 持久化 ==========
+const STORAGE_PREFIX = 'osc_settings_';
+
+interface OscSettings {
+  timeWindowSec: number;
+  centerEnabled: boolean;
+  autoGainEnabled: boolean;
+  sidebarCollapsed: boolean;
+  gainFineByCh: number[];
+  gainExpByCh: number[];
+}
+
+const getStorageKey = () => {
+  // 使用选中节点ID作为存储键，如果没有则使用全局键
+  const nodeId = selectedNodeId.value;
+  return nodeId ? `${STORAGE_PREFIX}${nodeId}` : `${STORAGE_PREFIX}global`;
+};
+
+const loadSettings = () => {
+  try {
+    // 先尝试加载节点专用设置
+    let key = getStorageKey();
+    let raw = localStorage.getItem(key);
+    // 如果节点专用设置不存在，尝试加载全局默认设置
+    if (!raw && selectedNodeId.value) {
+      raw = localStorage.getItem(`${STORAGE_PREFIX}global`);
+    }
+    if (!raw) return;
+    const saved: Partial<OscSettings> = JSON.parse(raw);
+    if (typeof saved.timeWindowSec === 'number') {
+      timeWindowSec.value = saved.timeWindowSec;
+    }
+    if (typeof saved.centerEnabled === 'boolean') {
+      centerEnabled.value = saved.centerEnabled;
+    }
+    if (typeof saved.autoGainEnabled === 'boolean') {
+      autoGainEnabled.value = saved.autoGainEnabled;
+    }
+    if (typeof saved.sidebarCollapsed === 'boolean') {
+      sidebarCollapsed.value = saved.sidebarCollapsed;
+    }
+    if (Array.isArray(saved.gainFineByCh)) {
+      for (let i = 0; i < Math.min(saved.gainFineByCh.length, gainFineByCh.value.length); i++) {
+        gainFineByCh.value[i] = saved.gainFineByCh[i];
+      }
+    }
+    if (Array.isArray(saved.gainExpByCh)) {
+      for (let i = 0; i < Math.min(saved.gainExpByCh.length, gainExpByCh.value.length); i++) {
+        gainExpByCh.value[i] = saved.gainExpByCh[i];
+      }
+    }
+  } catch (e) {
+    console.warn('[Oscilloscope] Failed to load settings:', e);
+  }
+};
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+const saveSettings = () => {
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    try {
+      const settings: OscSettings = {
+        timeWindowSec: timeWindowSec.value,
+        centerEnabled: centerEnabled.value,
+        autoGainEnabled: autoGainEnabled.value,
+        sidebarCollapsed: sidebarCollapsed.value,
+        gainFineByCh: [...gainFineByCh.value],
+        gainExpByCh: [...gainExpByCh.value],
+      };
+      // 同时保存到节点专用键和全局键
+      localStorage.setItem(getStorageKey(), JSON.stringify(settings));
+      // 如果当前有关联节点，也更新全局设置作为后续新节点的默认值
+      if (selectedNodeId.value) {
+        localStorage.setItem(`${STORAGE_PREFIX}global`, JSON.stringify(settings));
+      }
+    } catch (e) {
+      console.warn('[Oscilloscope] Failed to save settings:', e);
+    }
+    saveTimer = null;
+  }, 300);
+};
+
 // 生命周期
 onMounted(async () => {
   try {
-    createSamplesBuffer(DEFAULT_WINDOW_SEC * currentSampleRate.value);
+    // 从 localStorage 恢复设置（在初始化之前）
+    loadSettings();
+
+    createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
     initCanvas();
 
     // 从 sessionStore 获取初始图状态
@@ -1265,13 +1350,18 @@ watch(selectedNodeId, (newId, oldId) => {
   if (newId && isGraphFrozen.value) {
     subscribeToNode(newId);
   }
-  // 切换节点时清空数据
+  // 切换节点时清空数据并尝试加载新节点的设置
   resetAllData();
+  if (newId) {
+    loadSettings();
+    createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
+  }
 });
 
 // 监听时间窗口变化
 watch(timeWindowSec, () => {
   normalizeTimeWindow();
+  saveSettings();
   createSamplesBuffer(timeWindowSec.value * currentSampleRate.value);
   // 窗口大小改变时重置扫描
   scanPosition.value = 0;
@@ -1288,12 +1378,14 @@ watch(timeWindowSec, () => {
 watch(gainFineByCh, () => {
   if (autoGainEnabled.value || isAutoGainSync) return;
   gainFineByCh.value.forEach((_, ch) => normalizeGainFine(ch));
+  saveSettings();
   redrawAllSamples();
 }, { deep: true });
 
 watch(gainExpByCh, () => {
   if (autoGainEnabled.value || isAutoGainSync) return;
   gainExpByCh.value.forEach((_, ch) => normalizeGainExp(ch));
+  saveSettings();
   redrawAllSamples();
 }, { deep: true });
 
@@ -1308,6 +1400,7 @@ watch(centerEnabled, () => {
   if (!centerEnabled.value && autoGainEnabled.value) {
     autoGainEnabled.value = false;
   }
+  saveSettings();
   redrawAllSamples();
 });
 
@@ -1315,10 +1408,12 @@ watch(autoGainEnabled, () => {
   if (autoGainEnabled.value) {
     centerEnabled.value = true;
   }
+  saveSettings();
   redrawAllSamples();
 });
 
 watch(sidebarCollapsed, () => {
+  saveSettings();
   updatePlotMetrics();
   drawGrid();
   redrawAllSamples();

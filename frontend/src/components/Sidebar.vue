@@ -7,29 +7,6 @@
     data-testid="sidebar-drawer"
     class="sidebar"
   >
-    <!-- 侧边栏头部 -->
-    <v-list-item
-      :title="rail ? '' : 'EEG 脑电系统'"
-      class="sidebar-header"
-      @click="toggleRail"
-    >
-      <template v-slot:prepend>
-        <v-icon :icon="rail ? 'mdi-menu' : 'mdi-chevron-left'" />
-      </template>
-      <template v-slot:append v-if="!rail">
-        <v-btn
-          icon
-          variant="text"
-          size="small"
-          @click.stop="toggleRail"
-        >
-          <v-icon>mdi-chevron-left</v-icon>
-        </v-btn>
-      </template>
-    </v-list-item>
-
-    <v-divider></v-divider>
-
     <!-- 导航菜单 -->
     <v-list density="compact" nav>
       <v-list-item
@@ -184,20 +161,6 @@
         </v-tooltip>
       </div>
     </div>
-
-    <!-- 折叠/展开按钮（固定在底部） -->
-    <template v-slot:append>
-      <v-list-item
-        :title="rail ? '' : '折叠侧边栏'"
-        @click="toggleRail"
-        data-testid="sidebar-toggle-btn"
-        class="toggle-button"
-      >
-        <template v-slot:prepend>
-          <v-icon :icon="rail ? 'mdi-chevron-right' : 'mdi-chevron-left'" />
-        </template>
-      </v-list-item>
-    </template>
   </v-navigation-drawer>
 </template>
 
@@ -234,11 +197,8 @@ const {
 // 导航项配置
 const navItems = [
   { title: '计算图工作台', path: '/cpgraph', icon: 'mdi-graph-outline' },
-  { title: '设备', path: '/devices', icon: 'mdi-devices' },
-  { title: '示波器', path: '/oscilloscope', icon: 'mdi-oscilloscope' },
   { title: '可视化', path: '/visualization', icon: 'mdi-chart-line' },
   { title: '开发目录', path: '/dev', icon: 'mdi-folder-wrench' },
-  { title: '串口调试', path: '/dev/serial-debug', icon: 'mdi-console-line' },
 ];
 
 // 计算侧边栏属性
