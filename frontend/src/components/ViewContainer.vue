@@ -15,7 +15,7 @@
   flex-direction: column;
   min-height: 0;
   width: 100%;
-  overflow: auto;
+  overflow: hidden;
 }
 
 /* 确保容器内的内容也能正确布局 */

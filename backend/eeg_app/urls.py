@@ -32,4 +32,5 @@ urlpatterns = [
     path('real-devices/<path:port>/start-acquisition/', real_device_views.start_acquisition),
     path('real-devices/<path:port>/stop-acquisition/', real_device_views.stop_acquisition),
     path('real-devices/<path:port>/disconnect/', real_device_views.disconnect_device),
+    path('graph/record/', views.graph_record),
 ]

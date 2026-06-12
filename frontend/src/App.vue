@@ -4,7 +4,10 @@
     <Sidebar />
     
     <!-- 主内容区域 -->
-    <v-main class="main-content">
+    <v-main
+      class="main-content"
+      :class="{ 'full-height-content': $route.meta?.fullHeight }"
+    >
       <div class="content-wrapper">
         <router-view />
       </div>
@@ -36,13 +39,20 @@ html, body {
   margin: 0;
   padding: 0;
   height: 100%;
-  overflow: auto; /* 启用滚动 */
+}
+
+#app, .v-application {
+  height: 100vh;
 }
 
 .v-application {
-  min-height: 100vh;
   display: flex;
   flex-direction: column;
+}
+
+.v-application--wrap {
+  height: 100vh;
+  min-height: 100vh;
 }
 
 /* 主内容区域样式 */
@@ -50,32 +60,35 @@ html, body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  overflow: auto; /* 启用滚动 */
+  overflow: auto; /* 普通页面启用滚动 */
 }
 
-/* 内容包装器 */
-.content-wrapper {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  min-height: 0; /* 确保flex容器可以收缩 */
+/* cpgraph: 精确占据剩余高度，不可滚动 */
+.full-height-content {
+  height: calc(100vh - 32px) !important;
+  overflow: hidden !important;
+  flex: none !important;
 }
 
-/* Vuetify的v-navigation-drawer会自动处理布局，不需要手动设置margin */
-/* 侧边栏使用绝对定位，不会占用文档流空间 */
-
-/* 确保内容区域在侧边栏存在时也能充分利用空间 */
-.v-application--wrap {
-  min-height: 100vh;
+.full-height-content .content-wrapper {
+  height: 100%;
+  overflow: hidden;
 }
 
-/* 确保主内容区域宽度正确 */
-.v-main {
-  width: 100%;
+/* 让 cpgraph 路由下 flex 容器链正确继承高度 */
+.full-height-content .view-container,
+.full-height-content .fullscreen-graph-editor,
+.full-height-content .graph-content,
+.full-height-content .graph-wrapper {
+  height: 100% !important;
+  min-height: 0 !important;
 }
 
-/* 当侧边栏展开时，Vuetify会自动调整内容区域 */
-/* 我们只需要确保内容区域内的组件能充分利用空间 */
+.full-height-content .palette,
+.full-height-content .graph-container,
+.full-height-content .sidebar {
+  height: 100% !important;
+}
 
 /* 确保所有视图组件都能充分利用空间 */
 .view-container {

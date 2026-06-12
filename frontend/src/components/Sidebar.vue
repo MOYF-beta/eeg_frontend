@@ -82,6 +82,20 @@
             <v-icon left size="small" class="mr-1">mdi-stop</v-icon>
             <span v-if="!rail">停止</span>
           </v-btn>
+
+          <!-- 录制按钮 -->
+          <v-btn
+            size="small"
+            :color="isRecording ? 'red' : 'primary'"
+            @click="toggleRecording"
+            :disabled="!isRunning"
+            :title="!isRunning ? '计算图未运行，无法录制' : (isRecording ? '停止录制' : '开始录制所有输出节点')"
+            block
+            :variant="isRecording ? 'flat' : 'tonal'"
+          >
+            <v-icon left size="small" class="mr-1">{{ isRecording ? 'mdi-stop-circle' : 'mdi-record-circle' }}</v-icon>
+            <span v-if="!rail">{{ isRecording ? '停止录制' : '录制' }}</span>
+          </v-btn>
         </div>
         
         <!-- 运行状态提示 -->
@@ -123,41 +137,37 @@
         </v-alert>
       </div>
 
-      <!-- 折叠态运行控制按钮：保留实时运行/停止入口 -->
-      <div v-else class="rail-controls px-1 py-2" data-testid="sidebar-rail-controls">
+      <!-- 折叠态控制按钮 -->
+      <div v-else class="graph-controls-collapsed-buttons">
         <v-tooltip location="right">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon
-              size="small"
-              color="success"
-              class="mb-2"
-              :disabled="!canRunGraph"
-              @click="handleRunClick('live')"
-              data-testid="sidebar-live-run-btn"
-            >
-              <v-icon size="small">mdi-play</v-icon>
-            </v-btn>
+          <template #activator="{ props: tooltipProps }">
+            <v-list-item
+              v-bind="tooltipProps"
+              :title="isRunning ? '停止' : '运行'"
+              :prepend-icon="isRunning ? 'mdi-stop' : 'mdi-play'"
+              :disabled="!canRunGraph && !isRunning"
+              link
+              class="nav-item"
+              data-testid="sidebar-run-toggle-btn"
+              @click="isRunning ? stopRun() : handleRunClick('live')"
+            />
           </template>
-          <span>Live/实时运行</span>
+          <span>{{ isRunning ? '停止运行' : 'Live/实时运行' }}</span>
         </v-tooltip>
 
         <v-tooltip location="right">
-          <template #activator="{ props }">
-            <v-btn
-              v-bind="props"
-              icon
-              size="small"
-              color="error"
+          <template #activator="{ props: tooltipProps }">
+            <v-list-item
+              v-bind="tooltipProps"
+              :title="isRecording ? '停止录制' : '录制'"
+              :prepend-icon="isRecording ? 'mdi-stop-circle' : 'mdi-record-circle'"
               :disabled="!isRunning"
-              @click="stopRun"
-              data-testid="sidebar-stop-run-btn"
-            >
-              <v-icon size="small">mdi-stop</v-icon>
-            </v-btn>
+              link
+              class="nav-item"
+              @click="toggleRecording"
+            />
           </template>
-          <span>停止运行</span>
+          <span>{{ isRecording ? '停止录制' : '录制输出节点数据' }}</span>
         </v-tooltip>
       </div>
     </div>
@@ -165,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch } from 'vue';
+import { computed, watch, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import { useSidebar } from '../composables/useSidebar';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
@@ -193,6 +203,9 @@ const {
   runByMode,
   stopRun
 } = graphRuntimeStore;
+
+// 录制状态
+const isRecording = ref(false);
 
 // 导航项配置
 const navItems = [
@@ -225,6 +238,37 @@ async function handleRunClick(mode: 'live' | 'offline') {
   } catch (err) {
     console.error(`[Sidebar] Failed to run graph in ${mode} mode:`, err);
     alert(`运行计算图失败: ${err instanceof Error ? err.message : '未知错误'}`);
+  }
+}
+
+// 切换录制
+async function toggleRecording() {
+  if (isRecording.value) {
+    // 停止录制
+    try {
+      const resp = await fetch('/api/graph/record/', { method: 'DELETE' });
+      const data = await resp.json();
+      if (data.ok) {
+        isRecording.value = false;
+      }
+    } catch (e) {
+      console.error('[Sidebar] Failed to stop recording:', e);
+    }
+  } else {
+    // 开始录制
+    try {
+      const resp = await fetch('/api/graph/record/', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        isRecording.value = true;
+      }
+    } catch (e) {
+      console.error('[Sidebar] Failed to start recording:', e);
+    }
   }
 }
 
@@ -276,12 +320,6 @@ onUnmounted(() => {
 .graph-controls-collapsed {
   opacity: 1;
   height: auto;
-}
-
-.rail-controls {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
 }
 
 /* 悬停效果（仅背景色变化，不展开） */

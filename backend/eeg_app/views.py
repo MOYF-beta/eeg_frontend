@@ -17,7 +17,7 @@ from .graph_store import (
     get_persisted_revision,
     apply_graph_sync,
 )
-from .data_recorder import list_saved_files, get_active_recordings, get_file_path
+from .data_recorder import list_saved_files, get_active_recordings, get_file_path, start_recording, stop_recording
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
 from .device_store import get_all_devices, create_device, update_device, delete_device, get_device_config
@@ -364,3 +364,59 @@ def graph_python_library(request):
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     return JsonResponse({'ok': True, 'library': get_default_code_library()})
+
+@csrf_exempt
+def graph_record(request):
+    """全局录制控制 - 录制所有输出节点的数据
+    
+    POST: 开始录制所有输出节点
+    DELETE: 停止所有录制
+    """
+    from .data_recorder import start_recording, stop_recording, get_active_recordings
+    from .graph_store import get_graph
+
+    if request.method == 'POST':
+        graph = get_graph()
+        nodes = graph.get('nodes', []) or []
+        started = []
+        errors = []
+        for node in nodes:
+            node_type = str(node.get('type') or '').upper()
+            node_id = node.get('id')
+            if not node_id:
+                continue
+            # 录制所有输出节点 (OSC)
+            if node_type == 'OSC':
+                params = node.get('params', {}) or {}
+                filename = params.get('filename')
+                result = start_recording(
+                    node_id=node_id,
+                    filename=filename,
+                    format='CSV',
+                )
+                if result.get('ok'):
+                    started.append({'nodeId': node_id, 'filepath': result.get('filepath')})
+                else:
+                    errors.append({'nodeId': node_id, 'error': result.get('error')})
+
+        return JsonResponse({
+            'ok': True,
+            'recording': True,
+            'started': started,
+            'errors': errors if errors else None,
+        })
+
+    if request.method == 'DELETE':
+        active = get_active_recordings()
+        stopped = []
+        for rec in active:
+            result = stop_recording(rec['nodeId'])
+            if result.get('ok'):
+                stopped.append(result)
+        return JsonResponse({
+            'ok': True,
+            'recording': False,
+            'stopped': stopped,
+        })
+
+    return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)

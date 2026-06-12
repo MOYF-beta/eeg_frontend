@@ -91,6 +91,7 @@
         <div class="palette">
           <div class="palette-title">节点库</div>
 
+          <div class="palette-body">
           <div class="palette-group">
             <div class="group-title d-flex align-center justify-space-between">
               <span>设备集合</span>
@@ -168,6 +169,7 @@
               <span class="item-name">{{ node.name }}</span>
             </div>
           </div>
+          </div><!-- /palette-body -->
         </div>
 
         <!-- 右侧画布 -->
@@ -180,38 +182,17 @@
         </div>
 
         <!-- 右侧编辑边栏 -->
-        <div class="sidebar" :class="{ 'sidebar-collapsed': !sidebarExpanded }">
-          <!-- 边栏头部：折叠按钮和标题 -->
+        <div class="sidebar" :class="{ 'sidebar-collapsed': !sidebarVisible }">
           <div class="sidebar-header">
-            <v-btn
-              icon
-              size="small"
-              variant="text"
-              @click="sidebarExpanded = !sidebarExpanded"
-              class="sidebar-toggle"
-            >
-              <v-icon v-if="sidebarExpanded">mdi-chevron-right</v-icon>
-              <v-icon v-else>mdi-chevron-left</v-icon>
-            </v-btn>
-            <div v-if="sidebarExpanded" class="sidebar-title">
+            <div v-if="sidebarVisible" class="sidebar-title">
               <v-icon :color="sidebarIconColor" class="mr-2">{{ sidebarIcon }}</v-icon>
               {{ sidebarTitle }}
             </div>
-            <v-btn
-              v-if="sidebarExpanded"
-              icon
-              size="small"
-              variant="text"
-              @click="pinnedNodePanel = true"
-              title="固定到悬浮面板"
-            >
-              <v-icon>mdi-pin</v-icon>
-            </v-btn>
+            <v-icon v-else color="grey" class="ml-2">mdi-chevron-left</v-icon>
           </div>
 
           <!-- 边栏内容 -->
-          <div v-if="sidebarExpanded" class="sidebar-content">
-            <!-- 节点编辑内容 -->
+          <div v-if="sidebarVisible" class="sidebar-content">
             <NodeEditDialog
               v-model="nodeEditDialogOpen"
               :node-data="editingNode"
@@ -393,10 +374,6 @@
               v-if="editingNode && editingNode.type === 'OSC'"
               :initial-node-id="editingNode.id"
             />
-            <FrequencyView
-              v-else-if="editingNode && editingNode.type === 'SPECTRUM'"
-              :initial-node-id="editingNode.id"
-            />
             <v-alert v-else type="info" variant="tonal">当前节点暂无预览视图</v-alert>
           </v-window-item>
         </v-window>
@@ -507,7 +484,6 @@ import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
 import Oscilloscope from './Oscilloscope.vue';
-import FrequencyView from './FrequencyView.vue';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
 
@@ -799,16 +775,14 @@ function stopRuntimeStatePolling() {
   graphRuntimeStore.stopPolling();
 }
 
-// 右侧边栏状态
-const sidebarExpanded = ref(true);
-const selectedNodeId = ref<string | null>(null);
+// 右侧边栏可见性 — 选中节点时展开，单击空白时折叠
+const sidebarVisible = ref(false);
 
-// 侧边栏切换后刷新画布尺寸，避免残影
-watch(sidebarExpanded, () => {
+// 边栏切换后刷新画布尺寸
+watch(sidebarVisible, () => {
   nextTick(() => {
     const graph = graphRef.value;
     if (graph) {
-      // 等待 CSS transition 完成后重绘
       setTimeout(() => {
         graph.resize();
         graph.centerContent();
@@ -817,24 +791,8 @@ watch(sidebarExpanded, () => {
   });
 });
 
-// 计算属性：边栏标题、图标和颜色
-const sidebarTitle = computed(() => {
-  if (!editingNode.value) return '节点编辑';
-  const typeInfo = nodeTypes[editingNode.value.type];
-  return `${typeInfo?.name || '节点'} - ${editingNode.value.name || '未命名'}`;
-});
-
-const sidebarIcon = computed(() => {
-  if (!editingNode.value) return 'mdi-cog';
-  const typeInfo = nodeTypes[editingNode.value.type];
-  return typeInfo?.icon || 'mdi-cog';
-});
-
-const sidebarIconColor = computed(() => {
-  if (!editingNode.value) return 'primary';
-  const typeInfo = nodeTypes[editingNode.value.type];
-  return typeInfo?.color || 'primary';
-});
+// 选中的节点 ID（用于其他功能，如高亮）
+const selectedNodeId = ref<string | null>(null);
 
 // 计算属性：检查是否允许编辑计算图（结合全局状态和会话状态）
 const canEditGraphLocal = computed(() => {
@@ -1194,10 +1152,6 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
     { key: 'yScale', label: 'Y轴缩放', type: 'slider', min: 0.2, max: 5, step: 0.1, hint: '波形显示缩放', default: 1 },
     { key: 'mode', label: '显示模式', type: 'select', options: ['scroll', 'scan'], hint: '滚动或扫描', default: 'scroll' },
   ],
-  SPECTRUM: [
-    { key: 'fftSize', label: 'FFT点数', type: 'select', options: ['256', '512', '1024', '2048'], hint: 'FFT窗口大小', default: '1024' },
-    { key: 'overlap', label: '重叠率', type: 'slider', min: 0, max: 0.9, step: 0.1, hint: '窗口重叠比例', default: 0.5 },
-  ],
   SAVE: [
     { key: 'format', label: '保存格式', type: 'select', options: ['edf', 'csv', 'json'], hint: '文件格式', default: 'edf' },
     { key: 'filePath', label: '保存路径', type: 'text', hint: '文件保存路径', default: './data/output.edf' },
@@ -1229,7 +1183,6 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
   SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
   MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
   OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
-  SPECTRUM: { name: '频谱', color: '#3F51B5', bg: '#E8EAF6', icon: 'FFT', hasInput: true, hasOutput: false },
   SAVE: { name: '保存', color: '#C2185B', bg: '#FCE4EC', icon: 'SAV', hasInput: true, hasOutput: false },
   CUSTOM_PYFUNC: { name: 'Python函数', color: '#5E35B1', bg: '#EDE7F6', icon: 'PY', hasInput: true, hasOutput: true },
   CUSTOM_CONV: { name: '卷积节点', color: '#00897B', bg: '#E0F2F1', icon: 'CNV', hasInput: true, hasOutput: true },
@@ -1253,12 +1206,12 @@ const processNodes = [
 
 const outputNodes = [
   { type: 'OSC' as GraphNodeType, name: '示波器', icon: 'OSC', color: '#00796B', bg: '#E0F2F1' },
-  { type: 'SPECTRUM' as GraphNodeType, name: '频谱', icon: 'FFT', color: '#3F51B5', bg: '#E8EAF6' },
 ];
 
 // 选择节点并在右侧边栏显示
 function selectNode(nodeId: string) {
   selectedNodeId.value = nodeId;
+  sidebarVisible.value = true;
   openNodeEditDialog(nodeId);
 }
 
@@ -1959,9 +1912,6 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const sampleRate = params['sampleRate'] || 1000;
       const channels = params['channels'] || 8;
       return `${sampleRate}Hz ${channels}ch`;
-    case 'SPECTRUM':
-      const fftSize = params['fftSize'] || '1024';
-      return `FFT ${fftSize}`;
     case 'SAVE':
       const format = params['format'] || 'edf';
       return `.${format}`;
@@ -2934,25 +2884,30 @@ onMounted(async () => {
     syncUnsavedState();
   });
 
-  // 节点双击编辑（冻结状态下可以查看但不能更改）
-  // 节点单击：选择节点并在右侧边栏显示
+  // 节点单击：选择节点
   graph.on('node:click', ({ node }) => {
     selectNode(node.id);
   });
 
-  // 节点双击：选择节点并自动展开右侧边栏
+  // 节点双击：选择节点
   graph.on('node:dblclick', ({ node }) => {
     selectNode(node.id);
-    sidebarExpanded.value = true;
+  });
+
+  // 单击空白区域取消选中并折叠边栏
+  graph.on('blank:click', () => {
+    selectedNodeId.value = null;
+    editingNode.value = null;
+    sidebarVisible.value = false;
   });
 
   // 订阅 sessionStore 变化，更新节点绑定状态显示
   unsubscribeSessionStore = sessionStore.subscribe((state) => {
     console.log('[GraphEditor] Session store updated, viewBindings:', state.mappings?.viewBindings);
-    // 当视图绑定变化时，更新所有 OSC 和 SPECTRUM 节点的标签
+    // 当视图绑定变化时，更新所有 OSC 节点的标签
     graph.getNodes().forEach((node) => {
       const data = node.getData() as GraphNode;
-      if (data && (data.type === 'OSC' || data.type === 'SPECTRUM')) {
+      if (data && data.type === 'OSC') {
         const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
         console.log('[GraphEditor] Updating node label:', node.id, labelText);
         node.attr('label/text', labelText);
@@ -3000,7 +2955,8 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   background: #fafafa;
-  min-height: 0; /* 确保flex容器可以收缩 */
+  min-height: 0;
+  overflow: hidden;
 }
 
 .graph-toolbar {
@@ -3017,11 +2973,10 @@ onUnmounted(() => {
 
 .graph-content {
   flex: 1;
-  padding: 16px;
-  overflow: hidden; /* 改为hidden，让内部容器处理滚动 */
-  min-height: 0; /* 确保flex容器可以收缩 */
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .graph-wrapper {
@@ -3043,7 +2998,13 @@ onUnmounted(() => {
   flex-direction: column;
   border-right: 1px solid #e0e0e0;
   background: #fff;
-  overflow-y: auto; /* 改为垂直滚动 */
+  overflow: hidden;
+  min-height: 0;
+}
+
+.palette-body {
+  flex: 1;
+  overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
 }
@@ -3120,6 +3081,7 @@ onUnmounted(() => {
   min-height: 0;
   background: #fafafa;
   position: relative;
+  overflow: hidden;
 }
 
 .graph-hint {
@@ -3153,7 +3115,7 @@ onUnmounted(() => {
   background: #fff;
   transition: width 0.3s ease;
   overflow: hidden;
-  min-height: 0; /* 确保flex容器可以收缩 */
+  min-height: 0;
 }
 
 .sidebar-collapsed {
@@ -3169,11 +3131,8 @@ onUnmounted(() => {
   min-height: 56px;
 }
 
-.sidebar-toggle {
-  margin-right: 8px;
-}
-
 .sidebar-title {
+  flex: 1;
   font-weight: 600;
   font-size: 14px;
   color: #333;
@@ -3183,8 +3142,8 @@ onUnmounted(() => {
 
 .sidebar-content {
   flex: 1;
-  overflow-y: auto;
-  padding: 16px;
+  overflow: hidden;
+  min-height: 0;
 }
 
 .sidebar-node-edit {
@@ -3283,6 +3242,10 @@ onUnmounted(() => {
 @media (max-width: 960px) {
   .sidebar {
     width: 300px;
+  }
+  
+  .sidebar-collapsed {
+    width: 40px;
   }
   
   .palette {

@@ -160,7 +160,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             if not node_id:
                 continue
 
-            if node_type == 'SAVE' or (node_type in {'OSC', 'SPECTRUM'} and bool(params.get('saveEnabled', False))):
+            if node_type == 'SAVE' or (node_type == 'OSC' and bool(params.get('saveEnabled', False))):
                 filename = params.get('filename') or params.get('filePath')
                 format_type = str(params.get('format', 'CSV')).upper()
                 result = start_recording(node_id=node_id, filename=filename, format=format_type)
