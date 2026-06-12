@@ -248,10 +248,6 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
         from .graph_store import get_graph, get_runtime_state, set_runtime_metrics
         from .data_replay import get_replay_status
 
-        TARGET_FPS = 30
-        FRAME_INTERVAL = 1.0 / TARGET_FPS
-        last_send_time = time.time()
-
         while self.running:
             graph = get_graph()
             self.graph_frozen = bool(graph.get('frozen', False))
@@ -283,6 +279,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
 
             events = self._engine.poll_events(max_items_per_worker=1000)
             max_processing_delay_ms = 0
+            now_ms_for_events = int(time.time() * 1000)
             for event in events:
                 node_id = str(event.get('nodeId') or '')
                 if not node_id:
@@ -292,10 +289,11 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                     continue
                 names = [str(v) for v in event.get('channelNames', [])]
                 sample_rate = int(event.get('sampleRate') or 1000)
-                utc_ms = int(event.get('utcFirstFrameMs') or int(time.time() * 1000))
-                processing_delay_ms = int(event.get('processingDelayMs') or 0)
-                if processing_delay_ms > max_processing_delay_ms:
-                    max_processing_delay_ms = processing_delay_ms
+                utc_ms = int(event.get('utcFirstFrameMs') or now_ms_for_events)
+                # 真实管道延迟：从数据到达串口/生成到当前处理时刻
+                real_delay_ms = max(0, now_ms_for_events - utc_ms)
+                if real_delay_ms > max_processing_delay_ms:
+                    max_processing_delay_ms = real_delay_ms
 
                 self._sample_buffer.setdefault(node_id, []).append(channels)
                 self._sample_channel_names[node_id] = names
@@ -307,84 +305,83 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                     for ch_idx, val in enumerate(channels):
                         self._spectrum_buffers_by_node[node_id][ch_idx].append(float(val))
 
-            now = time.time()
-            if (now - last_send_time) >= FRAME_INTERVAL:
-                last_send_time = now
-                t_send_start = time.perf_counter_ns()
-                fft_size = self._extract_fft_size(nodes)
-                ws_send_us = 0
+            t_send_start = time.perf_counter_ns()
+            fft_size = self._extract_fft_size(nodes)
 
-                for node_id, samples in list(self._sample_buffer.items()):
-                    if not samples:
+            for node_id, samples in list(self._sample_buffer.items()):
+                if not samples:
+                    continue
+                latest_channels = samples[-1]
+                node_type = node_type_map.get(node_id)
+                # 按节点计算真实管道延迟
+                node_utc = int(self._batch_first_utc.get(node_id, int(time.time() * 1000)))
+                node_delay_ms = max(0, int(time.time() * 1000) - node_utc)
+
+                payload = {
+                    'type': 'data',
+                    'timestamp': int(time.time() * 1000),
+                    'utcFirstFrameMs': node_utc,
+                    'nodeId': node_id,
+                    'nodeType': node_type,
+                    'channels': latest_channels,
+                    'samples': samples,
+                    'channelNames': self._sample_channel_names.get(node_id, []),
+                    'sampleRate': int(self._sample_rates.get(node_id, 1000)),
+                    'processingDelayMs': int(node_delay_ms),
+                    'runtimeMode': runtime_mode,
+                    'nonRealtime': bool(node_delay_ms > 10000),
+                    'performanceWarning': '非实时：处理延迟持续升高' if node_delay_ms > 10000 else None,
+                }
+                if len(samples) <= 2:
+                    print(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
+
+                if node_type in {'SPECTRUM', 'OSC'}:
+                    bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
+                    if bundle is not None:
+                        payload.update(bundle)
+
+                try:
+                    await self.send(text_data=json.dumps(payload))
+                except Exception as exc:
+                    print(f"[WebSocket] Send error: {exc}")
+                    self.running = False
+                    break
+
+            ws_send_us = int((time.perf_counter_ns() - t_send_start) // 1000)
+
+            from .perf_monitor import get_perf_monitor, PipelineMetrics
+            perf = get_perf_monitor()
+            perf.record_pipeline(PipelineMetrics(
+                ws_send_us=ws_send_us,
+                total_pipeline_us=ws_send_us,
+            ))
+
+            self._sample_buffer.clear()
+            self._sample_channel_names.clear()
+            self._sample_rates.clear()
+            self._batch_first_utc.clear()
+
+            progress = None
+            if runtime_mode == 'offline' and self._replay_nodes:
+                progresses = []
+                for replay_node_id in self._replay_nodes:
+                    status = get_replay_status(replay_node_id)
+                    if not status:
                         continue
-                    latest_channels = samples[-1]
-                    node_type = node_type_map.get(node_id)
-
-                    payload = {
-                        'type': 'data',
-                        'timestamp': int(time.time() * 1000),
-                        'utcFirstFrameMs': int(self._batch_first_utc.get(node_id, int(time.time() * 1000))),
-                        'nodeId': node_id,
-                        'nodeType': node_type,
-                        'channels': latest_channels,
-                        'samples': samples,
-                        'channelNames': self._sample_channel_names.get(node_id, []),
-                        'sampleRate': int(self._sample_rates.get(node_id, 1000)),
-                        'processingDelayMs': int(max_processing_delay_ms),
-                        'runtimeMode': runtime_mode,
-                        'nonRealtime': bool(max_processing_delay_ms > 10000),
-                        'performanceWarning': '非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
-                    }
-                    if len(samples) <= 2:
-                        print(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
-
-                    if node_type in {'SPECTRUM', 'OSC'}:
-                        bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
-                        if bundle is not None:
-                            payload.update(bundle)
-
                     try:
-                        await self.send(text_data=json.dumps(payload))
-                    except Exception as exc:
-                        print(f"[WebSocket] Send error: {exc}")
-                        self.running = False
-                        break
+                        progresses.append(float(status.get('progress', 0)))
+                    except Exception:
+                        pass
+                if progresses:
+                    progress = sum(progresses) / len(progresses)
+                else:
+                    progress = 100.0
 
-                ws_send_us = int((time.perf_counter_ns() - t_send_start) // 1000)
-
-                from .perf_monitor import get_perf_monitor, PipelineMetrics
-                perf = get_perf_monitor()
-                perf.record_pipeline(PipelineMetrics(
-                    ws_send_us=ws_send_us,
-                    total_pipeline_us=ws_send_us,
-                ))
-
-                self._sample_buffer.clear()
-                self._sample_channel_names.clear()
-                self._sample_rates.clear()
-                self._batch_first_utc.clear()
-
-                progress = None
-                if runtime_mode == 'offline' and self._replay_nodes:
-                    progresses = []
-                    for replay_node_id in self._replay_nodes:
-                        status = get_replay_status(replay_node_id)
-                        if not status:
-                            continue
-                        try:
-                            progresses.append(float(status.get('progress', 0)))
-                        except Exception:
-                            pass
-                    if progresses:
-                        progress = sum(progresses) / len(progresses)
-                    else:
-                        progress = 100.0
-
-                set_runtime_metrics(
-                    processing_delay_ms=max_processing_delay_ms,
-                    progress=progress,
-                    non_realtime=max_processing_delay_ms > 10000,
-                    warning='非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
-                )
+            set_runtime_metrics(
+                processing_delay_ms=max_processing_delay_ms,
+                progress=progress,
+                non_realtime=max_processing_delay_ms > 10000,
+                warning='非实时：处理延迟持续升高' if max_processing_delay_ms > 10000 else None,
+            )
 
             await asyncio.sleep(0.005)

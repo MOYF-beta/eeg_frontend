@@ -259,32 +259,104 @@ class GraphWorker:
             )
         return {'channels': [], 'channelNames': [], 'utcFirstFrameMs': None}
 
+    def _has_live_real_device(self) -> bool:
+        from .device_store import get_device
+
+        for node_id in self.source_node_ids:
+            node = self.nodes_by_id.get(node_id) or {}
+            if str(node.get('type') or '').upper() == 'REPLAY':
+                continue
+            device_id = self._resolve_source_device_id(node)
+            if not device_id:
+                continue
+            try:
+                device_info = get_device(device_id) or {}
+                if str(device_info.get('type') or '').lower() == 'wearable_eeg':
+                    port = (device_info.get('config') or {}).get('port')
+                    if port:
+                        return True
+            except Exception:
+                pass
+        return False
+
+    def _drain_real_devices_sync(self, max_per_device: int = 8) -> int:
+        """从所有真实设备出队数据，返回各设备队列的最小帧数（同步窗口）。"""
+        from .device_store import get_device
+        from .real_device_manager import get_real_device_manager
+
+        min_count = None
+        for node_id in self.source_node_ids:
+            node = self.nodes_by_id.get(node_id) or {}
+            if str(node.get('type') or '').upper() == 'REPLAY':
+                continue
+            device_id = self._resolve_source_device_id(node)
+            if not device_id:
+                continue
+            try:
+                device_info = get_device(device_id) or {}
+                if str(device_info.get('type') or '').lower() != 'wearable_eeg':
+                    continue
+                port = (device_info.get('config') or {}).get('port')
+                if not port:
+                    continue
+                state = self.node_states[node_id]
+                pending = state.setdefault('realPendingSamples', [])
+
+                if not pending:
+                    manager = get_real_device_manager()
+                    drained = manager.drain_data(str(port), count=max_per_device)
+                    for frame in drained:
+                        raw_channels = list((frame or {}).get('channels', []))
+                        channels = [float(ch) for ch in raw_channels]
+                        frame_ts = int(((frame or {}).get('timestamp') or time.time()) * 1000)
+                        pending.append((channels, frame_ts))
+
+                if min_count is None:
+                    min_count = len(pending)
+                else:
+                    min_count = min(min_count, len(pending))
+            except Exception:
+                pass
+
+        if min_count is None or min_count <= 0:
+            return 0
+        # Cap at sync window to keep latency low
+        SYNC_WINDOW = 4
+        return min(min_count, SYNC_WINDOW)
+
     def _run(self) -> None:
         from .data_recorder import write_sample
         from .perf_monitor import get_perf_monitor, PipelineMetrics
 
-        dt = 1.0 / max(1, self.sample_rate)
         max_samples_per_loop = max(1, int(self.sample_rate * 0.2))
         last_sample_time = time.perf_counter()
         sample_accumulator = 0.0
         perf = get_perf_monitor()
 
+        use_real_device_sync = self._has_live_real_device()
+
         while not self.stop_event.is_set():
-            now = time.perf_counter()
-            elapsed_samples = (now - last_sample_time) * self.sample_rate
-            last_sample_time = now
-            sample_accumulator += elapsed_samples
-
-            samples_to_generate = int(sample_accumulator)
-            if samples_to_generate <= 0:
-                time.sleep(0.001)
-                continue
-
-            if samples_to_generate > max_samples_per_loop:
-                sample_accumulator -= float(max_samples_per_loop)
-                samples_to_generate = max_samples_per_loop
+            if use_real_device_sync:
+                samples_to_generate = self._drain_real_devices_sync()
+                if samples_to_generate <= 0:
+                    self.stop_event.wait(0.002)
+                    continue
             else:
-                sample_accumulator -= samples_to_generate
+                now = time.perf_counter()
+                elapsed_samples = (now - last_sample_time) * self.sample_rate
+                last_sample_time = now
+                sample_accumulator += elapsed_samples
+
+                samples_to_generate = int(sample_accumulator)
+                if samples_to_generate <= 0:
+                    self.stop_event.wait(0.001)
+                    continue
+
+                if samples_to_generate > max_samples_per_loop:
+                    sample_accumulator -= float(max_samples_per_loop)
+                    samples_to_generate = max_samples_per_loop
+                else:
+                    sample_accumulator -= samples_to_generate
 
             loop_start = time.perf_counter_ns()
             source_gen_total_ns = 0
@@ -293,9 +365,6 @@ class GraphWorker:
 
             for _ in range(samples_to_generate):
                 self.generated_sample_count += 1
-                expected_wall_ms = self.started_wall_ms + int((self.generated_sample_count * 1000) / max(1, self.sample_rate))
-                now_wall_ms = int(time.time() * 1000)
-                processing_delay_ms = max(0, now_wall_ms - expected_wall_ms)
                 node_outputs: Dict[str, Dict[str, Dict[str, Any]]] = {}
 
                 for node_id in self.topo_order:
@@ -378,9 +447,6 @@ class GraphWorker:
                             'channelNames': names,
                             'sampleRate': self.sample_rate,
                             'utcFirstFrameMs': int(utc_ms),
-                            'processingDelayMs': processing_delay_ms,
-                            'pipelineSourceGenUs': int(source_gen_total_ns // 1000),
-                            'pipelineNodeComputeUs': int(node_compute_total_ns // 1000),
                         }
                     )
                     event_samples += 1
@@ -394,8 +460,6 @@ class GraphWorker:
                 samples_per_second=float(self.sample_rate),
             ))
             perf.add_samples(event_samples)
-
-            time.sleep(min(0.001, dt / 2))
 
 
 class GraphExecutionManager:

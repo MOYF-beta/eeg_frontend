@@ -151,7 +151,12 @@ const threadCount = ref('0');
 const processMemMb = ref('0');
 const graphRunning = ref(false);
 const graphProcDelay = ref(0);
-const procDelayText = computed(() => graphProcDelay.value > 0 ? `${(graphProcDelay.value / 1000).toFixed(1)}s` : '—');
+const procDelayText = computed(() => {
+  const ms = graphProcDelay.value;
+  if (ms <= 0) return '—';
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+});
 
 const wsStatus = computed(() => eegWebSocket.getStatus());
 const wsStatusText = computed(() => {
