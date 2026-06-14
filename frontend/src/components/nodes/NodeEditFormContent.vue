@@ -104,14 +104,26 @@
       <div class="mb-3">
         <div class="d-flex align-center justify-space-between mb-1">
           <span class="text-body-2">通道名称</span>
-          <v-btn
-            v-if="!isReadOnly"
-            size="x-small"
-            variant="text"
-            @click="handleAddChannelName"
-          >
-            添加
-          </v-btn>
+          <div class="d-flex align-center gap-2">
+            <!-- 10-20标准系统开关 -->
+            <v-switch
+              v-if="!isReadOnly && showTenTwentySwitch"
+              v-model="tenTwentyMode"
+              density="compact"
+              hide-details
+              label="10-20标准系统"
+              color="teal"
+              class="ten-twenty-switch"
+            />
+            <v-btn
+              v-if="!isReadOnly"
+              size="x-small"
+              variant="text"
+              @click="handleAddChannelName"
+            >
+              添加
+            </v-btn>
+          </div>
         </div>
         <div v-for="(name, index) in channelNames" :key="index" class="d-flex align-center mb-1">
           <v-text-field
@@ -137,6 +149,14 @@
           </v-btn>
         </div>
       </div>
+
+      <!-- 10-20命名对话框 -->
+      <TenTwentyChannelDialog
+        v-model="tenTwentyDialogOpen"
+        :devices="deviceListForDialog"
+        :restrict-to-device-id="tenTwentyRestrictDeviceId"
+        @confirm="onTenTwentyConfirm"
+      />
     </template>
 
     <!-- 滤波器专用表单 -->
@@ -666,8 +686,10 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch, onMounted } from 'vue';
 import { sessionStore } from '../../services/sessionStore';
+import { deviceApi } from '../../services/deviceApi';
+import TenTwentyChannelDialog from '../TenTwentyChannelDialog.vue';
 
 // 从父组件传递的props
 const props = defineProps<{
@@ -723,6 +745,108 @@ const availableOscilloscopes = computed(() => {
     ...osc,
     displayName: osc.name || osc.id
   }));
+});
+
+// 10-20标准系统
+const tenTwentyMode = ref(false);
+const tenTwentyDialogOpen = ref(false);
+
+/** 10-20 对话框可用的设备列表 - 含重试机制 */
+const availableDevicesForTenTwenty = computed(() => {
+  const devices = sessionStore.getDevices();
+  return devices.map(d => ({
+    id: d.id,
+    name: d.name,
+    channelCount: d.channelCount,
+    channels: (d.config?.channels || []).length > 0
+      ? (d.config?.channels || []).map((ch: any) => ({
+          index: ch.index ?? ch.channel ?? 0,
+          name: ch.name || `CH${(ch.index ?? 0) + 1}`,
+          alias: ch.alias || '',
+        }))
+      : Array.from({ length: d.channelCount || 8 }, (_, i) => ({
+          index: i,
+          name: `CH${i + 1}`,
+          alias: '',
+        })),
+  }));
+});
+
+/** 手动拉取的设备列表（当 sessionStore 为空时备用） */
+const fallbackDevices = ref<Array<{ id: string; name: string; channelCount: number; channels: Array<{ index: number; name: string }> }>>([]);
+
+async function fetchDevicesFallback() {
+  if (sessionStore.getDevices().length > 0) return; // 已有数据，跳过
+  try {
+    const devices = await deviceApi.getDevices();
+    fallbackDevices.value = devices.map((d: any) => ({
+      id: d.id,
+      name: d.name,
+      channelCount: d.channel_count || 8,
+      channels: (d.config?.channels || []).length > 0
+        ? d.config.channels.map((ch: any) => ({
+            index: ch.index ?? ch.channel ?? 0,
+            name: ch.name || `CH${(ch.index ?? 0) + 1}`,
+            alias: ch.alias || '',
+          }))
+        : Array.from({ length: d.channel_count || 8 }, (_, i) => ({
+            index: i,
+            name: `CH${i + 1}`,
+            alias: '',
+          })),
+    }));
+  } catch (err) {
+    console.warn('[NodeEditFormContent] Failed to fetch fallback devices:', err);
+  }
+}
+
+/** 最终传递给对话框的设备列表（合并 sessionStore + fallback） */
+const deviceListForDialog = computed(() => {
+  const fromStore = availableDevicesForTenTwenty.value;
+  if (fromStore.length > 0) return fromStore;
+  return fallbackDevices.value;
+});
+
+/** 节点编辑模式: 限制只能选择当前设备 */
+const tenTwentyRestrictDeviceId = computed(() => {
+  return props.selectedDeviceId || null;
+});
+
+// 只在SOURCE节点的 channel names 区域显示 10-20 入口
+const showTenTwentySwitch = computed(() => {
+  return props.nodeType === 'SOURCE';
+});
+
+const onTenTwentyConfirm = (result: { subjectId: string; mappings: Array<{ electrode: string; deviceId: string; channelIndex: number }> }) => {
+  if (result.mappings.length > 0) {
+    // 找到本设备的最大通道数, 扩展 channelNames 列表
+    const maxChIdx = Math.max(...result.mappings.map(m => m.channelIndex));
+    const newNames = [...props.channelNames];
+    while (newNames.length <= maxChIdx) {
+      newNames.push(`CH${newNames.length + 1}`);
+    }
+    // 为每个映射的通道重命名: {subjectId}@{electrode}
+    for (const m of result.mappings) {
+      newNames[m.channelIndex] = `${result.subjectId}@${m.electrode}`;
+    }
+    emit('update:channelNames', newNames);
+  }
+  tenTwentyMode.value = false;
+};
+
+// 监听开关切换以打开对话框
+watch(tenTwentyMode, (val) => {
+  if (val) {
+    fetchDevicesFallback(); // 确保设备列表已加载
+    tenTwentyDialogOpen.value = true;
+  }
+});
+
+// 对话框关闭时同步关闭开关
+watch(tenTwentyDialogOpen, (val) => {
+  if (!val) {
+    tenTwentyMode.value = false;
+  }
 });
 
 // 方法
@@ -855,6 +979,15 @@ const handleImportPythonFile = () => {
 </script>
 
 <style scoped>
+.gap-2 {
+  gap: 8px;
+}
+
+.ten-twenty-switch {
+  font-size: 11px;
+  height: 28px;
+}
+
 .node-edit-form-content {
   max-height: 70vh;
   overflow-y: auto;

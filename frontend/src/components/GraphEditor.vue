@@ -592,6 +592,7 @@ async function loadPaletteDevices() {
       channelCount: Number(apiDevice.channel_count || 8),
       type: (apiDevice.type === 'wearable_eeg' ? 'real' : 'simulated') as 'simulated' | 'real',
       config: {
+        ...(apiDevice.config || {}),
         port: apiDevice.port || (apiDevice.config && apiDevice.config.port) || '',
         baudrate: apiDevice.baudrate || (apiDevice.config && apiDevice.config.baudrate) || 460800,
       },

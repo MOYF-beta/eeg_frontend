@@ -65,6 +65,20 @@ USE_I18N = True
 USE_TZ = True
 
 STATIC_URL = 'static/'
+
+# 生产前端构建输出目录
+import os
+FRONTEND_DIST_DIR = BASE_DIR.parent / 'frontend' / 'dist'
+STATICFILES_DIRS = [
+    ('assets', FRONTEND_DIST_DIR / 'assets'),
+]
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+# 生产模式配置
+# 部署时取消注释以下两行：
+# ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'your-domain.com']  # 按需修改
+# DEBUG = False
+
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CORS_ALLOWED_ORIGINS = [

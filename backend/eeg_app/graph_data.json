@@ -56,7 +56,17 @@
         "deviceId": "sim-001",
         "sourceMode": "live",
         "filePath": "",
-        "loop": false
+        "loop": false,
+        "channelNames": [
+          "CH1",
+          "CH2",
+          "CH3",
+          "CH4",
+          "CH5",
+          "CH6",
+          "CH7",
+          "CH8"
+        ]
       },
       "id": "node-1781257258758-878",
       "x": -100,

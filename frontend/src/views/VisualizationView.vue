@@ -31,6 +31,15 @@
         >
           添加频谱
         </v-btn>
+        <v-btn
+          color="info"
+          prepend-icon="mdi-plus"
+          size="small"
+          @click="addTopoMap"
+          :disabled="!canAddTopoMap"
+        >
+          添加10-20可视化
+        </v-btn>
       </div>
     </div>
 
@@ -57,10 +66,18 @@
           @remove="removeSpectrum(index)"
         />
       </div>
+
+      <!-- 10-20 脑地形图卡片列表 -->
+      <div v-for="(topo, index) in topoMaps" :key="topo.id" class="grid-item">
+        <TenTwentyTopoMap
+          :initial-node-id="topo.initialNodeId"
+          @remove="removeTopoMap(index)"
+        />
+      </div>
     </div>
 
     <!-- 空状态 -->
-    <v-card v-if="oscilloscopes.length === 0 && spectrums.length === 0" variant="outlined" class="pa-8 text-center">
+    <v-card v-if="oscilloscopes.length === 0 && spectrums.length === 0 && topoMaps.length === 0" variant="outlined" class="pa-8 text-center">
       <v-icon size="64" color="grey-lighten-2">mdi-waveform</v-icon>
       <div class="text-h6 mt-4 text-grey">暂无可视化组件</div>
       <div class="text-body-2 text-grey mt-2">
@@ -76,6 +93,7 @@ import ViewContainer from '../components/ViewContainer.vue';
 import { ref, computed, onMounted, watch } from 'vue';
 import Oscilloscope from '../components/Oscilloscope.vue';
 import FrequencyView from '../components/FrequencyView.vue';
+import TenTwentyTopoMap from '../components/TenTwentyTopoMap.vue';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
 
@@ -86,6 +104,7 @@ interface VizLayout {
   gridColumns: number;
   oscilloscopes: ViewerItem[];
   spectrums: ViewerItem[];
+  topoMaps: ViewerItem[];
 }
 
 const loadLayout = (): VizLayout | null => {
@@ -94,6 +113,7 @@ const loadLayout = (): VizLayout | null => {
     if (!raw) return null;
     const data = JSON.parse(raw);
     if (data && typeof data.gridColumns === 'number' && Array.isArray(data.oscilloscopes) && Array.isArray(data.spectrums)) {
+      if (!Array.isArray(data.topoMaps)) data.topoMaps = [];
       return data as VizLayout;
     }
   } catch (e) {
@@ -111,6 +131,7 @@ const saveLayout = () => {
         gridColumns: gridColumns.value,
         oscilloscopes: oscilloscopes.value.map(o => ({ id: o.id, initialNodeId: o.initialNodeId })),
         spectrums: spectrums.value.map(s => ({ id: s.id, initialNodeId: s.initialNodeId })),
+        topoMaps: topoMaps.value.map(t => ({ id: t.id, initialNodeId: t.initialNodeId })),
       };
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
     } catch (e) {
@@ -134,6 +155,7 @@ interface ViewerItem {
 
 const oscilloscopes = ref<ViewerItem[]>([]);
 const spectrums = ref<ViewerItem[]>([]);
+const topoMaps = ref<ViewerItem[]>([]);
 
 // 计算属性
 const oscNodes = computed(() => graphNodes.value.filter(n => n.type === 'OSC'));
@@ -150,6 +172,12 @@ const canAddSpectrum = computed(() => {
   // SPECTRUM节点或OSC节点都可以作为频谱数据源
   const availableNodes = graphNodes.value.filter(n => n.type === 'SPECTRUM' || n.type === 'OSC');
   return availableNodes.length > spectrums.value.length;
+});
+
+const canAddTopoMap = computed(() => {
+  // OSC 或 SPECTRUM 节点都可以作为 10-20 可视化的数据源
+  const availableNodes = graphNodes.value.filter(n => n.type === 'OSC' || n.type === 'SPECTRUM');
+  return availableNodes.length > topoMaps.value.length;
 });
 
 // 方法
@@ -186,6 +214,23 @@ const removeSpectrum = (index: number) => {
   spectrums.value.splice(index, 1);
 };
 
+const addTopoMap = () => {
+  const usedNodeIds = new Set(topoMaps.value.map(t => t.initialNodeId).filter(Boolean));
+  const availableNodes = graphNodes.value.filter(n =>
+    (n.type === 'OSC' || n.type === 'SPECTRUM') && !usedNodeIds.has(n.id)
+  );
+  const availableNode = availableNodes[0];
+
+  topoMaps.value.push({
+    id: 'topo-' + Date.now(),
+    initialNodeId: availableNode?.id,
+  });
+};
+
+const removeTopoMap = (index: number) => {
+  topoMaps.value.splice(index, 1);
+};
+
 // 加载计算图
 const loadGraph = async () => {
   try {
@@ -201,10 +246,11 @@ onMounted(() => {
   
   // 恢复保存的布局
   const savedLayout = loadLayout();
-  if (savedLayout && (savedLayout.oscilloscopes.length > 0 || savedLayout.spectrums.length > 0)) {
+  if (savedLayout && (savedLayout.oscilloscopes.length > 0 || savedLayout.spectrums.length > 0 || savedLayout.topoMaps.length > 0)) {
     gridColumns.value = savedLayout.gridColumns;
     oscilloscopes.value = savedLayout.oscilloscopes;
     spectrums.value = savedLayout.spectrums;
+    topoMaps.value = savedLayout.topoMaps || [];
     return;
   }
 
@@ -223,6 +269,7 @@ onMounted(() => {
 watch(gridColumns, () => saveLayout());
 watch(oscilloscopes, () => saveLayout(), { deep: true });
 watch(spectrums, () => saveLayout(), { deep: true });
+watch(topoMaps, () => saveLayout(), { deep: true });
 </script>
 
 <style scoped>
