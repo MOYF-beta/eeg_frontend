@@ -163,7 +163,7 @@
     <template v-else-if="nodeType === 'FILTER'">
       <v-select
         v-model="form.params.filterType"
-        :items="[{ title: '低通', value: 'lowpass' }, { title: '高通', value: 'highpass' }, { title: '带通', value: 'bandpass' }, { title: '带阻', value: 'bandstop' }]"
+        :items="[{ title: '低通', value: 'lowpass' }, { title: '高通', value: 'highpass' }, { title: '带通', value: 'bandpass' }, { title: '带阻', value: 'notch' }]"
         item-title="title"
         item-value="value"
         label="滤波器类型"
@@ -199,16 +199,47 @@
 
     <!-- 降采样/升采样专用表单 -->
     <template v-else-if="nodeType === 'DOWNSAMPLE' || nodeType === 'UPSAMPLE'">
-      <v-text-field
-        v-model.number="form.params.factor"
-        :label="nodeType === 'DOWNSAMPLE' ? '降采样因子' : '升采样因子'"
-        type="number"
+      <v-select
+        v-model="form.params.mode"
+        :items="[{ title: '目标频率', value: 'targetRate' }, { title: '缩放因子', value: 'factor' }]"
+        item-title="title"
+        item-value="value"
+        label="模式"
         density="compact"
         variant="outlined"
         class="mb-3"
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
+
+      <template v-if="form.params.mode === 'targetRate'">
+        <v-text-field
+          v-model.number="form.params.targetRate"
+          :label="nodeType === 'DOWNSAMPLE' ? '目标频率 (Hz)' : '目标频率 (Hz)'"
+          type="number"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          hint="降/升采样后的目标采样率"
+          persistent-hint
+          :readonly="isReadOnly"
+          :disabled="isReadOnly"
+        />
+      </template>
+      <template v-else>
+        <v-text-field
+          v-model.number="form.params.factor"
+          :label="nodeType === 'DOWNSAMPLE' ? '降采样因子' : '升采样因子'"
+          type="number"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          hint="采样率变化倍率"
+          persistent-hint
+          :readonly="isReadOnly"
+          :disabled="isReadOnly"
+        />
+      </template>
     </template>
 
     <!-- 求和器专用表单 -->
@@ -385,8 +416,8 @@
       </div>
     </template>
 
-    <!-- 示波器专用表单 -->
-    <template v-else-if="nodeType === 'OSC'">
+    <!-- 输出节点专用表单 (示波器+频谱+录制) -->
+    <template v-else-if="nodeType === 'OUTPUT'">
       <v-select
         :model-value="boundOscilloscopeId"
         :items="availableOscilloscopes"
@@ -396,7 +427,6 @@
         density="compact"
         variant="outlined"
         clearable
-        :hint="boundOscilloscopeId ? '已绑定' : '未绑定'"
         persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
@@ -404,39 +434,66 @@
       />
 
       <v-divider class="my-3" />
-    </template>
 
-    <!-- 保存节点专用表单 -->
-    <template v-else-if="nodeType === 'SAVE'">
-      <v-text-field
-        v-model="form.params.filename"
-        label="文件名"
-        density="compact"
-        variant="outlined"
-        class="mb-3"
-        :readonly="isReadOnly"
-        :disabled="isReadOnly"
-      />
-      
       <v-select
-        v-model="form.params.format"
-        :items="[{ title: 'CSV', value: 'CSV' }, { title: 'MAT', value: 'MAT' }, { title: 'NPY', value: 'NPY' }]"
-        item-title="title"
-        item-value="value"
-        label="文件格式"
+        v-model="form.params.fftSize"
+        :items="[256, 512, 1024, 2048]"
+        label="频谱 FFT 大小"
         density="compact"
         variant="outlined"
+        class="mb-3"
+        clearable
+        hint="设置后启用频谱分析，示波器将同时计算频谱"
+        persistent-hint
+        :readonly="isReadOnly"
+        :disabled="isReadOnly"
+      />
+
+      <v-divider class="my-3" />
+
+      <v-switch
+        v-model="form.params.saveEnabled"
+        label="启用数据录制"
+        density="compact"
+        hide-details
         class="mb-3"
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
+
+      <template v-if="form.params.saveEnabled">
+        <v-text-field
+          v-model="form.params.filename"
+          label="文件名"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          hint="留空自动生成"
+          persistent-hint
+          :readonly="isReadOnly"
+          :disabled="isReadOnly"
+        />
+
+        <v-select
+          v-model="form.params.format"
+          :items="[{ title: 'CSV', value: 'CSV' }, { title: 'MAT', value: 'MAT' }, { title: 'NPY', value: 'NPY' }]"
+          item-title="title"
+          item-value="value"
+          label="文件格式"
+          density="compact"
+          variant="outlined"
+          class="mb-3"
+          :readonly="isReadOnly"
+          :disabled="isReadOnly"
+        />
+      </template>
     </template>
 
     <!-- Python函数节点专用表单 -->
     <template v-else-if="nodeType === 'CUSTOM_PYFUNC'">
       <v-select
         v-model="form.params.portMode"
-        :items="[{ title: '固定端口', value: 'fixed' }, { title: '动态端口', value: 'dynamic' }]"
+        :items="[{ title: '固定端口', value: 'fixed' }, { title: '自适应', value: 'adaptive' }]"
         item-title="title"
         item-value="value"
         label="端口模式"

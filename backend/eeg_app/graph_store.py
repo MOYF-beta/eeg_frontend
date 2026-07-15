@@ -48,13 +48,11 @@ BUILTIN_NODE_TYPES = {
     'AVERAGE',
     'SPLIT',
     'MERGE',
-    'OSC',
-    'SPECTRUM',
-    'SAVE',
+    'OUTPUT',
 }
 
 _NO_INPUT_NODE_TYPES = {'SOURCE', 'REPLAY'}
-_NO_OUTPUT_NODE_TYPES = {'OSC', 'SPECTRUM', 'SAVE'}
+_NO_OUTPUT_NODE_TYPES = {'OUTPUT'}
 
 
 def _safe_positive_int(raw: object, default: int = 1) -> int:
@@ -225,8 +223,11 @@ def set_graph(payload: GraphPayload, persist: bool = False) -> None:
         _PERSISTED_REVISION = _GRAPH_REVISION
 
 
-def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None) -> Dict:
-    """应用前端实时同步，支持基于 revision 的冲突检测。"""
+def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None, persist: bool = False) -> Dict:
+    """应用前端实时同步，支持基于 revision 的冲突检测。
+
+    persist=True 时同时落盘（自动保存模式）。
+    """
     current_revision = get_graph_revision()
     if base_revision is not None and int(base_revision) != current_revision:
         return {
@@ -238,7 +239,7 @@ def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None) ->
             'error': 'revision conflict',
         }
 
-    set_graph(payload, persist=False)
+    set_graph(payload, persist=persist)
     return {
         'ok': True,
         'conflict': False,
@@ -278,13 +279,12 @@ def get_control_revision() -> int:
 
 
 def set_frozen(value: bool) -> None:
-    """设置冻结状态并保存"""
+    """设置冻结状态（不落盘，持久化由 sync_graph 负责）。"""
     # 检查计算图是否正在运行
     if _RUNTIME_STATE['running']:
         raise RuntimeError('Cannot freeze/unfreeze graph while it is running')
     
     _GRAPH['frozen'] = value
-    _save_to_file(_GRAPH)
     bump_control_revision()
 
 

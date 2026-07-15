@@ -383,7 +383,7 @@ const maxDisplayFreq = computed(() => Math.min(MAX_FREQ_LIMIT, Math.floor(sample
 
 const sampleCount = computed(() => bufferFill.value);
 
-const availableOscNodes = computed(() => graphNodes.value.filter((n) => n.type === 'OSC' || n.type === 'SPECTRUM'));
+const availableOscNodes = computed(() => graphNodes.value.filter((n) => n.type === 'OUTPUT'));
 
 const channelItems = computed(() => {
   return Array.from({ length: channelCount.value }, (_, i) => ({

@@ -54,10 +54,13 @@ class ControlConsumer(AsyncWebsocketConsumer):
             handler = self._COMMAND_MAP.get(msg_type)
             if handler:
                 result = await handler(self, msg)
-                # 先发命令结果，再推状态
+                # 先发命令结果给当前客户端
                 if result:
                     await self.send(text_data=json.dumps(result))
-                if msg.get('pushState', True):
+                # 对影响全局状态的命令，广播给所有客户端
+                if msg_type in ('run', 'stop', 'freeze'):
+                    await self._broadcast_graph_change(reason=msg_type)
+                elif msg.get('pushState', True):
                     await self._push_state(reason=msg_type)
             elif msg_type == 'ping':
                 await self.send(text_data=json.dumps({'type': 'pong'}))
@@ -98,12 +101,15 @@ class ControlConsumer(AsyncWebsocketConsumer):
             return {'type': 'cmd_result', 'command': 'freeze', 'ok': False, 'error': str(exc)}
 
     async def cmd_sync_graph(self, msg) -> Dict:
-        """实时图同步（替代 HTTP POST /api/graph/sync/）。"""
+        """实时图同步 + 自动持久化（替代 HTTP POST /api/graph/sync/ + /api/graph/save/）。"""
         from .graph_store import apply_graph_sync
         payload = msg.get('graph') or {}
         base_rev = msg.get('baseRevision')
-        result = apply_graph_sync(payload, base_revision=base_rev)
-        # 广播图变更给所有控制客户端
+        result = apply_graph_sync(payload, base_revision=base_rev, persist=True)
+        if result.get('conflict'):
+            # 冲突时不广播，仅向当前客户端返回冲突详情 + 权威图
+            return {'type': 'cmd_result', 'command': 'sync_graph', **result}
+        # 成功时广播图变更给所有控制客户端
         await self._broadcast_graph_change(reason='synced')
         return {'type': 'cmd_result', 'command': 'sync_graph', **result}
 
@@ -170,7 +176,7 @@ class ControlConsumer(AsyncWebsocketConsumer):
         for node in nodes:
             nt = str(node.get('type') or '').upper()
             params = node.get('params') or {}
-            if nt == 'SAVE' or (nt == 'OSC' and bool(params.get('saveEnabled'))):
+            if nt == 'OUTPUT' and bool(params.get('saveEnabled')):
                 save_node_ids.append(node.get('id'))
         if action == 'stop':
             for nid in save_node_ids:

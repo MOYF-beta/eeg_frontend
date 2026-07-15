@@ -41,9 +41,7 @@ const typeConfig: Record<string, { name: string; icon: string; bg: string; color
   AVERAGE: { name: '平均器', icon: 'AVG', bg: '#F3E5F5', color: '#6A1B9A', desc: '逐通道平均' },
   SPLIT: { name: '分离器', icon: 'SPT', bg: '#FFFDE7', color: '#FBC02D', desc: '通道分离' },
   MERGE: { name: '合并器', icon: 'MRG', bg: '#FFF3E0', color: '#F57C00', desc: '通道合并' },
-  OSC: { name: '示波器', icon: 'OSC', bg: '#E0F2F1', color: '#00796B', desc: '波形显示' },
-  SPECTRUM: { name: '频谱', icon: 'FFT', bg: '#E8EAF6', color: '#303F9F', desc: '频谱显示' },
-  SAVE: { name: '保存', icon: 'SAV', bg: '#FCE4EC', color: '#C2185B', desc: '数据保存' },
+  OUTPUT: { name: '显示与录制', icon: 'OUT', bg: '#E0F2F1', color: '#00796B', desc: '显示与录制' },
 };
 
 const config = computed(() => typeConfig[props.data.type || 'SOURCE']);
@@ -74,9 +72,8 @@ const description = computed(() => config.value?.desc || '');
 .node-card.sum { border-color: #7B1FA2; }
 .node-card.split { border-color: #FBC02D; }
 .node-card.merge { border-color: #F57C00; }
-.node-card.osc { border-color: #00796B; }
-.node-card.spectrum { border-color: #303F9F; }
-.node-card.save { border-color: #C2185B; }
+.node-card.output { border-color: #00796B; }
+.node-card.average { border-color: #6A1B9A; }
 
 .node-header {
   display: flex;

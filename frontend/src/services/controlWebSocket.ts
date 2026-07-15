@@ -36,6 +36,7 @@ export interface ControlState {
     frozen: boolean;
   };
   devices: DeviceStatusInfo[];
+  reason?: string;
 }
 
 export interface CmdResult {
@@ -78,7 +79,8 @@ class ControlWebSocket {
   }
 
   private get url(): string {
-    return `ws://${window.location.hostname}:8000/ws/control/`;
+    const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return `${proto}//${window.location.host}/ws/control/`;
   }
 
   connect(): void {
@@ -106,6 +108,7 @@ class ControlWebSocket {
             graph: msg.graph,
             runtime: msg.runtime,
             devices: msg.devices || [],
+            reason: msg.reason,
           };
           this.stateListeners.forEach((cb) => cb(this.lastState!));
         } else if (msg.type === 'cmd_result') {

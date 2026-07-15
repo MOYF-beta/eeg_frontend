@@ -199,9 +199,7 @@ const typeInfo: Record<string, { name: string; icon: string; color: string }> = 
   SUM: { name: '求和器', icon: 'mdi-plus-circle', color: 'purple' },
   SPLIT: { name: '分离器', icon: 'mdi-call-split', color: 'warning' },
   MERGE: { name: '合并器', icon: 'mdi-call-merge', color: 'orange' },
-  OSC: { name: '示波器', icon: 'mdi-chart-line', color: 'teal' },
-  SPECTRUM: { name: '频谱', icon: 'mdi-chart-bar', color: 'indigo' },
-  SAVE: { name: '保存', icon: 'mdi-content-save', color: 'pink' },
+  OUTPUT: { name: '显示与录制', icon: 'mdi-chart-line', color: 'teal' },
   CUSTOM_PYFUNC: { name: 'Python函数', icon: 'mdi-language-python', color: 'deep-purple' },
   CUSTOM_CONV: { name: '卷积节点', icon: 'mdi-waveform', color: 'cyan-darken-2' },
 };
@@ -347,7 +345,7 @@ function resolveNodeOutputChannels(nodeId: string, sourcePort?: string, visited 
     return Array.from({ length: channelCount }, (_, i) => `CH${i + 1}`);
   }
 
-  if (node.type === 'FILTER' || node.type === 'OSC' || node.type === 'SPECTRUM' || node.type === 'SAVE') {
+  if (node.type === 'FILTER' || node.type === 'OUTPUT') {
     const inEdge = getIncomingEdge(node.id);
     if (!inEdge) return [];
     return resolveNodeOutputChannels(inEdge.source, inEdge.sourcePort, visited);
@@ -422,7 +420,26 @@ function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
     params.channels = Math.max(1, Number(params.channels || 8));
   }
 
-  if (type === 'OSC') {
+  if (type === 'FILTER') {
+    // 反向映射：后端键 type/cutoff → 前端表单键 filterType/cutoffFreq
+    // 如果 filterType 不存在但 type 存在，则从 type 同步
+    if (params.filterType === undefined && params.type !== undefined) {
+      params.filterType = String(params.type);
+    }
+    if (params.cutoffFreq === undefined && params.cutoff !== undefined) {
+      params.cutoffFreq = Number(params.cutoff);
+    }
+    // 确保默认值
+    params.filterType = String(params.filterType || 'lowpass');
+    params.cutoffFreq = Number(params.cutoffFreq ?? 50);
+    params.order = Math.max(1, Number(params.order || 4));
+  }
+
+  if (type === 'OUTPUT') {
+    params.fftSize = Number(params.fftSize || 512);
+    if (![256, 512, 1024, 2048].includes(params.fftSize)) {
+      params.fftSize = 512;
+    }
     params.saveEnabled = Boolean(params.saveEnabled || false);
     params.filename = String(params.filename || '');
     params.format = String(params.format || 'CSV');
@@ -911,18 +928,15 @@ const save = async () => {
     form.value.params.deviceId = form.value.params.sourceMode === 'replay' ? null : selectedDeviceId.value;
   }
   
-  // 保存示波器通道选择
-  if (nodeType.value === 'OSC') {
-    form.value.params.selectedChannels = availableChannels.value.map((_, i) => i);
-    form.value.params.availableChannels = availableChannels.value;
+  // 保存输出节点配置
+  if (nodeType.value === 'OUTPUT') {
+    form.value.params.fftSize = Number(form.value.params.fftSize || 512);
+    if (![256, 512, 1024, 2048].includes(form.value.params.fftSize)) {
+      form.value.params.fftSize = 512;
+    }
     form.value.params.saveEnabled = Boolean(form.value.params.saveEnabled || false);
     form.value.params.filename = String(form.value.params.filename || '');
     form.value.params.format = String(form.value.params.format || 'CSV');
-  }
-
-  if (nodeType.value === 'SPECTRUM') {
-    form.value.params.selectedChannels = selectedChannels.value;
-    form.value.params.availableChannels = availableChannels.value;
   }
 
   if (nodeType.value === 'CUSTOM_PYFUNC') {
@@ -954,8 +968,8 @@ const save = async () => {
     deviceId: nodeType.value === 'SOURCE' ? selectedDeviceId.value : undefined,
   });
   
-  // 处理示波器绑定
-  if (nodeType.value === 'OSC' && props.nodeData) {
+  // 处理输出节点绑定（示波器）
+  if (nodeType.value === 'OUTPUT' && props.nodeData) {
     emit('bindOscilloscope', {
       nodeId: props.nodeData.id,
       oscId: boundOscilloscopeId.value,

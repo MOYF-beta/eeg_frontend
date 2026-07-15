@@ -52,7 +52,7 @@ test.describe('真实设备链路调试', () => {
         },
         {
           id: 'debug-osc-1',
-          type: 'OSC',
+          type: 'OUTPUT',
           name: '调试示波器',
           x: 420,
           y: 120,
@@ -84,7 +84,7 @@ test.describe('真实设备链路调试', () => {
     expect(runResp.ok()).toBeTruthy();
 
     // 4) 打开示波器页面并绑定调试节点
-    await page.goto('/oscilloscope?_t=real-debug');
+    await page.goto('/visualization?_t=real-debug');
     await page.waitForLoadState('networkidle');
 
     // 打开信号源选择对话框

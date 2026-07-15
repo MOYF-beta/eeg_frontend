@@ -33,8 +33,10 @@ interface WsConfig {
   heartbeatInterval: number;
 }
 
+const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+
 const defaultConfig: WsConfig = {
-  url: `ws://${window.location.hostname}:8000/ws/eeg/`,
+  url: `${wsProto}//${window.location.host}/ws/eeg/`,
   reconnectInterval: 3000,
   maxReconnectAttempts: 5,
   heartbeatInterval: 30000,

@@ -58,7 +58,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
     def _extract_fft_size(nodes):
         valid_sizes = {256, 512, 1024, 2048}
         for node in nodes:
-            if str(node.get('type')).upper() != 'SPECTRUM':
+            if str(node.get('type')).upper() != 'OUTPUT':
                 continue
             params = node.get('params', {}) or {}
             raw = params.get('fftSize', params.get('fft_size', 512))
@@ -128,13 +128,13 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             }
             for n in nodes
             if (
-                str(n.get('type')).upper() in {'SAVE', 'REPLAY'}
+                str(n.get('type')).upper() in {'REPLAY'}
                 or (
                     str(n.get('type')).upper() == 'SOURCE'
                     and str((n.get('params') or {}).get('sourceMode') or 'live').lower() == 'replay'
                 )
                 or (
-                    str(n.get('type')).upper() in {'OSC', 'SPECTRUM'}
+                    str(n.get('type')).upper() == 'OUTPUT'
                     and bool((n.get('params') or {}).get('saveEnabled', False))
                 )
             )
@@ -163,7 +163,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             if not node_id:
                 continue
 
-            if node_type == 'SAVE' or (node_type == 'OSC' and bool(params.get('saveEnabled', False))):
+            if node_type == 'OUTPUT' and bool(params.get('saveEnabled', False)):
                 filename = params.get('filename') or params.get('filePath')
                 format_type = str(params.get('format', 'CSV')).upper()
                 result = start_recording(node_id=node_id, filename=filename, format=format_type)
@@ -298,7 +298,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             subscribed_output_nodes = {
                 node_id
                 for node_id in self.subscribed_nodes
-                if node_type_map.get(node_id) in {'OSC', 'SPECTRUM'}
+                if node_type_map.get(node_id) == 'OUTPUT'
             }
             save_nodes = set(self._save_nodes)
 
@@ -327,7 +327,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 self._sample_rates[node_id] = sample_rate
                 self._batch_first_utc.setdefault(node_id, utc_ms)
 
-                if node_type_map.get(node_id) in {'SPECTRUM', 'OSC'}:
+                if node_type_map.get(node_id) == 'OUTPUT':
                     self._ensure_spectrum_buffers(node_id, len(channels))
                     for ch_idx, val in enumerate(channels):
                         self._spectrum_buffers_by_node[node_id][ch_idx].append(float(val))
@@ -362,7 +362,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 if len(samples) <= 2:
                     logger.debug(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
 
-                if node_type in {'SPECTRUM', 'OSC'}:
+                if node_type == 'OUTPUT':
                     bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
                     if bundle is not None:
                         payload.update(bundle)

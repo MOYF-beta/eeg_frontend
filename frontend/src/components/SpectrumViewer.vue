@@ -195,7 +195,7 @@ const samples: number[][] = Array.from({ length: channelCount }, () => []);
 // 计算属性
 const availableSpectrumNodes = computed(() => {
   // 包含SPECTRUM节点和OSC节点都可以作为频谱数据源
-  return graphNodes.value.filter(n => n.type === 'SPECTRUM' || n.type === 'OSC');
+  return graphNodes.value.filter(n => n.type === 'OUTPUT');
 });
 
 const targetNode = computed(() => {

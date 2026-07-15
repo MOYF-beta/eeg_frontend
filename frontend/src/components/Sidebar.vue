@@ -1,9 +1,9 @@
 <template>
   <v-navigation-drawer
     v-model="drawer"
-    :rail="rail"
+    :rail="true"
     :permanent="true"
-    :width="sidebarWidth"
+    :width="56"
     data-testid="sidebar-drawer"
     class="sidebar"
   >
@@ -14,131 +14,22 @@
         :key="item.path"
         :to="item.path"
         :active="$route.path === item.path"
-        :prepend-icon="item.icon"
-        :title="rail ? '' : item.title"
+        title=""
         link
         class="nav-item"
-        @click="handleNavClick"
       >
-        <template v-slot:prepend v-if="rail">
+        <template #prepend>
           <v-icon :icon="item.icon" />
         </template>
       </v-list-item>
     </v-list>
 
-
-
-    <!-- 计算图运行控制区域 -->
-    <div class="graph-controls" :class="{ 'graph-controls-collapsed': rail }">
+    <!-- 运行控制区域 -->
+    <div class="graph-controls">
       <v-divider class="my-2" />
-      
-      <!-- 状态提示 -->
-      <div v-if="!rail" class="px-3 py-2">
-        <v-chip size="small" :color="isRunning ? 'warning' : (frozen ? 'info' : 'default')" class="mb-2">
-          <v-icon size="small" class="mr-1">
-            {{ isRunning ? 'mdi-play' : (frozen ? 'mdi-lock' : 'mdi-pencil') }}
-          </v-icon>
-          {{ statusDescription }}
-        </v-chip>
-      </div>
-      
-      <!-- 展开态运行控制按钮 -->
-      <div v-if="!rail" class="px-3 py-2" data-testid="sidebar-expanded-controls">
-        
-        <!-- 运行按钮组 -->
-        <div class="d-flex flex-column ga-2">
-          <v-btn
-            size="small"
-            color="success"
-            @click="handleRunClick('live')"
-            :disabled="!canRunGraph"
-            :title="!canRunGraph ? '计算图正在运行中' : 'Live运行计算图'"
-            data-testid="sidebar-live-run-btn"
-            block
-          >
-            <v-icon left size="small" class="mr-1">mdi-play</v-icon>
-            <span v-if="!rail">Live运行</span>
-          </v-btn>
-          <v-btn
-            size="small"
-            color="secondary"
-            @click="handleRunClick('offline')"
-            :disabled="!canRunGraph"
-            :title="!canRunGraph ? '计算图正在运行中' : '离线运行计算图'"
-            block
-          >
-            <v-icon left size="small" class="mr-1">mdi-file-sync</v-icon>
-            <span v-if="!rail">离线运行</span>
-          </v-btn>
-          <v-btn
-            size="small"
-            color="error"
-            @click="stopRun"
-            :disabled="!isRunning"
-            :title="!isRunning ? '计算图未运行' : '停止运行计算图'"
-            data-testid="sidebar-stop-run-btn"
-            block
-          >
-            <v-icon left size="small" class="mr-1">mdi-stop</v-icon>
-            <span v-if="!rail">停止</span>
-          </v-btn>
 
-          <!-- 录制按钮 -->
-          <v-btn
-            size="small"
-            :color="isRecording ? 'red' : 'primary'"
-            @click="toggleRecording"
-            :disabled="!isRunning"
-            :title="!isRunning ? '计算图未运行，无法录制' : (isRecording ? '停止录制' : '开始录制所有输出节点')"
-            block
-            :variant="isRecording ? 'flat' : 'tonal'"
-          >
-            <v-icon left size="small" class="mr-1">{{ isRecording ? 'mdi-stop-circle' : 'mdi-record-circle' }}</v-icon>
-            <span v-if="!rail">{{ isRecording ? '停止录制' : '录制' }}</span>
-          </v-btn>
-        </div>
-        
-        <!-- 运行状态提示 -->
-        <div v-if="isRunning && !rail" class="mt-2">
-          <v-chip size="small" color="success" class="mb-1">
-            <v-icon size="small" class="mr-1">mdi-check-circle</v-icon>
-            {{ runtimeMode === 'offline' ? '离线运行中' : 'Live运行中' }}
-          </v-chip>
-          
-          <!-- 离线进度条 -->
-          <div v-if="isRunning && runtimeMode === 'offline'" class="mt-1">
-            <div class="d-flex justify-space-between text-caption mb-1">
-              <span>离线处理进度</span>
-              <span>{{ offlineProgress.toFixed(1) }}%</span>
-            </div>
-            <v-progress-linear :model-value="offlineProgress" color="secondary" height="8" rounded />
-          </div>
-          
-          <!-- 延迟和非实时提示 -->
-          <div v-if="processingDelayMs > 0 || nonRealtime" class="mt-1">
-            <v-chip v-if="processingDelayMs > 0" size="small" :color="nonRealtime ? 'warning' : 'info'" class="mr-1 mb-1">
-              延迟 {{ processingDelayMs }}ms
-            </v-chip>
-            <v-chip v-if="nonRealtime" size="small" color="warning" class="mb-1">
-              非实时
-            </v-chip>
-          </div>
-        </div>
-        
-        <!-- 运行时警告 -->
-        <v-alert
-          v-if="runtimeWarning && !rail"
-          type="warning"
-          density="compact"
-          variant="tonal"
-          class="mt-2"
-        >
-          {{ runtimeWarning }}
-        </v-alert>
-      </div>
-
-      <!-- 折叠态控制按钮 -->
-      <div v-else class="graph-controls-collapsed-buttons">
+      <!-- 控制按钮 -->
+      <div class="graph-controls-buttons">
         <v-tooltip location="right">
           <template #activator="{ props: tooltipProps }">
             <v-list-item
@@ -175,31 +66,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, watch, ref } from 'vue';
-import { useRoute } from 'vue-router';
-import { useSidebar } from '../composables/useSidebar';
+import { ref } from 'vue';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
-
-const $route = useRoute();
-const {
-  sidebarState,
-  toggleSidebar,
-  expandSidebar,
-  collapseSidebar,
-  isMobile
-} = useSidebar();
 
 // 从graphRuntimeStore获取状态
 const {
   isRunning,
-  runtimeMode,
-  frozen,
-  offlineProgress,
-  processingDelayMs,
-  nonRealtime,
-  runtimeWarning,
   canRunGraph,
-  statusDescription,
   runByMode,
   stopRun
 } = graphRuntimeStore;
@@ -214,22 +87,8 @@ const navItems = [
   { title: '开发目录', path: '/dev', icon: 'mdi-folder-wrench' },
 ];
 
-// 计算侧边栏属性
-const drawer = computed(() => true); // 始终显示
-const rail = computed(() => sidebarState.value.isRail);
-const sidebarWidth = computed(() => sidebarState.value.width);
-
-// 切换折叠状态
-const toggleRail = () => {
-  toggleSidebar();
-};
-
-// 点击导航项时，在移动设备上自动折叠侧边栏
-const handleNavClick = () => {
-  if (isMobile.value) {
-    collapseSidebar();
-  }
-};
+// 始终显示
+const drawer = ref(true);
 
 // 运行按钮点击处理
 async function handleRunClick(mode: 'live' | 'offline') {
@@ -288,41 +147,16 @@ onUnmounted(() => {
   transition: width 0.3s ease;
 }
 
-.sidebar-header {
-  min-height: 64px;
-  cursor: pointer;
-}
-
 .nav-item {
   min-height: 48px;
 }
 
-.toggle-button {
-  border-top: 1px solid rgba(0, 0, 0, 0.12);
-  cursor: pointer;
-}
-
-/* 冻结开关容器 */
-.freeze-switch-container {
-  transition: all 0.3s ease;
-}
-
-.freeze-switch {
-  min-width: 0;
-}
-
 /* 运行控制区域 */
 .graph-controls {
-  transition: all 0.3s ease;
   overflow: hidden;
 }
 
-.graph-controls-collapsed {
-  opacity: 1;
-  height: auto;
-}
-
-/* 悬停效果（仅背景色变化，不展开） */
+/* 悬停效果 */
 .nav-item:hover {
   background-color: rgba(0, 0, 0, 0.04);
 }
@@ -331,16 +165,5 @@ onUnmounted(() => {
 .nav-item.v-list-item--active {
   background-color: rgba(var(--v-theme-primary), 0.08);
   color: rgb(var(--v-theme-primary));
-}
-
-/* 响应式设计 */
-@media (max-width: 960px) {
-  .sidebar {
-    width: 56px !important;
-  }
-  
-  .sidebar:not(.v-navigation-drawer--rail) {
-    width: 256px !important;
-  }
 }
 </style>

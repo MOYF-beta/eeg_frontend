@@ -44,7 +44,7 @@ class GraphSyncWebSocketProxy {
     this.unsubState = controlWebSocket.onState((cs) => {
       const msg: GraphSyncMessage = {
         graph: cs.graph,
-        reason: 'synced',
+        reason: cs.reason || 'synced',
         timestamp: Date.now(),
       };
       this.listeners.onGraph.forEach((cb) => cb(msg));

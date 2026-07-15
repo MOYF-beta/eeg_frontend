@@ -373,7 +373,7 @@ const wsStatus = ref<'disconnected' | 'connecting' | 'connected' | 'error'>('dis
 
 // 计算属性
 const availableOscNodes = computed(() => {
-  return graphNodes.value.filter(n => n.type === 'OSC');
+  return graphNodes.value.filter(n => n.type === 'OUTPUT');
 });
 
 const targetNode = computed(() => {

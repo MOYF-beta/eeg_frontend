@@ -15,7 +15,7 @@ test.describe('计算图主导工作台', () => {
     await page.waitForTimeout(1000);
     await page.screenshot({ path: 'e2e/screenshots/10-graph-led-device-set.png', fullPage: true });
 
-    await page.click('button:has-text("加载Mock")');
+    // 从后端加载计算图
     await page.waitForTimeout(1200);
 
     await page.click('button[title="固定到悬浮面板"]');

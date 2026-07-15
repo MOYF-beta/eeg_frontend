@@ -448,11 +448,11 @@ class SessionStore {
       }
     });
 
-    // 检查OSC节点是否绑定示波器（改为警告，不是错误）
-    const oscNodes = this.state.graph.nodes.filter((n) => n.type === 'OSC');
+    // 检查输出节点是否绑定示波器（改为警告，不是错误）
+    const oscNodes = this.state.graph.nodes.filter((n) => n.type === 'OUTPUT');
     oscNodes.forEach((node) => {
       if (!this.state.mappings.outputs[node.id]) {
-        warnings.push(`示波器节点 "${node.name}" 未绑定到显示实例，冻结后可在可视化页面绑定`);
+        warnings.push(`输出节点 "${node.name}" 未绑定到显示实例，冻结后可在可视化页面绑定`);
       }
     });
 

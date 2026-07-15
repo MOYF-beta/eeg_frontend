@@ -156,7 +156,8 @@
 import { computed, onMounted, onUnmounted, ref, watch, nextTick } from 'vue';
 import * as echarts from 'echarts';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
-import { fetchGraph, syncGraph } from '../services/graph';
+import { fetchGraph } from '../services/graph';
+import { controlWebSocket } from '../services/controlWebSocket';
 import { sessionStore } from '../services/sessionStore';
 import type { GraphNode } from '../services/graph';
 import TenTwentyChannelDialog from './TenTwentyChannelDialog.vue';
@@ -238,7 +239,7 @@ const lastPhaseSpectra = ref<Map<string, number[]>>(new Map());
 const hasElectrodeMap = computed(() => electrodeMap.value.size > 0);
 
 const availableSources = computed(() =>
-  graphNodes.value.filter((n) => n.type === 'OSC' || n.type === 'SPECTRUM')
+  graphNodes.value.filter((n) => n.type === 'OUTPUT')
 );
 
 const targetNode = computed(() => {
@@ -813,7 +814,7 @@ async function onChannelConfigConfirm(result: TenTwentyDialogResult) {
       newNames[m.channelIndex] = `${result.subjectId}@${m.electrode}`;
     }
 
-    // 获取完整图、更新节点、同步
+    // 获取完整图、更新节点、通过 WebSocket 同步
     const graph = await fetchGraph();
     const nodeToUpdate = graph.nodes?.find(n => n.id === selectedNodeId.value);
     if (nodeToUpdate) {
@@ -821,7 +822,7 @@ async function onChannelConfigConfirm(result: TenTwentyDialogResult) {
         ...nodeToUpdate.params,
         channelNames: newNames,
       };
-      await syncGraph(graph);
+      controlWebSocket.syncGraph(graph);
     }
   } catch (err) {
     console.error('[TenTwentyTopoMap] Failed to sync graph node channels:', err);

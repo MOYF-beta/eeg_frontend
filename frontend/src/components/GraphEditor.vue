@@ -14,20 +14,9 @@
 
         <v-chip v-if="hasUnsavedChanges" size="small" color="warning" variant="tonal">
           <v-icon size="small" class="mr-1">mdi-content-save-alert</v-icon>
-          有未保存更改
+          同步中...
         </v-chip>
 
-        <v-btn
-          size="small"
-          color="primary"
-          variant="flat"
-          @click="save"
-          :disabled="!canEditGraphLocal || !hasUnsavedChanges"
-          :title="!canEditGraphLocal ? `当前状态不允许保存: ${statusDescription}` : (hasUnsavedChanges ? '保存到后端 (Ctrl+S)' : '当前无未保存更改')"
-        >
-          保存
-        </v-btn>
-        
         <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
         <v-btn 
           size="small" 
@@ -37,15 +26,6 @@
           :title="!canEditGraphLocal ? `当前状态不允许加载计算图: ${statusDescription}` : '从文件加载计算图'"
         >
           加载
-        </v-btn>
-        <v-btn 
-          size="small" 
-          color="secondary" 
-          @click="loadMockData"
-          :disabled="!canEditGraphLocal"
-          :title="!canEditGraphLocal ? `当前状态不允许加载Mock数据: ${statusDescription}` : '加载Mock数据'"
-        >
-          加载Mock
         </v-btn>
         <v-btn 
           size="small" 
@@ -394,7 +374,7 @@
           </v-window-item>
           <v-window-item value="preview">
             <Oscilloscope
-              v-if="editingNode && editingNode.type === 'OSC'"
+              v-if="editingNode && editingNode.type === 'OUTPUT'"
               :initial-node-id="editingNode.id"
             />
             <v-alert v-else type="info" variant="tonal">当前节点暂无预览视图</v-alert>
@@ -489,8 +469,6 @@ import { onBeforeRouteLeave } from 'vue-router';
 import { Graph, Snapline } from '@antv/x6';
 import {
   fetchGraph,
-  syncGraph,
-  persistGraph,
   type GraphNode,
   type GraphNodeType,
   type GraphPayload,
@@ -501,6 +479,7 @@ import { graphRuntime, type EegPacket } from '../services/runtime';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
+import { controlWebSocket } from '../services/controlWebSocket';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
 import Oscilloscope from './Oscilloscope.vue';
 
@@ -588,22 +567,20 @@ function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
   if (realtimeSyncTimer) {
     clearTimeout(realtimeSyncTimer);
   }
-  realtimeSyncTimer = window.setTimeout(async () => {
+  realtimeSyncTimer = window.setTimeout(() => {
     if (realtimeSyncInFlight.value) return;
     realtimeSyncInFlight.value = true;
     try {
-      const result = await syncGraph(payload, currentRevision.value);
-      if (result.conflict && result.graph) {
-        applyPayloadToCanvas(result.graph, { fromBackend: true, reason: 'conflict' });
-        currentRevision.value = Number(result.revision || currentRevision.value);
-        persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
-        return;
-      }
-      currentRevision.value = Number(result.revision || currentRevision.value);
-      persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
+      // 通过 WebSocket 发送，后端 cmd_sync_graph 自动持久化
+      // 冲突结果通过 onCmdResult 回调处理（applyPayloadToCanvas 回退到后端版本）
+      // 成功确认通过 onGraph reason='synced' 回调处理（更新 signature）
+      controlWebSocket.syncGraph(payload, currentRevision.value);
+      // 乐观更新：标记本地已同步（冲突时会被 onCmdResult 回滚）
       lastSyncedSignature.value = signature;
+      hasUnsavedChanges.value = false;
     } catch (err) {
       console.warn('[GraphEditor] Realtime sync failed:', err);
+      hasUnsavedChanges.value = true;
     } finally {
       realtimeSyncInFlight.value = false;
     }
@@ -1043,7 +1020,6 @@ function clearEdgeAnimation(edge: import('@antv/x6').Edge) {
 async function stopRunLocal() {
   try {
     graphRuntime.stop();
-    stopMockDataStream();
     
     // 停止边动画
     stopEdgeAnimations();
@@ -1059,13 +1035,20 @@ async function stopRunLocal() {
 // 存储 sessionStore 取消订阅函数
 let unsubscribeSessionStore: (() => void) | null = null;
 let unsubscribeGraphSync: (() => void) | null = null;
+let unsubscribeCmdResult: (() => void) | null = null;
 
 function onSaveHotkey(event: KeyboardEvent) {
+  // Ctrl+S — 阻止默认行为，同步已自动进行
   if (!(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() !== 's') return;
   event.preventDefault();
-  if (!canEditGraphLocal.value || !hasUnsavedChanges.value) return;
-  void save();
+  // 手动触发一次即时同步（跳过 debounce）
+  if (!canEditGraphLocal.value) return;
+  const current = buildPayload();
+  const signature = payloadSignature(current);
+  if (signature !== lastSyncedSignature.value) {
+    scheduleRealtimeSync(current, signature);
+  }
 }
 
 function onBeforeUnload(event: BeforeUnloadEvent) {
@@ -1220,17 +1203,13 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
   ],
   MERGE: [
     { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立增益', default: [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }] },
-    { key: 'strategy', label: '合并策略', type: 'select', options: ['interleave', 'concatenate'], hint: '数据合并方式', default: 'interleave' },
+    { key: 'strategy', label: '合并策略', type: 'select', options: ['interleave', 'concat'], hint: '数据合并方式', default: 'interleave' },
   ],
-  OSC: [
-    { key: 'timeWindow', label: '时间窗口', type: 'slider', min: 1, max: 15, hint: '秒', default: 5 },
-    { key: 'yScale', label: 'Y轴缩放', type: 'slider', min: 0.2, max: 5, step: 0.1, hint: '波形显示缩放', default: 1 },
-    { key: 'mode', label: '显示模式', type: 'select', options: ['scroll', 'scan'], hint: '滚动或扫描', default: 'scroll' },
-  ],
-  SAVE: [
-    { key: 'format', label: '保存格式', type: 'select', options: ['edf', 'csv', 'json'], hint: '文件格式', default: 'edf' },
-    { key: 'filePath', label: '保存路径', type: 'text', hint: '文件保存路径', default: './data/output.edf' },
-    { key: 'bufferSize', label: '缓冲区大小', type: 'number', hint: '样本数', default: 10000 },
+  OUTPUT: [
+    { key: 'fftSize', label: 'FFT大小', type: 'select', options: ['256', '512', '1024', '2048'], hint: '频谱分析精度', default: 512 },
+    { key: 'saveEnabled', label: '启用录制', type: 'boolean', hint: '是否保存数据到文件', default: false },
+    { key: 'filename', label: '文件名', type: 'text', hint: '录制文件名', default: '' },
+    { key: 'format', label: '文件格式', type: 'select', options: ['CSV', 'MAT', 'NPY'], hint: '录制文件格式', default: 'CSV' },
   ],
   CUSTOM_PYFUNC: [
     { key: 'portMode', label: '端口模式', type: 'select', options: ['fixed', 'adaptive'], hint: 'fixed=固定数量，adaptive=自适应', default: 'fixed' },
@@ -1257,8 +1236,7 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
   AVERAGE: { name: '平均器', color: '#6A1B9A', bg: '#F3E5F5', icon: 'AVG', hasInput: true, hasOutput: true },
   SPLIT: { name: '分离器', color: '#F9A825', bg: '#FFF8E1', icon: 'SPT', hasInput: true, hasOutput: true },
   MERGE: { name: '合并器', color: '#EF6C00', bg: '#FFF3E0', icon: 'MRG', hasInput: true, hasOutput: true },
-  OSC: { name: '示波器', color: '#00796B', bg: '#E0F2F1', icon: 'OSC', hasInput: true, hasOutput: false },
-  SAVE: { name: '保存', color: '#C2185B', bg: '#FCE4EC', icon: 'SAV', hasInput: true, hasOutput: false },
+  OUTPUT: { name: '显示与录制', color: '#00796B', bg: '#E0F2F1', icon: 'OUT', hasInput: true, hasOutput: false },
   CUSTOM_PYFUNC: { name: 'Python函数', color: '#5E35B1', bg: '#EDE7F6', icon: 'PY', hasInput: true, hasOutput: true },
   CUSTOM_CONV: { name: '卷积节点', color: '#00897B', bg: '#E0F2F1', icon: 'CNV', hasInput: true, hasOutput: true },
 };
@@ -1274,8 +1252,7 @@ const nodeMetaMap: Record<string, { name: string; icon: string; color: string }>
   AVERAGE: { name: '平均器', icon: 'mdi-format-vertical-align-center', color: 'purple' },
   SPLIT: { name: '分离器', icon: 'mdi-call-split', color: 'warning' },
   MERGE: { name: '合并器', icon: 'mdi-call-merge', color: 'orange' },
-  OSC: { name: '示波器', icon: 'mdi-chart-line', color: 'teal' },
-  SAVE: { name: '保存', icon: 'mdi-content-save', color: 'pink' },
+  OUTPUT: { name: '显示与录制', icon: 'mdi-chart-line', color: 'teal' },
   CUSTOM_PYFUNC: { name: 'Python函数', icon: 'mdi-language-python', color: 'deep-purple' },
   CUSTOM_CONV: { name: '卷积节点', icon: 'mdi-waveform', color: 'cyan-darken-2' },
 };
@@ -1297,7 +1274,7 @@ const processNodes = [
 ];
 
 const outputNodes = [
-  { type: 'OSC' as GraphNodeType, name: '示波器', icon: 'OSC', color: '#00796B', bg: '#E0F2F1' },
+  { type: 'OUTPUT' as GraphNodeType, name: '显示与录制', icon: 'OUT', color: '#00796B', bg: '#E0F2F1' },
 ];
 
 // 选择节点并在右侧边栏显示
@@ -1463,7 +1440,29 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
     }
   }
 
-  if (type === 'OSC') {
+  if (type === 'FILTER') {
+    // 前端表单使用 filterType/cutoffFreq，后端使用 type/cutoff
+    // filterType/cutoffFreq 优先（用户刚编辑的值），不存在时回退到 type/cutoff
+    if (normalized.filterType !== undefined) {
+      normalized.type = String(normalized.filterType);
+    }
+    if (normalized.cutoffFreq !== undefined) {
+      normalized.cutoff = Number(normalized.cutoffFreq);
+    }
+    // 确保默认值
+    normalized.type = String(normalized.type || 'lowpass');
+    normalized.cutoff = Number(normalized.cutoff ?? 50);
+    normalized.order = Math.max(1, Number(normalized.order || 4));
+    // 清理前端专用键
+    delete normalized.filterType;
+    delete normalized.cutoffFreq;
+  }
+
+  if (type === 'OUTPUT') {
+    normalized.fftSize = Number(normalized.fftSize || 512);
+    if (![256, 512, 1024, 2048].includes(normalized.fftSize)) {
+      normalized.fftSize = 512;
+    }
     normalized.saveEnabled = Boolean(normalized.saveEnabled || false);
     normalized.filename = String(normalized.filename || '');
     normalized.format = String(normalized.format || 'CSV');
@@ -2007,10 +2006,13 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       if (mode === 'factor') return `x${Math.max(1, Number(params['factor'] || 2))}`;
       return `→${Math.max(1, Number(params['targetRate'] || 1000))}Hz`;
     }
-    case 'OSC':
-      const timeWindow = params['timeWindow'] || 5;
-      const mode = params['mode'] || 'scroll';
-      return `${timeWindow}s ${mode}`;
+    case 'OUTPUT': {
+      const fft = params['fftSize']
+        ? `FFT${params['fftSize']} `
+        : '';
+      const save = params['saveEnabled'] ? '📝' : '';
+      return `${fft}${save}`.trim() || '显示';
+    }
     case 'SOURCE': {
       const sampleRate = params['sampleRate'] || 1000;
       const channels = params['channels'] || 8;
@@ -2018,9 +2020,6 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const portDesc = port ? ` ${port}` : '';
       return `${sampleRate}Hz ${channels}ch${portDesc}`;
     }
-    case 'SAVE':
-      const format = params['format'] || 'edf';
-      return `.${format}`;
     case 'SUM': {
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
       return `${inputs.length || 0}路输入`;
@@ -2355,46 +2354,6 @@ function clearSessionStorage() {
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
-async function save() {
-
-  if (!hasUnsavedChanges.value) {
-    return;
-  }
-  
-  // 检查计算图是否正在运行
-  if (isRunning.value) {
-    alert('计算图正在运行中，无法保存。请先停止运行再保存。');
-    return;
-  }
-  
-  try {
-    const payload = buildPayload();
-
-    // 保存语义为持久化，确保先把本地编辑推到后端权威图。
-    const syncResult = await syncGraph(payload, currentRevision.value);
-    if (syncResult.conflict && syncResult.graph) {
-      applyPayloadToCanvas(syncResult.graph, { fromBackend: true, reason: 'conflict' });
-      currentRevision.value = Number(syncResult.revision || currentRevision.value);
-      persistedRevision.value = Number(syncResult.persistedRevision || persistedRevision.value);
-      throw new Error('保存前同步发生冲突，已回退到后端最新版本，请确认后重试保存');
-    }
-    currentRevision.value = Number(syncResult.revision || currentRevision.value);
-
-    const persistResult = await persistGraph();
-    persistedRevision.value = Number(persistResult.persistedRevision || persistedRevision.value);
-
-    lastPersistedSignature.value = payloadSignature(payload);
-    lastSyncedSignature.value = payloadSignature(payload);
-    hasUnsavedChanges.value = false;
-    
-    // 保存状态到会话存储
-    saveStateToSessionStorage();
-  } catch (err) {
-    console.error('[GraphEditor] Failed to save graph:', err);
-    alert('保存失败: ' + (err as Error).message);
-  }
-}
-
 // 导出计算图为 JSON 文件
 function exportGraph() {
   const payload = buildPayload();
@@ -2568,57 +2527,6 @@ async function run(mode: 'live' | 'offline' = 'live') {
   });
 }
 
-// 模拟数据流（用于测试）
-let dataInterval: number | null = null;
-
-// 方波生成函数
-function squareWave(t: number, freq: number): number {
-  return Math.sign(Math.sin(2 * Math.PI * freq * t));
-}
-
-function startMockDataStream() {
-  if (dataInterval) clearInterval(dataInterval);
-
-  const startTime = Date.now() / 1000;
-  dataInterval = window.setInterval(() => {
-    if (!graphRuntime.state.isRunning) {
-      if (dataInterval) clearInterval(dataInterval);
-      return;
-    }
-
-    const t = Date.now() / 1000;
-    const elapsed = t - startTime;
-
-    // 生成方波测试数据 - 用于验证计算图处理流程
-    const channels = Array.from({ length: 8 }, (_, i) => {
-      // 基础方波 (5-10 Hz) - 易于观察处理效果
-      const freq = 5 + i * 0.5;
-      const squareSignal = squareWave(elapsed, freq) * 30;
-
-      // 高频干扰 (50-150 Hz)
-      const highFreq1 = 50 + i * 10;
-      const highFreq2 = 120 + i * 5;
-      const highFreqNoise = Math.sin(2 * Math.PI * highFreq1 * elapsed) * 20 +
-                            Math.sin(2 * Math.PI * highFreq2 * elapsed) * 15;
-
-      // 随机噪声
-      const randomNoise = (Math.random() - 0.5) * 10;
-
-      // 组合信号：方波 + 高频噪声 + 随机噪声
-      return squareSignal + highFreqNoise + randomNoise;
-    });
-
-    graphRuntime.emitPacket({ t, channels });
-  }, 10); // 100Hz 采样率，才能显示高频信号
-}
-
-function stopMockDataStream() {
-  if (dataInterval) {
-    clearInterval(dataInterval);
-    dataInterval = null;
-  }
-}
-
 function clear() {
   // 检查编辑权限
   if (!canEditGraph.value) {
@@ -2633,7 +2541,6 @@ function clear() {
   
   // 停止运行时
   graphRuntime.stop();
-  stopMockDataStream();
   stopRuntimeStatePolling();
   stopEdgeAnimations();
   setRuntimeState({
@@ -2649,57 +2556,6 @@ function clear() {
   
   // 清除会话存储
   clearSessionStorage();
-}
-
-async function loadMockData() {
-  // 检查编辑权限
-  if (!canEditGraph.value) {
-    alert(`当前状态不允许加载Mock数据: ${statusDescription.value}`);
-    return;
-  }
-  
-  const graph = graphRef.value;
-  if (!graph) return;
-
-  graph.clearCells();
-
-  const nodes = [
-    { type: 'SOURCE' as GraphNodeType, x: 50, y: 100, name: '脑电数据源' },
-    { type: 'FILTER' as GraphNodeType, x: 300, y: 100, name: '低通滤波器' },
-    { type: 'SPLIT' as GraphNodeType, x: 550, y: 100, name: '通道分离' },
-    { type: 'OSC' as GraphNodeType, x: 800, y: 100, name: '波形显示器' },
-  ];
-
-  const nodeIds: string[] = [];
-  nodes.forEach((n) => {
-    const node = addNode(n.type, n.x, n.y, n.name);
-    if (node) nodeIds.push(node.id);
-  });
-
-  // 创建边
-  if (nodeIds.length >= 4) {
-    graph.addEdge({
-      source: { cell: nodeIds[0], port: 'out' },
-      target: { cell: nodeIds[1], port: 'in' },
-      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-    });
-    graph.addEdge({
-      source: { cell: nodeIds[1], port: 'out' },
-      target: { cell: nodeIds[2], port: 'in' },
-      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-    });
-    graph.addEdge({
-      source: { cell: nodeIds[2], port: 'out-1' },
-      target: { cell: nodeIds[3], port: 'in' },
-      attrs: { line: { stroke: '#5F95FF', strokeWidth: 2, targetMarker: 'block' } },
-    });
-  }
-
-  updateAllEdgeLabels();
-  syncUnsavedState();
-  
-  // 保存状态到会话存储
-  saveStateToSessionStorage();
 }
 
 onMounted(async () => {
@@ -2970,10 +2826,10 @@ onMounted(async () => {
 
   // 订阅 sessionStore 变化，更新节点绑定状态显示
   unsubscribeSessionStore = sessionStore.subscribe((state) => {
-    // 当视图绑定变化时，更新所有 OSC 节点的标签
+    // 当视图绑定变化时，更新所有 OUTPUT 节点的标签
     graph.getNodes().forEach((node) => {
       const data = node.getData() as GraphNode;
-      if (data && data.type === 'OSC') {
+      if (data && data.type === 'OUTPUT') {
         const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
         node.attr('label/text', labelText);
       }
@@ -2987,7 +2843,18 @@ onMounted(async () => {
   
   // 初始加载完成后再连接 WebSocket，避免 initial 推送与 loadFromBackend 竞争导致 clearCells 双重重绘
   graphSyncWebSocket.connect();
-  
+
+  // 订阅命令结果，处理 sync_graph 冲突
+  unsubscribeCmdResult = controlWebSocket.onCmdResult((result) => {
+    if (result.command === 'sync_graph' && result.conflict && result.graph) {
+      console.warn('[GraphEditor] sync_graph conflict detected, reverting to backend graph');
+      applyPayloadToCanvas(result.graph as GraphPayload, { fromBackend: true, reason: 'conflict' });
+      currentRevision.value = Number(result.revision || currentRevision.value);
+      persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
+      hasUnsavedChanges.value = false;
+    }
+  });
+
   // 启动运行时状态轮询
   startRuntimeStatePolling();
 });
@@ -2996,7 +2863,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onSaveHotkey);
   window.removeEventListener('beforeunload', onBeforeUnload);
 
-  stopMockDataStream();
   stopRuntimeStatePolling();
   stopEdgeAnimations();
   
@@ -3007,6 +2873,7 @@ onUnmounted(() => {
   // 取消订阅
   unsubscribeSessionStore?.();
   unsubscribeGraphSync?.();
+  unsubscribeCmdResult?.();
   graphSyncWebSocket.disconnect();
   if (realtimeSyncTimer) {
     clearTimeout(realtimeSyncTimer);

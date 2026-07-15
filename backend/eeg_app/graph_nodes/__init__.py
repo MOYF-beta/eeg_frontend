@@ -5,13 +5,11 @@ from .filter_node import FilterNode
 from .downsample_node import DownsampleNode
 from .loader import DEFAULT_CUSTOM_NODE_PATH, load_custom_nodes
 from .merge_node import MergeNode
-from .osc_node import OscNode
+from .output_node import OutputNode
 from .passthrough_node import PassthroughNode
 from .registry import get_node_class, get_registered_node_types, register_node
 from .replay_node import ReplayNode
-from .save_node import SaveNode
 from .source_node import SourceNode
-from .spectrum_node import SpectrumNode
 from .split_node import SplitNode
 from .sum_node import SumNode
 from .upsample_node import UpsampleNode
@@ -28,9 +26,7 @@ def _register_builtin_nodes() -> None:
         AverageNode,
         SplitNode,
         MergeNode,
-        OscNode,
-        SpectrumNode,
-        SaveNode,
+        OutputNode,
         PassthroughNode,
     ):
         register_node(cls)

@@ -158,31 +158,31 @@ const spectrums = ref<ViewerItem[]>([]);
 const topoMaps = ref<ViewerItem[]>([]);
 
 // 计算属性
-const oscNodes = computed(() => graphNodes.value.filter(n => n.type === 'OSC'));
-const spectrumNodes = computed(() => graphNodes.value.filter(n => n.type === 'SPECTRUM'));
+const oscNodes = computed(() => graphNodes.value.filter(n => n.type === 'OUTPUT'));
+const spectrumNodes = computed(() => graphNodes.value.filter(n => n.type === 'OUTPUT'));
 const hasOscNodes = computed(() => oscNodes.value.length > 0);
 const hasSpectrumNodes = computed(() => spectrumNodes.value.length > 0);
 
-// 检查是否可以添加更多示波器（每个OSC节点对应一个）
+// 检查是否可以添加更多示波器（每个OUTPUT节点对应一个）
 const canAddOscilloscope = computed(() => {
   return oscNodes.value.length > oscilloscopes.value.length;
 });
 
 const canAddSpectrum = computed(() => {
-  // SPECTRUM节点或OSC节点都可以作为频谱数据源
-  const availableNodes = graphNodes.value.filter(n => n.type === 'SPECTRUM' || n.type === 'OSC');
+  // OUTPUT节点都可以作为频谱数据源
+  const availableNodes = graphNodes.value.filter(n => n.type === 'OUTPUT');
   return availableNodes.length > spectrums.value.length;
 });
 
 const canAddTopoMap = computed(() => {
-  // OSC 或 SPECTRUM 节点都可以作为 10-20 可视化的数据源
-  const availableNodes = graphNodes.value.filter(n => n.type === 'OSC' || n.type === 'SPECTRUM');
+  // OUTPUT节点都可以作为 10-20 可视化的数据源
+  const availableNodes = graphNodes.value.filter(n => n.type === 'OUTPUT');
   return availableNodes.length > topoMaps.value.length;
 });
 
 // 方法
 const addOscilloscope = () => {
-  // 找到未使用的OSC节点
+  // 找到未使用的OUTPUT节点
   const usedNodeIds = new Set(oscilloscopes.value.map(o => o.initialNodeId).filter(Boolean));
   const availableNode = oscNodes.value.find(n => !usedNodeIds.has(n.id));
   
@@ -193,10 +193,10 @@ const addOscilloscope = () => {
 };
 
 const addSpectrum = () => {
-  // 找到未使用的SPECTRUM或OSC节点
+  // 找到未使用的OUTPUT节点
   const usedNodeIds = new Set(spectrums.value.map(s => s.initialNodeId).filter(Boolean));
   const availableNodes = graphNodes.value.filter(n => 
-    (n.type === 'SPECTRUM' || n.type === 'OSC') && !usedNodeIds.has(n.id)
+    n.type === 'OUTPUT' && !usedNodeIds.has(n.id)
   );
   const availableNode = availableNodes[0];
   
@@ -217,7 +217,7 @@ const removeSpectrum = (index: number) => {
 const addTopoMap = () => {
   const usedNodeIds = new Set(topoMaps.value.map(t => t.initialNodeId).filter(Boolean));
   const availableNodes = graphNodes.value.filter(n =>
-    (n.type === 'OSC' || n.type === 'SPECTRUM') && !usedNodeIds.has(n.id)
+    n.type === 'OUTPUT' && !usedNodeIds.has(n.id)
   );
   const availableNode = availableNodes[0];
 

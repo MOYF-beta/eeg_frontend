@@ -8,22 +8,14 @@ from django.views.decorators.csrf import csrf_exempt
 
 from .graph_store import (
     get_graph,
-    run_graph,
-    stop_graph,
     get_runtime_state,
-    set_frozen,
-    set_graph,
-    validate_graph,
-    persist_graph,
     get_graph_revision,
     get_persisted_revision,
-    apply_graph_sync,
 )
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path, start_recording, stop_recording
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
 from .device_store import get_all_devices, create_device, update_device, delete_device
-from .graph_sync import broadcast_graph_state
 from .perf_monitor import get_perf_monitor
 
 
@@ -171,100 +163,16 @@ def replayable_files(request):
 
 @csrf_exempt
 def graph(request):
+    """GET /api/graph/ — 读取内存中的计算图（初始加载用）。
+
+    图的修改通过 WebSocket ws/control/ 的 sync_graph 命令进行。
+    """
     if request.method == 'GET':
         payload = dict(get_graph())
         payload['revision'] = get_graph_revision()
         payload['persistedRevision'] = get_persisted_revision()
         return JsonResponse(payload)
-
-    if request.method == 'POST':
-        try:
-            payload = json.loads(request.body or '{}')
-            errors = validate_graph(payload)
-            if errors:
-                return JsonResponse({'ok': False, 'errors': errors}, status=400)
-            
-            # 检查计算图是否正在运行
-            runtime_state = get_runtime_state()
-            if runtime_state.get('running'):
-                return JsonResponse({
-                    'ok': False, 
-                    'errors': ['Cannot save graph while it is running']
-                }, status=403)
-            
-            result = apply_graph_sync(payload, base_revision=payload.get('baseRevision'))
-            if result.get('conflict'):
-                return JsonResponse(result, status=409)
-            broadcast_graph_state(reason='synced')
-            return JsonResponse(result)
-        except json.JSONDecodeError:
-            return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
-        except RuntimeError as e:
-            return JsonResponse({'ok': False, 'errors': [str(e)]}, status=403)
-
-    return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
-
-
-@csrf_exempt
-def graph_sync(request):
-    if request.method != 'POST':
-        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
-
-    try:
-        payload = json.loads(request.body or '{}')
-    except json.JSONDecodeError:
-        return JsonResponse({'ok': False, 'errors': ['Invalid JSON']}, status=400)
-
-    errors = validate_graph(payload)
-    if errors:
-        return JsonResponse({'ok': False, 'errors': errors}, status=400)
-
-    try:
-        result = apply_graph_sync(payload, base_revision=payload.get('baseRevision'))
-        if result.get('conflict'):
-            return JsonResponse(result, status=409)
-        broadcast_graph_state(reason='synced')
-        return JsonResponse(result)
-    except RuntimeError as e:
-        return JsonResponse({'ok': False, 'errors': [str(e)]}, status=403)
-
-
-@csrf_exempt
-def graph_save(request):
-    if request.method != 'POST':
-        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
-    try:
-        result = persist_graph()
-        broadcast_graph_state(reason='persisted')
-        return JsonResponse({'ok': True, **result})
-    except Exception as e:
-        return JsonResponse({'ok': False, 'errors': [str(e)]}, status=500)
-
-
-@csrf_exempt
-def graph_freeze(request):
-    if request.method != 'POST':
-        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
-    payload = json.loads(request.body or '{}')
-    set_frozen(bool(payload.get('frozen', False)))
-    broadcast_graph_state(reason='freeze_changed')
-    return JsonResponse({'ok': True, 'frozen': get_graph().get('frozen', False)})
-
-
-@csrf_exempt
-def graph_run(request):
-    if request.method == 'POST':
-        payload = json.loads(request.body or '{}')
-        mode = payload.get('mode', 'live')
-        result = run_graph(mode=mode)
-        if result.get('status') == 'error':
-            return JsonResponse({'ok': False, 'error': result.get('error')}, status=400)
-        return JsonResponse({'ok': True, 'result': result})
-    if request.method == 'GET':
-        return JsonResponse({'ok': True, 'state': get_runtime_state()})
-    if request.method == 'DELETE':
-        return JsonResponse({'ok': True, 'result': stop_graph()})
-    return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+    return JsonResponse({'ok': False, 'error': 'Method not allowed. Use WebSocket ws/control/ sync_graph.'}, status=405)
 
 
 @csrf_exempt
@@ -335,8 +243,8 @@ def graph_record(request):
             node_id = node.get('id')
             if not node_id:
                 continue
-            # 录制所有输出节点 (OSC)
-            if node_type == 'OSC':
+            # 录制所有输出节点 (OUTPUT)
+            if node_type == 'OUTPUT':
                 params = node.get('params', {}) or {}
                 filename = params.get('filename')
                 result = start_recording(

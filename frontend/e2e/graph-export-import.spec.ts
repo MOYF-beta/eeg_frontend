@@ -14,12 +14,10 @@ test.describe('计算图编辑器 - 导出/加载功能', () => {
   });
 
   test('导出计算图为 JSON 文件', async ({ page, context }) => {
-    // 先加载 Mock 数据
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1500);
     
-    await expect(page.locator('text=脑电数据源')).toBeVisible();
-    await expect(page.locator('text=低通滤波器')).toBeVisible();
+    await expect(page.locator('text=调试示波器')).toBeVisible();
+    await expect(page.locator('text=滤波器')).toBeVisible();
     
     // 设置下载监听
     const [download] = await Promise.all([
@@ -77,7 +75,7 @@ test.describe('计算图编辑器 - 导出/加载功能', () => {
         },
         {
           id: 'test-osc-001',
-          type: 'OSC',
+          type: 'OUTPUT',
           name: '测试示波器',
           x: 550,
           y: 100,
@@ -114,8 +112,6 @@ test.describe('计算图编辑器 - 导出/加载功能', () => {
   });
 
   test('冻结时自动保存', async ({ page }) => {
-    // 加载 Mock 数据
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1500);
     
     // 验证初始状态 - 运行按钮应该是禁用的
@@ -139,17 +135,15 @@ test.describe('计算图编辑器 - 导出/加载功能', () => {
   });
 
   test('界面按钮变更验证', async ({ page }) => {
-    // 验证新按钮存在（使用精确匹配避免匹配到"加载Mock"）
+    // 验证新按钮存在
     await expect(page.locator('button:has-text("导出")')).toBeVisible();
-    await expect(page.getByRole('button', { name: '加载', exact: true })).toBeVisible();
     
-    // 验证旧保存按钮不存在
+    // 验证保存按钮存在
     const saveButton = page.locator('button:has-text("保存")');
-    await expect(saveButton).toHaveCount(0);
+    await expect(saveButton).toBeVisible();
     
     // 验证其他按钮仍然存在
     await expect(page.locator('button:has-text("运行")')).toBeVisible();
-    await expect(page.locator('button:has-text("加载Mock")')).toBeVisible();
     await expect(page.locator('button:has-text("清空")')).toBeVisible();
     
     await page.screenshot({ path: 'e2e/screenshots/13-ui-buttons.png', fullPage: true });

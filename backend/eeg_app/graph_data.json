@@ -1,15 +1,16 @@
 {
   "nodes": [
     {
-      "type": "OSC",
-      "name": "\u8c03\u8bd5\u793a\u6ce2\u5668",
+      "type": "OUTPUT",
+      "name": "调试示波器",
       "params": {
-        "timeWindow": 5,
-        "yScale": 1,
-        "mode": "scroll",
+        "fftSize": 512,
         "saveEnabled": false,
         "filename": "",
         "format": "CSV",
+        "timeWindow": 5,
+        "yScale": 1,
+        "mode": "scroll",
         "selectedChannels": [
           0,
           1,
@@ -33,23 +34,19 @@
       },
       "id": "debug-osc-1",
       "x": 510,
-      "y": 370,
-      "deviceId": null
+      "y": 370
     },
     {
       "type": "FILTER",
-      "name": "\u6ee4\u6ce2\u5668",
+      "name": "滤波器",
       "params": {
-        "type": "lowpass",
-        "cutoff": 50,
-        "order": 4,
-        "filterType": "lowpass",
-        "cutoffFreq": 25
+        "type": "highpass",
+        "cutoff": 60,
+        "order": 4
       },
       "id": "node-1777211905622-234",
       "x": 200,
-      "y": 370,
-      "deviceId": null
+      "y": 370
     },
     {
       "type": "SOURCE",
@@ -63,7 +60,6 @@
         "filePath": "",
         "loop": false
       },
-      "deviceId": "real--dev-ttyUSB0",
       "id": "node-1783600110189-463",
       "x": -12.66668701171875,
       "y": 231.66666412353516

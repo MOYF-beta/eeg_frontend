@@ -21,26 +21,23 @@ test.describe('计算图编辑器', () => {
   test('页面基本结构', async ({ page }) => {
     await expect(page.locator('text=计算图编辑器')).toBeVisible();
     await expect(page.locator('text=节点库')).toBeVisible();
-    await expect(page.locator('button:has-text("加载Mock")')).toBeVisible();
     await expect(page.locator('button:has-text("保存")')).toBeVisible();
     await expect(page.locator('button:has-text("运行")')).toBeVisible();
     
     await page.screenshot({ path: 'e2e/screenshots/graph-editor-basic.png' });
   });
 
-  test('加载Mock数据', async ({ page }) => {
-    await page.click('button:has-text("加载Mock")');
+  test('加载计算图', async ({ page }) => {
     await page.waitForTimeout(1500);
     
-    // 验证节点显示
-    await expect(page.locator('text=脑电数据源')).toBeVisible();
-    await expect(page.locator('text=低通滤波器')).toBeVisible();
+    // 验证节点显示（从后端加载）
+    await expect(page.locator('text=调试示波器')).toBeVisible();
+    await expect(page.locator('text=滤波器')).toBeVisible();
     
     await page.screenshot({ path: 'e2e/screenshots/graph-mock-loaded.png' });
   });
 
   test('冻结开关功能', async ({ page }) => {
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     
     // 初始状态：运行按钮禁用
@@ -64,7 +61,6 @@ test.describe('计算图编辑器', () => {
   });
 
   test('保存计算图', async ({ page }) => {
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     
     // 冻结
@@ -86,11 +82,10 @@ test.describe('计算图编辑器', () => {
   });
 
   test('双击编辑节点', async ({ page }) => {
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     
     // 双击节点
-    await page.dblclick('text=低通滤波器');
+    await page.dblclick('text=滤波器');
     await page.waitForTimeout(500);
     
     // 验证编辑对话框
@@ -107,7 +102,6 @@ test.describe('示波器', () => {
     // 先设置计算图
     await page.goto('/cpgraph?_t=test');
     await page.waitForLoadState('networkidle');
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     await page.click('[role="switch"]'); // 冻结
     await page.waitForTimeout(1000);
@@ -125,13 +119,13 @@ test.describe('示波器', () => {
     await page.screenshot({ path: 'e2e/screenshots/osc-basic.png' });
   });
 
-  test('绑定OSC节点', async ({ page }) => {
+  test('绑定输出节点', async ({ page }) => {
     // 打开选择下拉框
     await page.click('.v-select');
     await page.waitForTimeout(500);
     
-    // 选择OSC节点
-    await page.click('text=波形显示器');
+    // 选择输出节点
+    await page.click('text=调试示波器');
     await page.waitForTimeout(2000);
     
     // 验证状态变为接收中
@@ -148,7 +142,7 @@ test.describe('示波器', () => {
     // 先绑定
     await page.click('.v-select');
     await page.waitForTimeout(500);
-    await page.click('text=波形显示器');
+    await page.click('text=调试示波器');
     await page.waitForTimeout(2000);
     
     // 验证已绑定
@@ -165,10 +159,10 @@ test.describe('示波器', () => {
   });
 
   test('性能 - 数据不无限增长', async ({ page }) => {
-    // 绑定OSC节点
+    // 绑定输出节点
     await page.click('.v-select');
     await page.waitForTimeout(500);
-    await page.click('text=波形显示器');
+    await page.click('text=调试示波器');
     await page.waitForTimeout(5000); // 等待5秒收集数据
     
     // 获取内存使用情况
@@ -232,7 +226,6 @@ test.describe('端到端数据流', () => {
     // 1. 计算图页面 - 加载并冻结
     await page.goto('/cpgraph?_t=test');
     await page.waitForLoadState('networkidle');
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     await page.click('[role="switch"]');
     await page.waitForTimeout(1000);
@@ -244,7 +237,7 @@ test.describe('端到端数据流', () => {
     await page.waitForTimeout(1000);
     await page.click('.v-select').first();
     await page.waitForTimeout(500);
-    await page.click('text=脑电数据源');
+    await page.click('text=模拟设备_1');
     await page.waitForTimeout(1000);
     
     // 3. 示波器页面 - 绑定并查看波形
@@ -252,7 +245,7 @@ test.describe('端到端数据流', () => {
     await page.waitForTimeout(1000);
     await page.click('.v-select');
     await page.waitForTimeout(500);
-    await page.click('text=波形显示器');
+    await page.click('text=调试示波器');
     await page.waitForTimeout(3000);
     
     // 验证波形显示
@@ -272,7 +265,6 @@ test.describe('端到端数据流', () => {
     // 先设置并冻结
     await page.goto('/cpgraph?_t=test');
     await page.waitForLoadState('networkidle');
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     await page.click('[role="switch"]');
     await page.waitForTimeout(1000);
@@ -331,7 +323,6 @@ test.describe('性能和稳定性', () => {
     // 设置计算图
     await page.goto('/cpgraph?_t=test');
     await page.waitForLoadState('networkidle');
-    await page.click('button:has-text("加载Mock")');
     await page.waitForTimeout(1000);
     await page.click('[role="switch"]');
     await page.waitForTimeout(1000);
@@ -341,7 +332,7 @@ test.describe('性能和稳定性', () => {
     await page.waitForTimeout(1000);
     await page.click('.v-select');
     await page.waitForTimeout(500);
-    await page.click('text=波形显示器');
+    await page.click('text=调试示波器');
     
     // 运行10秒
     await page.waitForTimeout(10000);

@@ -52,7 +52,7 @@ export function testSessionStore() {
   sessionStore.setGraph({
     nodes: [
       { id: 'node1', type: 'SOURCE', name: '数据源', x: 0, y: 0, params: {} },
-      { id: 'node2', type: 'OSC', name: '示波器', x: 100, y: 0, params: {} },
+      { id: 'node2', type: 'OUTPUT', name: '输出节点', x: 100, y: 0, params: {} },
     ],
     edges: [],
     frozen: false,
@@ -105,7 +105,7 @@ export function testRuntime() {
   sessionStore.setGraph({
     nodes: [
       { id: 'source1', type: 'SOURCE', name: '数据源', x: 0, y: 0, params: {} },
-      { id: 'osc1', type: 'OSC', name: '示波器', x: 100, y: 0, params: {} },
+      { id: 'osc1', type: 'OUTPUT', name: '输出节点', x: 100, y: 0, params: {} },
     ],
     edges: [],
     frozen: false,
