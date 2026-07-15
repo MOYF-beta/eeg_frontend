@@ -2,7 +2,7 @@
   "nodes": [
     {
       "type": "OSC",
-      "name": "调试示波器",
+      "name": "\u8c03\u8bd5\u793a\u6ce2\u5668",
       "params": {
         "timeWindow": 5,
         "yScale": 1,
@@ -33,11 +33,12 @@
       },
       "id": "debug-osc-1",
       "x": 510,
-      "y": 370
+      "y": 370,
+      "deviceId": null
     },
     {
       "type": "FILTER",
-      "name": "滤波器",
+      "name": "\u6ee4\u6ce2\u5668",
       "params": {
         "type": "lowpass",
         "cutoff": 50,
@@ -47,7 +48,8 @@
       },
       "id": "node-1777211905622-234",
       "x": 200,
-      "y": 370
+      "y": 370,
+      "deviceId": null
     },
     {
       "type": "SOURCE",

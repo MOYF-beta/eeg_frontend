@@ -1,4 +1,15 @@
+/**
+ * graphSyncWebSocket — 已重构为 controlWebSocket 的代理。
+ *
+ * 不再打开独立的 ws/graph-sync/ 连接。
+ * 从 controlWebSocket 的 state 推送中提取 graph 字段，
+ * 以 GraphSyncMessage 格式转发给 onGraph 监听器。
+ *
+ * GraphEditor.vue 的 onGraph 回调接口保持不变。
+ */
+
 import type { GraphPayload } from './graph';
+import { controlWebSocket } from './controlWebSocket';
 
 type SyncStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
 
@@ -8,114 +19,54 @@ export interface GraphSyncMessage {
   timestamp?: number;
 }
 
-class GraphSyncWebSocket {
-  private ws: WebSocket | null = null;
+class GraphSyncWebSocketProxy {
   private status: SyncStatus = 'disconnected';
   private listeners = {
     onGraph: new Set<(message: GraphSyncMessage) => void>(),
     onStatus: new Set<(status: SyncStatus) => void>(),
   };
-
-  private reconnectAttempts = 0;
-  private reconnectTimer: number | null = null;
-  private heartbeatTimer: number | null = null;
-  private isManualDisconnect = false;
-
-  private readonly maxReconnectAttempts = 5;
-  private readonly reconnectInterval = 3000;
-  private readonly heartbeatInterval = 30000;
-
-  private get url() {
-    return `ws://${window.location.hostname}:8000/ws/graph-sync/`;
-  }
+  private unsubState: (() => void) | null = null;
+  private unsubStatus: (() => void) | null = null;
+  private _connected = false;
 
   connect() {
-    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
-      return;
+    if (this._connected) return;
+    this._connected = true;
+
+    // 确保底层 controlWebSocket 已连接
+    if (!controlWebSocket.isConnected()) {
+      controlWebSocket.connect();
     }
 
-    this.isManualDisconnect = false;
-    this.setStatus('connecting');
-    this.ws = new WebSocket(this.url);
+    this.setStatus('connected');
 
-    this.ws.onopen = () => {
-      this.setStatus('connected');
-      this.reconnectAttempts = 0;
-      this.startHeartbeat();
-      this.send({ type: 'get_graph' });
-    };
+    // 订阅控制状态，提取 graph 部分转发
+    this.unsubState = controlWebSocket.onState((cs) => {
+      const msg: GraphSyncMessage = {
+        graph: cs.graph,
+        reason: 'synced',
+        timestamp: Date.now(),
+      };
+      this.listeners.onGraph.forEach((cb) => cb(msg));
+    });
 
-    this.ws.onmessage = (event) => {
-      try {
-        const message = JSON.parse(event.data || '{}');
-        if (message.type === 'pong') return;
-        if (message.type === 'graph_state' && message.graph) {
-          this.listeners.onGraph.forEach((cb) => cb({
-            graph: message.graph as GraphPayload,
-            reason: message.reason,
-            timestamp: message.timestamp,
-          }));
-        }
-      } catch (err) {
-        console.error('[GraphSyncWS] Failed to parse message:', err);
-      }
-    };
-
-    this.ws.onerror = () => {
-      this.setStatus('error');
-    };
-
-    this.ws.onclose = () => {
-      this.ws = null;
-      this.stopHeartbeat();
-      this.setStatus('disconnected');
-      if (!this.isManualDisconnect) {
-        this.attemptReconnect();
-      }
-    };
+    // 代理连接状态
+    this.unsubStatus = controlWebSocket.onStatus((s) => {
+      this.setStatus(s);
+    });
   }
 
   disconnect() {
-    this.isManualDisconnect = true;
-    this.stopReconnect();
-    this.stopHeartbeat();
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    this._connected = false;
+    if (this.unsubState) {
+      this.unsubState();
+      this.unsubState = null;
+    }
+    if (this.unsubStatus) {
+      this.unsubStatus();
+      this.unsubStatus = null;
     }
     this.setStatus('disconnected');
-  }
-
-  private attemptReconnect() {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.error('[GraphSyncWS] Max reconnection attempts reached');
-      return;
-    }
-    this.reconnectAttempts++;
-    this.reconnectTimer = window.setTimeout(() => {
-      this.connect();
-    }, this.reconnectInterval);
-  }
-
-  private stopReconnect() {
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-    this.reconnectAttempts = 0;
-  }
-
-  private startHeartbeat() {
-    this.heartbeatTimer = window.setInterval(() => {
-      this.send({ type: 'ping' });
-    }, this.heartbeatInterval);
-  }
-
-  private stopHeartbeat() {
-    if (this.heartbeatTimer) {
-      clearInterval(this.heartbeatTimer);
-      this.heartbeatTimer = null;
-    }
   }
 
   onGraph(callback: (message: GraphSyncMessage) => void): () => void {
@@ -128,15 +79,10 @@ class GraphSyncWebSocket {
     return () => this.listeners.onStatus.delete(callback);
   }
 
-  private send(payload: Record<string, unknown>) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-    this.ws.send(JSON.stringify(payload));
-  }
-
   private setStatus(status: SyncStatus) {
     this.status = status;
     this.listeners.onStatus.forEach((cb) => cb(status));
   }
 }
 
-export const graphSyncWebSocket = new GraphSyncWebSocket();
+export const graphSyncWebSocket = new GraphSyncWebSocketProxy();

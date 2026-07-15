@@ -213,8 +213,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, computed } from 'vue';
 import { sessionStore, type Device, type SimulatedDeviceConfig } from '../services/sessionStore';
-import { fetchGraph, getGraphRuntimeState } from '../services/graph';
-import type { GraphNode } from '../services/graph';
+import { graphRuntimeStore } from '../services/graphRuntimeStore';
+import { fetchGraph, type GraphNode } from '../services/graph';
 import SimulatedDeviceConfigComponent from './SimulatedDeviceConfig.vue';
 import { deviceApi } from '../services/deviceApi';
 
@@ -246,35 +246,8 @@ const getBoundNode = (deviceId: string): GraphNode | undefined => {
   );
 };
 
-// 运行时状态
-const isRunning = ref(false);
-
-// 轮询运行时状态
-let runtimePollingTimer: number | null = null;
-
-async function pollRuntimeState() {
-  try {
-    const res = await getGraphRuntimeState();
-    if (res.ok) {
-      isRunning.value = res.state.running;
-    }
-  } catch (e) {
-    console.error('Failed to poll runtime state:', e);
-  }
-}
-
-function startRuntimePolling() {
-  if (runtimePollingTimer) return;
-  pollRuntimeState();
-  runtimePollingTimer = window.setInterval(pollRuntimeState, 2000);
-}
-
-function stopRuntimePolling() {
-  if (runtimePollingTimer) {
-    clearInterval(runtimePollingTimer);
-    runtimePollingTimer = null;
-  }
-}
+// 运行时状态（由 graphRuntimeStore 统一管理，无需轮询）
+const isRunning = computed(() => graphRuntimeStore.isRunning.value);
 
 // 计算属性：检查是否允许编辑设备
 const canEditDevices = computed(() => {
@@ -482,9 +455,6 @@ onMounted(() => {
       graphNodes.value = state.graph.nodes;
     }
   });
-  
-  // 启动运行时状态轮询
-  startRuntimePolling();
 });
 
 // 清理
@@ -492,7 +462,6 @@ onUnmounted(() => {
   if (unsubscribe) {
     unsubscribe();
   }
-  stopRuntimePolling();
 });
 </script>
 

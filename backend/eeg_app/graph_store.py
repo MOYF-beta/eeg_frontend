@@ -127,6 +127,11 @@ _GRAPH: GraphPayload = {
 _GRAPH_REVISION = 0
 _PERSISTED_REVISION = 0
 
+# 控制修订号：每次 frozen/running/graph 变更时递增。
+# 数据 consumer 通过比较此值判断是否需要重新读取控制状态，
+# 避免每 tick 全量重读 graph + 重算签名。
+_CONTROL_REVISION = 0
+
 # 运行时状态
 _RUNTIME_STATE = {
     'running': False,
@@ -214,6 +219,7 @@ def set_graph(payload: GraphPayload, persist: bool = False) -> None:
     _GRAPH['edges'] = payload.get('edges', [])
     _GRAPH['frozen'] = payload.get('frozen', False)
     _GRAPH_REVISION += 1
+    bump_control_revision()
     if persist:
         _save_to_file(_GRAPH)
         _PERSISTED_REVISION = _GRAPH_REVISION
@@ -260,6 +266,17 @@ def get_persisted_revision() -> int:
     return int(_PERSISTED_REVISION)
 
 
+def bump_control_revision() -> int:
+    """递增控制修订号，通知数据 consumer 控制状态已变更。"""
+    global _CONTROL_REVISION
+    _CONTROL_REVISION += 1
+    return _CONTROL_REVISION
+
+
+def get_control_revision() -> int:
+    return int(_CONTROL_REVISION)
+
+
 def set_frozen(value: bool) -> None:
     """设置冻结状态并保存"""
     # 检查计算图是否正在运行
@@ -268,6 +285,7 @@ def set_frozen(value: bool) -> None:
     
     _GRAPH['frozen'] = value
     _save_to_file(_GRAPH)
+    bump_control_revision()
 
 
 def validate_graph(payload: GraphPayload) -> List[str]:
@@ -355,6 +373,7 @@ def run_graph(mode: str = 'live') -> Dict:
     _RUNTIME_STATE['processingDelayMs'] = 0
     _RUNTIME_STATE['nonRealtime'] = False
     _RUNTIME_STATE['warning'] = None
+    bump_control_revision()
     return {
         'status': 'running',
         'mode': normalized_mode,
@@ -369,6 +388,7 @@ def stop_graph() -> Dict:
     global _RUNTIME_STATE
     _RUNTIME_STATE['running'] = False
     _RUNTIME_STATE['stoppedAt'] = time.time()
+    bump_control_revision()
     return {
         'status': 'stopped',
         'mode': _RUNTIME_STATE['mode'],

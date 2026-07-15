@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue';
-import { getGraphRuntimeState, runGraph, stopGraph, setGraphFrozen } from './graph';
 import { eegWebSocket, type EegDataPacket } from './websocket';
+import { controlWebSocket, type ControlState } from './controlWebSocket';
 
 // EEG 数据包类型（兼容旧接口）
 export interface EegPacket {
@@ -39,9 +39,6 @@ const defaultState: GraphRuntimeState = {
 // 全局状态
 const state = ref<GraphRuntimeState>({ ...defaultState });
 
-// 轮询定时器
-let pollingTimer: number | null = null;
-
 // 计算属性
 const isRunning = computed(() => state.value.isRunning);
 const runtimeMode = computed(() => state.value.runtimeMode);
@@ -78,128 +75,71 @@ function getStatusDescription(isRunning: boolean, frozen: boolean): string {
   }
 }
 
-// 轮询运行时状态
+// 从控制 WS 状态推送更新本地状态
+function applyControlState(cs: ControlState) {
+  const rt = cs.runtime;
+  updateState({
+    isRunning: rt.running,
+    runtimeMode: (rt.mode || 'live') as 'live' | 'offline',
+    offlineProgress: Number(rt.progress || 0),
+    processingDelayMs: Number(rt.processingDelayMs || 0),
+    nonRealtime: Boolean(rt.nonRealtime),
+    runtimeWarning: rt.warning ? String(rt.warning) : null,
+    frozen: Boolean(rt.frozen ?? false),
+  });
+
+  // 运行中确保数据 WS 已连接
+  if (rt.running && !eegWebSocket.isConnected()) {
+    eegWebSocket.connect();
+  }
+}
+
+// 运行计算图（通过控制 WS）
+function runByMode(mode: 'live' | 'offline') {
+  // 自动冻结
+  if (!state.value.frozen) {
+    controlWebSocket.freeze(true);
+  }
+  controlWebSocket.run(mode);
+}
+
+// 停止运行（通过控制 WS）
+function stopRun() {
+  controlWebSocket.stop();
+  // 停止时自动解冻
+  if (state.value.frozen) {
+    controlWebSocket.freeze(false);
+  }
+}
+
+// 设置冻结状态（通过控制 WS）
+function setFreeze(frozenVal: boolean) {
+  controlWebSocket.freeze(frozenVal);
+}
+
+// 兼容：保留 pollRuntimeState 但不再实际轮询
 async function pollRuntimeState() {
-  try {
-    const res = await getGraphRuntimeState();
-    if (res.ok) {
-      const wasRunning = state.value.isRunning;
-      const newState = {
-        isRunning: res.state.running,
-        runtimeMode: (res.state.mode || 'live') as 'live' | 'offline',
-        offlineProgress: Number(res.state.progress || 0),
-        processingDelayMs: Number(res.state.processingDelayMs || 0),
-        nonRealtime: Boolean(res.state.nonRealtime),
-        runtimeWarning: res.state.warning ? String(res.state.warning) : null,
-        frozen: Boolean(res.state.frozen ?? false)  // 使用后端返回的frozen状态
-      };
-      
-      // 记录状态变化
-      if (newState.isRunning !== state.value.isRunning) {
-      }
-      
-      updateState(newState);
-      
-      // 如果计算图开始运行，确保WebSocket已连接
-      if (newState.isRunning && !eegWebSocket.isConnected()) {
-        eegWebSocket.connect();
-      }
-    } else {
-      console.warn('[GraphRuntimeStore] Failed to get runtime state:', res);
-    }
-  } catch (e) {
-    console.error('[GraphRuntimeStore] Failed to poll runtime state:', e);
-  }
+  // 控制 WS 自动推送，此处无需操作
 }
 
-// 开始轮询
-function startPolling() {
-  if (pollingTimer) return;
-  pollRuntimeState();
-  pollingTimer = window.setInterval(pollRuntimeState, 2000);
-}
-
-// 停止轮询
-function stopPolling() {
-  if (pollingTimer) {
-    clearInterval(pollingTimer);
-    pollingTimer = null;
-  }
-}
-
-// 运行计算图
-async function runByMode(mode: 'live' | 'offline') {
-  try {
-    // 运行时自动冻结计算图
-    if (!state.value.frozen) {
-      await setGraphFrozen(true);
-      updateState({
-        frozen: true
-      });
-    }
-    
-    await runGraph(mode);
-    updateState({
-      isRunning: true,
-      runtimeMode: mode
-    });
-    startPolling();
-  } catch (err) {
-    console.error('[GraphRuntimeStore] Failed to run graph:', err);
-    throw err;
-  }
-}
-
-// 停止运行
-async function stopRun() {
-  try {
-    await stopGraph();
-    
-    // 停止时自动解冻计算图
-    if (state.value.frozen) {
-      await setGraphFrozen(false);
-      updateState({
-        frozen: false
-      });
-    }
-    
-    updateState({
-      isRunning: false,
-      offlineProgress: 0,
-      processingDelayMs: 0,
-      nonRealtime: false,
-      runtimeWarning: null
-    });
-    stopPolling();
-  } catch (err) {
-    console.error('[GraphRuntimeStore] Failed to stop graph:', err);
-    throw err;
-  }
-}
-
-// 设置冻结状态
-async function setFreeze(frozen: boolean) {
-  try {
-    await setGraphFrozen(frozen);
-    updateState({
-      frozen
-    });
-  } catch (err) {
-    console.error('[GraphRuntimeStore] Failed to set freeze:', err);
-    throw err;
-  }
-}
-
-// 初始化
+// 初始化：连接控制 WS 并订阅状态
+let _initialized = false;
 function init() {
-  // 开始轮询状态
-  startPolling();
+  if (_initialized) return;
+  _initialized = true;
+  controlWebSocket.connect();
+  controlWebSocket.onState(applyControlState);
 }
 
 // 清理
 function cleanup() {
-  stopPolling();
+  controlWebSocket.disconnect();
+  _initialized = false;
 }
+
+// 兼容旧接口
+const startPolling = init;
+const stopPolling = cleanup;
 
 // ========== 数据流转发（从 runtime.ts 合并）==========
 

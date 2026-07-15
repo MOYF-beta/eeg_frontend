@@ -103,6 +103,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { eegWebSocket } from '../services/websocket';
+import { controlWebSocket } from '../services/controlWebSocket';
 
 interface PipelineAvg {
   sourceGenUs: number;
@@ -133,7 +134,11 @@ interface StatusData {
 
 const visible = ref(true);
 const pollError = ref<string | null>(null);
-let pollTimer: number | null = null;
+
+// 控制 WS 订阅句柄
+let unsubState: (() => void) | null = null;
+// 性能数据仍需 HTTP 轮询（控制 WS 心跳间隔 30s，性能数据实时性要求更高）
+let perfTimer: number | null = null;
 
 const pipelineSource = ref('0');
 const pipelineNode = ref('0');
@@ -234,12 +239,7 @@ async function pollStatus() {
       processMemMb.value = String(sys.processMemoryMb ?? '—');
     }
 
-    // 图运行状态
-    const rt = (data as any).runtime;
-    if (rt) {
-      graphRunning.value = Boolean(rt.running);
-      graphProcDelay.value = Number(rt.processingDelayMs || 0);
-    }
+    // 图运行状态由控制 WS 推送，此处不再从 HTTP 读取
 
     pollError.value = null;
   } catch (err) {
@@ -256,14 +256,26 @@ function formatUs(us: number): { value: string; unit: string } {
 }
 
 onMounted(() => {
+  // 运行时状态通过控制 WS 订阅（替代轮询 graph/run/）
+  unsubState = controlWebSocket.onState((cs) => {
+    const rt = cs.runtime;
+    graphRunning.value = Boolean(rt.running);
+    graphProcDelay.value = Number(rt.processingDelayMs || 0);
+  });
+
+  // 性能指标仍需较高频率更新，保留 HTTP 轮询但仅取 pipeline+system 数据
   pollStatus();
-  pollTimer = window.setInterval(pollStatus, 2000);
+  perfTimer = window.setInterval(pollStatus, 3000);
 });
 
 onUnmounted(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
+  if (unsubState) {
+    unsubState();
+    unsubState = null;
+  }
+  if (perfTimer) {
+    clearInterval(perfTimer);
+    perfTimer = null;
   }
 });
 </script>

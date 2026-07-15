@@ -1,22 +1,19 @@
 """真实设备管理API视图
 
 统一响应格式: {ok: bool, data?: any, error?: string}
+
+所有设备操作通过 DeviceDriverManager 统一路由。
+URL 中的 <port> 参数兼容旧格式（如 /dev/ttyUSB0），但内部已改用 device_id 路由。
+模拟器端点保留向后兼容，同时 simulator 驱动设备通过标准设备 API 可用。
 """
 
 import json
+import time
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .real_device_manager import (
-    scan_serial_ports,
-    connect_real_device,
-    start_device_acquisition,
-    stop_device_acquisition,
-    disconnect_real_device,
-    get_device_status,
-    get_all_connected_devices,
-    get_debug_output
-)
+from .drivers.manager import get_device_manager
+from .drivers.base import DeviceStatus
 from .serial_simulator import (
     start_wearable_serial_simulator,
     stop_wearable_serial_simulator,
@@ -25,9 +22,36 @@ from .serial_simulator import (
 from .device_store import get_all_devices, update_device, create_device
 
 
+def _resolve_device_id(raw: str) -> str:
+    """将 URL 中的原始标识解析为 manager 可识别的 device_id。
+
+    支持两种格式：
+    - 完整格式 'driver_type:device_id'（如 'wearable_eeg:/dev/ttyUSB0'）
+    - 纯 device_id（如 '/dev/ttyUSB0'、'sim_alpha'）
+    """
+    if not raw:
+        return ''
+    if ':' in raw:
+        return raw
+    # 尝试匹配 device_store 中的设备
+    for dev in get_all_devices():
+        if dev.get('config', {}).get('device_id') == raw:
+            return dev['id']
+        if dev['id'].endswith(':' + raw):
+            return dev['id']
+    return raw
+
+
+def _extract_device_id(store_id: str) -> str:
+    """从 device_store ID 中提取 driver 层面的 device_id。"""
+    if ':' in store_id:
+        return store_id.split(':', 1)[1]
+    return store_id
+
+
 @csrf_exempt
 def scan_ports(request):
-    """扫描可用的串口设备
+    """扫描可用的设备
 
     GET /api/real-devices/scan-ports/
     """
@@ -35,7 +59,24 @@ def scan_ports(request):
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     try:
-        ports = scan_serial_ports()
+        manager = get_device_manager()
+        devices = manager.discover_all()
+        ports = []
+        for meta in devices:
+            ports.append({
+                'port': meta.device_id,
+                'description': meta.extra.get('description', ''),
+                'manufacturer': meta.extra.get('manufacturer', ''),
+                'product': meta.extra.get('product', ''),
+                'hwid': meta.extra.get('hwid', ''),
+                'is_ch340': meta.extra.get('is_ch340', False),
+                'is_available': meta.is_available,
+                'vid': meta.extra.get('vid', 'N/A'),
+                'pid': meta.extra.get('pid', 'N/A'),
+                'driver_type': meta.driver_type,
+                'channel_count': meta.channel_count,
+                'sample_rate': meta.sample_rate,
+            })
         return JsonResponse({
             'ok': True,
             'data': {'ports': ports, 'count': len(ports)}
@@ -46,62 +87,43 @@ def scan_ports(request):
 
 @csrf_exempt
 def connect_device(request):
-    """连接真实设备
+    """连接设备
 
     POST /api/real-devices/connect/
+    body: {"port": "/dev/ttyUSB0", "baudrate": 460800, "device_id": "..."}
     """
     if request.method != 'POST':
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     try:
         data = json.loads(request.body)
-        port = data.get('port')
+        port = data.get('port') or data.get('device_id')
         baudrate = data.get('baudrate', 460800)
 
         if not port:
-            return JsonResponse({'ok': False, 'error': 'Port is required'}, status=400)
+            return JsonResponse({'ok': False, 'error': 'Port or device_id is required'}, status=400)
 
-        result = connect_real_device(port, baudrate)
+        manager = get_device_manager()
+        raw_device_id = port
+        if ':' in port:
+            raw_device_id = _extract_device_id(port)
 
-        if result['success']:
-            device_id = data.get('device_id')
-            if device_id:
-                devices_list = get_all_devices()
-                device = next((d for d in devices_list if d['id'] == device_id), None)
-                if device and device['type'] == 'wearable_eeg':
-                    update_device(device_id, {
-                        'config': {**device.get('config', {}), 'port': port, 'baudrate': baudrate, 'connected': True}
-                    })
-            else:
-                devices_list = get_all_devices()
-                existing_device = None
-                for device in devices_list:
-                    if device.get('type') == 'wearable_eeg':
-                        if device.get('config', {}).get('port') == port:
-                            existing_device = device
-                            break
-                if existing_device:
-                    device_id = existing_device['id']
-                    update_device(device_id, {
-                        'config': {**existing_device.get('config', {}), 'port': port, 'baudrate': baudrate, 'connected': True}
-                    })
-                else:
-                    import time
-                    device_id = f'real-dev-{int(time.time() * 1000)}'
-                    create_device({
-                        'id': device_id,
-                        'name': f'可穿戴EEG设备 ({port})',
-                        'type': 'wearable_eeg',
-                        'sampling_rate': 1000,
-                        'channel_count': 8,
-                        'config': {'port': port, 'baudrate': baudrate, 'connected': True}
-                    })
+        ok = manager.connect(raw_device_id, {'baudrate': baudrate})
+        status = manager.get_status(raw_device_id)
+        meta = manager.get_device_meta(raw_device_id)
 
-            return JsonResponse({'ok': True, 'data': result['device']})
+        if ok:
+            return JsonResponse({
+                'ok': True,
+                'data': {
+                    'device_id': raw_device_id,
+                    'port': raw_device_id,
+                    'status': status.value,
+                    'driver_type': meta.driver_type if meta else '',
+                }
+            })
         else:
-            error_message = result.get('error', 'Failed to connect device')
-            status_code = 403 if ('Permission denied' in error_message or 'Access is denied' in error_message) else 500
-            return JsonResponse({'ok': False, 'error': error_message}, status=status_code)
+            return JsonResponse({'ok': False, 'error': 'Failed to connect device'}, status=500)
 
     except json.JSONDecodeError:
         return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
@@ -122,19 +144,14 @@ def start_acquisition(request, port=None):
         if not port:
             return JsonResponse({'ok': False, 'error': 'Port is required in URL path'}, status=400)
 
-        result = start_device_acquisition(port)
+        device_id = _extract_device_id(_resolve_device_id(port))
+        manager = get_device_manager()
+        ok = manager.start_streaming(device_id)
 
-        if result['success']:
-            devices_list = get_all_devices()
-            for device in devices_list:
-                if device['type'] == 'wearable_eeg' and device.get('config', {}).get('port') == port:
-                    update_device(device['id'], {
-                        'config': {**device.get('config', {}), 'acquiring': True}
-                    })
-                    break
-            return JsonResponse({'ok': True, 'data': {'port': port, 'status': 'acquiring'}})
+        if ok:
+            return JsonResponse({'ok': True, 'data': {'port': device_id, 'status': 'acquiring'}})
         else:
-            return JsonResponse({'ok': False, 'error': result.get('error', 'Failed to start acquisition')}, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to start acquisition on {device_id}'}, status=500)
 
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to start acquisition: {str(e)}'}, status=500)
@@ -153,19 +170,14 @@ def stop_acquisition(request, port=None):
         if not port:
             return JsonResponse({'ok': False, 'error': 'Port is required in URL path'}, status=400)
 
-        result = stop_device_acquisition(port)
+        device_id = _extract_device_id(_resolve_device_id(port))
+        manager = get_device_manager()
+        ok = manager.stop_streaming(device_id)
 
-        if result['success']:
-            devices_list = get_all_devices()
-            for device in devices_list:
-                if device['type'] == 'wearable_eeg' and device.get('config', {}).get('port') == port:
-                    update_device(device['id'], {
-                        'config': {**device.get('config', {}), 'acquiring': False}
-                    })
-                    break
-            return JsonResponse({'ok': True, 'data': {'port': port, 'status': 'connected'}})
+        if ok:
+            return JsonResponse({'ok': True, 'data': {'port': device_id, 'status': 'connected'}})
         else:
-            return JsonResponse({'ok': False, 'error': result.get('error', 'Failed to stop acquisition')}, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to stop acquisition on {device_id}'}, status=500)
 
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to stop acquisition: {str(e)}'}, status=500)
@@ -184,19 +196,14 @@ def disconnect_device(request, port=None):
         if not port:
             return JsonResponse({'ok': False, 'error': 'Port is required in URL path'}, status=400)
 
-        result = disconnect_real_device(port)
+        device_id = _extract_device_id(_resolve_device_id(port))
+        manager = get_device_manager()
+        ok = manager.disconnect(device_id)
 
-        if result['success']:
-            devices_list = get_all_devices()
-            for device in devices_list:
-                if device['type'] == 'wearable_eeg' and device.get('config', {}).get('port') == port:
-                    update_device(device['id'], {
-                        'config': {**device.get('config', {}), 'connected': False, 'acquiring': False}
-                    })
-                    break
-            return JsonResponse({'ok': True, 'data': {'port': port, 'status': 'disconnected'}})
+        if ok:
+            return JsonResponse({'ok': True, 'data': {'port': device_id, 'status': 'disconnected'}})
         else:
-            return JsonResponse({'ok': False, 'error': result.get('error', 'Failed to disconnect device')}, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to disconnect device {device_id}'}, status=500)
 
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to disconnect device: {str(e)}'}, status=500)
@@ -213,15 +220,34 @@ def device_status(request, port=None):
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     try:
+        manager = get_device_manager()
         if port:
-            result = get_device_status(port)
-            if result['success']:
-                return JsonResponse({'ok': True, 'data': result['device']})
-            else:
-                return JsonResponse({'ok': False, 'error': result.get('error', 'Device not found')}, status=404)
+            device_id = _extract_device_id(_resolve_device_id(port))
+            status = manager.get_status(device_id)
+            meta = manager.get_device_meta(device_id)
+            return JsonResponse({
+                'ok': True,
+                'data': {
+                    'port': device_id,
+                    'device_id': device_id,
+                    'status': status.value,
+                    'driver_type': meta.driver_type if meta else '',
+                    'pending_count': manager.pending_count(device_id),
+                }
+            })
         else:
-            result = get_all_connected_devices()
-            return JsonResponse({'ok': True, 'data': {'devices': result['devices'], 'count': len(result['devices'])}})
+            devices = manager.discover_all()
+            device_list = []
+            for meta in devices:
+                status = manager.get_status(meta.device_id)
+                device_list.append({
+                    'port': meta.device_id,
+                    'device_id': meta.device_id,
+                    'status': status.value,
+                    'driver_type': meta.driver_type,
+                    'pending_count': manager.pending_count(meta.device_id),
+                })
+            return JsonResponse({'ok': True, 'data': {'devices': device_list, 'count': len(device_list)}})
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to get device status: {str(e)}'}, status=500)
 
@@ -230,35 +256,40 @@ def device_status(request, port=None):
 def real_devices(request):
     """真实设备管理主入口
 
-    GET /api/real-devices/ - 获取所有真实设备信息
+    GET /api/real-devices/ - 获取所有设备信息
     """
     if request.method != 'GET':
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     try:
-        all_devices = get_all_devices()
-        real_devices = []
-        for device in all_devices:
-            if device['type'] == 'wearable_eeg':
-                port = device.get('config', {}).get('port')
-                if port:
-                    status_result = get_device_status(port)
-                    if status_result['success']:
-                        device['connection_status'] = status_result['device']
-                    else:
-                        device['connection_status'] = {'port': port, 'status': 'disconnected', 'last_error': 'Not connected'}
-                else:
-                    device['connection_status'] = {'status': 'disconnected', 'last_error': 'No port configured'}
-                real_devices.append(device)
+        manager = get_device_manager()
+        devices = manager.discover_all()
+        device_list = []
+        for meta in devices:
+            status = manager.get_status(meta.device_id)
+            device_list.append({
+                'id': f'{meta.driver_type}:{meta.device_id}',
+                'name': meta.name,
+                'type': meta.driver_type,
+                'device_id': meta.device_id,
+                'port': meta.device_id,
+                'sampling_rate': meta.sample_rate,
+                'channel_count': meta.channel_count,
+                'connection_status': {
+                    'port': meta.device_id,
+                    'status': status.value,
+                    'pending_count': manager.pending_count(meta.device_id),
+                },
+            })
 
-        return JsonResponse({'ok': True, 'data': {'devices': real_devices, 'count': len(real_devices)}})
+        return JsonResponse({'ok': True, 'data': {'devices': device_list, 'count': len(device_list)}})
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to get real devices: {str(e)}'}, status=500)
 
 
 @csrf_exempt
 def debug_output(request):
-    """获取串口调试输出（最近数据帧）
+    """获取设备调试输出（最近数据帧）
 
     GET /api/real-devices/debug-output/?port=/dev/ttyUSB0&count=200
     """
@@ -266,14 +297,60 @@ def debug_output(request):
         return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
     try:
+        manager = get_device_manager()
         port = request.GET.get('port')
         count = int(request.GET.get('count', '200'))
         count = max(1, min(2000, count))
-        result = get_debug_output(port=port, count=count)
-        return JsonResponse({'ok': True, 'data': result})
+
+        if port:
+            device_id = _extract_device_id(_resolve_device_id(port))
+            frames = manager.read_data(device_id, count=count)
+            samples = [
+                {'seq': f.seq, 'timestamp': f.timestamp, 'channels': f.channels, 'port': device_id}
+                for f in frames
+            ]
+            return JsonResponse({
+                'ok': True,
+                'data': {
+                    'ports': [{
+                        'port': device_id,
+                        'samples': samples,
+                        'count': len(samples),
+                        'raw_inputs': [],
+                        'raw_input_count': 0,
+                    }],
+                    'total_samples': len(samples),
+                }
+            })
+        else:
+            devices = manager.discover_all()
+            result_ports = []
+            total = 0
+            for meta in devices:
+                frames = manager.read_data(meta.device_id, count=count)
+                samples = [
+                    {'seq': f.seq, 'timestamp': f.timestamp, 'channels': f.channels, 'port': meta.device_id}
+                    for f in frames
+                ]
+                total += len(samples)
+                result_ports.append({
+                    'port': meta.device_id,
+                    'samples': samples,
+                    'count': len(samples),
+                    'raw_inputs': [],
+                    'raw_input_count': 0,
+                })
+            return JsonResponse({
+                'ok': True,
+                'data': {'ports': result_ports, 'total_samples': total}
+            })
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to get debug output: {str(e)}'}, status=500)
 
+
+# ====================================================================== #
+#  串口模拟器端点（保留向后兼容，基于 serial_simulator.py 的 pty 模拟器）
+# ====================================================================== #
 
 @csrf_exempt
 def simulator_start(request):

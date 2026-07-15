@@ -17,6 +17,121 @@ from .graph_nodes import get_node_class
 from .graph_nodes.base import NodeExecutionContext, default_channel_names
 
 
+# ---------------------------------------------------------------------- #
+#  Source Providers — 替代旧的 _generate_source_channels / _drain_real_devices_sync
+# ---------------------------------------------------------------------- #
+
+class _SourceProvider:
+    """基类：为 SOURCE/REPLAY 节点提供逐帧数据。
+
+    每个 provider 实例绑定一个 source 节点，负责在每 tick 产出一帧
+    (channels, utc_ms)。provider 自己管理缓冲、时间步进和采样率，
+    GraphWorker 只负责按拓扑序调用 compute()。
+    """
+
+    def __init__(self, node_id: str, sample_rate: int):
+        self.node_id = node_id
+        self.sample_rate = max(1, sample_rate)
+
+    def available_samples(self) -> int:
+        """当前缓冲区中可消费的帧数（用于设备同步窗口计算）。"""
+        return 1  # 默认：合成/回放随时可产
+
+    def next_sample(self) -> Tuple[List[float], Optional[int]]:
+        """返回下一帧 (channels, utc_ms)，无数据时返回 ([], None)。"""
+        raise NotImplementedError
+
+
+class _DeviceSourceProvider(_SourceProvider):
+    """从 DeviceDriverManager 读取设备数据的 provider。"""
+
+    # 每次从 manager 拉取的最大帧数
+    _MAX_BATCH = 1024
+
+    def __init__(self, node_id: str, sample_rate: int, device_id: str, channel_count: int):
+        super().__init__(node_id, sample_rate)
+        self._device_id = device_id
+        self._channel_count = channel_count
+        self._pending: List[Tuple[List[float], int]] = []  # [(channels, utc_ms)]
+
+    def available_samples(self) -> int:
+        if not self._pending:
+            self._refill()
+        return len(self._pending)
+
+    def next_sample(self) -> Tuple[List[float], Optional[int]]:
+        if not self._pending:
+            self._refill()
+        if not self._pending:
+            return [], None
+        channels, utc_ms = self._pending.pop(0)
+        # 对齐通道数
+        if len(channels) < self._channel_count:
+            channels = channels + [0.0] * (self._channel_count - len(channels))
+        elif len(channels) > self._channel_count:
+            channels = channels[:self._channel_count]
+        return channels, utc_ms
+
+    def _refill(self) -> None:
+        """从 manager 批量拉取数据到内部缓冲。"""
+        from .drivers.manager import get_device_manager
+        manager = get_device_manager()
+        count = max(8, min(self._MAX_BATCH, int(self.sample_rate * 0.2)))
+        try:
+            frames = manager.read_data(self._device_id, count=count)
+        except Exception as exc:
+            logger.debug(f'[DeviceSource] read_data failed for {self._device_id}: {exc}')
+            return
+        for frame in frames:
+            channels = [float(ch) for ch in frame.channels]
+            utc_ms = int(frame.timestamp * 1000)
+            self._pending.append((channels, utc_ms))
+
+
+class _ReplaySourceProvider(_SourceProvider):
+    """从 CSV 回放读取数据的 provider。"""
+
+    def __init__(self, node_id: str, sample_rate: int):
+        super().__init__(node_id, sample_rate)
+
+    def available_samples(self) -> int:
+        return 1  # 回放每 tick 读一行
+
+    def next_sample(self) -> Tuple[List[float], Optional[int]]:
+        from .data_replay import is_replaying, read_next_sample
+        if not is_replaying(self.node_id):
+            return [], None
+        sample = read_next_sample(self.node_id)
+        if not sample:
+            return [], None
+        return list(sample.get('channels', [])), int(sample.get('timestamp', time.time() * 1000))
+
+
+class _SyntheticSourceProvider(_SourceProvider):
+    """无设备绑定时生成方波+噪声的兜底 provider。"""
+
+    def __init__(self, node_id: str, sample_rate: int, channel_count: int = 8):
+        super().__init__(node_id, sample_rate)
+        self._channel_count = channel_count
+        self._t: float = 0.0
+
+    def available_samples(self) -> int:
+        return 1
+
+    def next_sample(self) -> Tuple[List[float], Optional[int]]:
+        dt = 1.0 / self.sample_rate
+        self._t += dt
+        t = self._t
+        channels: List[float] = []
+        for i in range(self._channel_count):
+            freq = 5 + i * 0.5
+            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
+            signal = square * 100
+            noise = math.sin(2 * math.pi * (50 + i * 10) * t) * 5 + math.sin(2 * math.pi * (120 + i * 5) * t) * 3
+            channels.append(signal + noise + random.uniform(-2, 2))
+        return channels, int(time.time() * 1000)
+
+
 @dataclass
 class WorkerSpec:
     worker_id: str
@@ -53,22 +168,62 @@ class GraphWorker:
         self.started_wall_ms = int(time.time() * 1000)
         self.generated_sample_count = 0
 
+        # 为每个 source 节点构建 provider
+        self.source_providers: Dict[str, _SourceProvider] = {}
+        self._build_source_providers()
+
+    def _build_source_providers(self) -> None:
+        """根据节点配置为每个 SOURCE/REPLAY 节点创建对应的 provider。"""
+        from .drivers.manager import get_device_manager
+
+        manager = get_device_manager()
+        for node_id in self.source_node_ids:
+            node = self.nodes_by_id.get(node_id) or {}
+            node_type = str(node.get('type') or '').upper()
+            params = node.get('params') or {}
+
+            # REPLAY 节点
+            if node_type == 'REPLAY':
+                self.source_providers[node_id] = _ReplaySourceProvider(node_id, self.sample_rate)
+                continue
+
+            # SOURCE 节点 — replay 模式
+            mode = str(params.get('sourceMode') or 'live').lower()
+            if mode == 'replay':
+                self.source_providers[node_id] = _ReplaySourceProvider(node_id, self.sample_rate)
+                continue
+
+            # SOURCE 节点 — live 模式，检查设备绑定
+            device_id = self._resolve_source_device_id(node)
+            if device_id:
+                meta = manager.get_device_meta(device_id)
+                ch_count = meta.channel_count if meta else int(params.get('channels') or 8)
+                self.source_providers[node_id] = _DeviceSourceProvider(
+                    node_id, self.sample_rate, device_id, max(1, ch_count),
+                )
+            else:
+                # 无设备绑定：合成信号兜底
+                ch_count = max(1, int(params.get('channels') or 8))
+                self.source_providers[node_id] = _SyntheticSourceProvider(
+                    node_id, self.sample_rate, ch_count,
+                )
+
     @property
     def node_ids(self) -> Set[str]:
         return set(self.nodes_by_id.keys())
 
     def _resolve_sample_rate(self) -> int:
+        from .drivers.manager import get_device_manager
+        manager = get_device_manager()
         for node_id in self.source_node_ids:
             node = self.nodes_by_id.get(node_id) or {}
             params = node.get('params') or {}
             device_id = node.get('deviceId') or params.get('deviceId')
             if device_id:
                 try:
-                    from .device_store import get_device
-
-                    device = get_device(str(device_id))
-                    if device:
-                        value = int(device.get('sampling_rate') or params.get('sampleRate') or 1000)
+                    meta = manager.get_device_meta(str(device_id))
+                    if meta:
+                        value = int(meta.sample_rate or params.get('sampleRate') or 1000)
                         if value > 0:
                             return value
                 except Exception:
@@ -88,14 +243,6 @@ class GraphWorker:
             return None
         text = str(raw).strip()
         return text or None
-
-    def _source_mode(self, node_id: str, node_type: str) -> str:
-        if node_type == 'REPLAY':
-            return 'replay'
-        node = self.nodes_by_id.get(node_id) or {}
-        params = node.get('params') or {}
-        mode = str(params.get('sourceMode') or 'live').lower()
-        return 'replay' if mode == 'replay' else 'live'
 
     def _build_topological_order(self) -> List[str]:
         indegree: Dict[str, int] = {nid: 0 for nid in self.node_ids}
@@ -157,101 +304,7 @@ class GraphWorker:
             except Exception:
                 pass
 
-    def _generate_source_channels(self, node_id: str) -> Tuple[List[float], Optional[int]]:
-        node = self.nodes_by_id.get(node_id) or {}
-        params = node.get('params') or {}
-
-        device_id = self._resolve_source_device_id(node)
-        if device_id:
-            try:
-                from .device_store import get_device
-                from .real_device_manager import get_real_device_manager
-
-                state = self.node_states[node_id]
-                t = float(state.get('t', 0.0))
-                dt = 1.0 / max(1, self.sample_rate)
-                state['t'] = t + dt
-
-                device_info = get_device(device_id) or {}
-                device_type = str(device_info.get('type') or '').lower()
-                device_channel_count = int(device_info.get('channel_count') or params.get('channels') or 8)
-                device_channel_count = max(1, device_channel_count)
-
-                # 真实设备按队列顺序消费数据，避免 latest-only 导致阶梯状波形。
-                if device_type == 'wearable_eeg':
-                    port = (device_info.get('config') or {}).get('port')
-                    if port:
-                        manager = get_real_device_manager()
-                        state = self.node_states[node_id]
-                        pending = state.setdefault('realPendingSamples', [])
-
-                        if not pending:
-                            drained = manager.drain_data(str(port), count=max(8, min(1024, int(self.sample_rate * 0.2))))
-                            for frame in drained:
-                                raw_channels = list((frame or {}).get('channels', []))
-                                channels = [float(ch) for ch in raw_channels]
-                                frame_ts = int(((frame or {}).get('timestamp') or time.time()) * 1000)
-                                pending.append((channels, frame_ts))
-
-                        if pending:
-                            channels, frame_ts = pending.pop(0)
-                            if len(channels) < device_channel_count:
-                                channels.extend([0.0] * (device_channel_count - len(channels)))
-                            elif len(channels) > device_channel_count:
-                                channels = channels[:device_channel_count]
-                            return channels, frame_ts
-                    return [], None
-            except Exception as exc:
-                logger.debug(f'[GraphWorker] Failed to read channels from device {device_id}: {exc}')
-
-        channels_count = 8
-        try:
-            channels_count = max(1, int(params.get('channels', 8)))
-        except Exception:
-            channels_count = 8
-
-        state = self.node_states[node_id]
-        t = float(state.get('t', 0.0))
-        dt = 1.0 / max(1, self.sample_rate)
-
-        channels: List[float] = []
-        for i in range(channels_count):
-            # 清晰的方波信号，不同通道有不同频率
-            freq = 5 + i * 0.5  # 5-8.5Hz，易于观察
-            square = 1 if math.sin(2 * math.pi * freq * t) > 0 else -1
-            square_signal = square * 100  # 增加方波幅度
-            
-            # 减少高频噪声，让方波更明显
-            high_freq1 = 50 + i * 10
-            high_freq2 = 120 + i * 5
-            noise = math.sin(2 * math.pi * high_freq1 * t) * 5 + math.sin(2 * math.pi * high_freq2 * t) * 3  # 减少噪声幅度
-            
-            # 减少随机噪声
-            random_noise = random.uniform(-2, 2)
-            
-            channels.append(square_signal + noise + random_noise)
-
-        state['t'] = t + dt
-        utc_ms = int(time.time() * 1000)
-        return channels, utc_ms
-
-    def _read_replay_channels(self, node_id: str) -> Tuple[List[float], Optional[int]]:
-        from .data_replay import is_replaying, read_next_sample
-
-        if not is_replaying(node_id):
-            return [], None
-        sample = read_next_sample(node_id)
-        if not sample:
-            return [], None
-        return list(sample.get('channels', [])), int(sample.get('timestamp', time.time() * 1000))
-
-    def _resolve_source_signal(self, node_id: str, node_type: str) -> Tuple[List[float], Optional[int]]:
-        mode = self._source_mode(node_id, node_type)
-        if mode == 'replay':
-            return self._read_replay_channels(node_id)
-        return self._generate_source_channels(node_id)
-
-    def _pick_source_output(self, outputs: Dict[str, Dict[str, Any]], preferred_port: str) -> Dict[str, Any]:
+    def _pick_output(self, outputs: Dict[str, Dict[str, Any]], preferred_port: str) -> Dict[str, Any]:
         if preferred_port in outputs:
             return outputs[preferred_port]
         if outputs:
@@ -262,70 +315,21 @@ class GraphWorker:
             )
         return {'channels': [], 'channelNames': [], 'utcFirstFrameMs': None}
 
-    def _has_live_real_device(self) -> bool:
-        from .device_store import get_device
+    def _has_device_provider(self) -> bool:
+        """检查是否存在设备型 provider（决定同步/定时模式）。"""
+        return any(isinstance(p, _DeviceSourceProvider) for p in self.source_providers.values())
 
-        for node_id in self.source_node_ids:
-            node = self.nodes_by_id.get(node_id) or {}
-            if str(node.get('type') or '').upper() == 'REPLAY':
-                continue
-            device_id = self._resolve_source_device_id(node)
-            if not device_id:
-                continue
-            try:
-                device_info = get_device(device_id) or {}
-                if str(device_info.get('type') or '').lower() == 'wearable_eeg':
-                    port = (device_info.get('config') or {}).get('port')
-                    if port:
-                        return True
-            except Exception:
-                pass
-        return False
-
-    def _drain_real_devices_sync(self, max_per_device: int = 8) -> int:
-        """从所有真实设备出队数据，返回各设备队列的最小帧数（同步窗口）。"""
-        from .device_store import get_device
-        from .real_device_manager import get_real_device_manager
-
-        min_count = None
-        for node_id in self.source_node_ids:
-            node = self.nodes_by_id.get(node_id) or {}
-            if str(node.get('type') or '').upper() == 'REPLAY':
-                continue
-            device_id = self._resolve_source_device_id(node)
-            if not device_id:
-                continue
-            try:
-                device_info = get_device(device_id) or {}
-                if str(device_info.get('type') or '').lower() != 'wearable_eeg':
-                    continue
-                port = (device_info.get('config') or {}).get('port')
-                if not port:
-                    continue
-                state = self.node_states[node_id]
-                pending = state.setdefault('realPendingSamples', [])
-
-                if not pending:
-                    manager = get_real_device_manager()
-                    drained = manager.drain_data(str(port), count=max_per_device)
-                    for frame in drained:
-                        raw_channels = list((frame or {}).get('channels', []))
-                        channels = [float(ch) for ch in raw_channels]
-                        frame_ts = int(((frame or {}).get('timestamp') or time.time()) * 1000)
-                        pending.append((channels, frame_ts))
-
-                if min_count is None:
-                    min_count = len(pending)
-                else:
-                    min_count = min(min_count, len(pending))
-            except Exception:
-                pass
-
-        if min_count is None or min_count <= 0:
+    def _device_available_samples(self) -> int:
+        """所有设备 provider 的最小可用帧数（同步窗口）。"""
+        counts = [
+            p.available_samples()
+            for p in self.source_providers.values()
+            if isinstance(p, _DeviceSourceProvider)
+        ]
+        if not counts:
             return 0
-        # Cap at sync window to keep latency low
         SYNC_WINDOW = 4
-        return min(min_count, SYNC_WINDOW)
+        return min(min(counts), SYNC_WINDOW)
 
     def _run(self) -> None:
         from .data_recorder import write_sample
@@ -336,11 +340,10 @@ class GraphWorker:
         sample_accumulator = 0.0
         perf = get_perf_monitor()
 
-        use_real_device_sync = self._has_live_real_device()
-
         while not self.stop_event.is_set():
-            if use_real_device_sync:
-                samples_to_generate = self._drain_real_devices_sync()
+            # 决定本 tick 要生成多少帧
+            if self._has_device_provider():
+                samples_to_generate = self._device_available_samples()
                 if samples_to_generate <= 0:
                     self.stop_event.wait(0.002)
                     continue
@@ -377,13 +380,19 @@ class GraphWorker:
                     node_type = str(node.get('type') or '').upper()
                     node_state = self.node_states[node_id]
 
+                    # SOURCE/REPLAY 节点：从 provider 取数据
                     t0 = time.perf_counter_ns()
                     if node_type in {'SOURCE', 'REPLAY'}:
-                        generated_channels, generated_utc = self._resolve_source_signal(node_id, node_type)
-                        node_state['generatedChannels'] = generated_channels
-                        node_state['generatedUtcMs'] = generated_utc
+                        provider = self.source_providers.get(node_id)
+                        if provider:
+                            channels, utc_ms = provider.next_sample()
+                        else:
+                            channels, utc_ms = [], None
+                        node_state['generatedChannels'] = channels
+                        node_state['generatedUtcMs'] = utc_ms
                     source_gen_total_ns += time.perf_counter_ns() - t0
 
+                    # 组装入边
                     inputs: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
                     for edge in self.incoming_by_target.get(node_id, []):
                         src = edge.get('source')
@@ -391,9 +400,10 @@ class GraphWorker:
                             continue
                         src_port = edge.get('sourcePort') or 'out'
                         tgt_port = edge.get('targetPort') or 'in'
-                        src_sig = self._pick_source_output(node_outputs[src], src_port)
+                        src_sig = self._pick_output(node_outputs[src], src_port)
                         inputs[tgt_port].append(src_sig)
 
+                    # 执行节点计算
                     t1 = time.perf_counter_ns()
                     node_cls = get_node_class(node_type) or get_node_class('PASSTHROUGH')
                     processor = node_cls()

@@ -8,14 +8,6 @@ import sys
 import time
 from typing import Dict, List, Optional, Any
 
-# pyserial 依赖 termios（Unix-only 标准库模块），在 Windows 上需优雅降级
-try:
-    import serial.tools.list_ports
-    SERIAL_AVAILABLE = True
-except (ImportError, ModuleNotFoundError):
-    serial = None  # type: ignore
-    SERIAL_AVAILABLE = False
-
 # 设备配置结构
 class DeviceConfig:
     def __init__(self, device_id: str, name: str, device_type: str, 
@@ -28,13 +20,6 @@ class DeviceConfig:
         self.config = config or {}
         self.created_at = time.time()
         self.updated_at = time.time()
-        
-        # 真实设备特定字段
-        if device_type == 'wearable_eeg':
-            self.port = config.get('port', '')
-            self.baudrate = config.get('baudrate', 460800)
-            self.connected = False
-            self.acquiring = False
     
     def to_dict(self) -> Dict:
         result = {
@@ -47,14 +32,6 @@ class DeviceConfig:
             'created_at': self.created_at,
             'updated_at': self.updated_at
         }
-        
-        # 添加真实设备特定字段
-        if self.type == 'wearable_eeg':
-            result['port'] = getattr(self, 'port', '')
-            result['baudrate'] = getattr(self, 'baudrate', 460800)
-            result['connected'] = getattr(self, 'connected', False)
-            result['acquiring'] = getattr(self, 'acquiring', False)
-            
         return result
     
     @classmethod
@@ -69,14 +46,6 @@ class DeviceConfig:
         )
         device.created_at = data.get('created_at', time.time())
         device.updated_at = data.get('updated_at', time.time())
-        
-        # 设置真实设备特定字段
-        if data['type'] == 'wearable_eeg':
-            device.port = data.get('port', '')
-            device.baudrate = data.get('baudrate', 460800)
-            device.connected = data.get('connected', False)
-            device.acquiring = data.get('acquiring', False)
-            
         return device
 
 
@@ -97,113 +66,38 @@ class DeviceStore:
         logger.debug(f'[DeviceStore] Initialized {len(self._devices)} devices')
     
     def _scan_real_devices(self) -> None:
-        """扫描真实设备（CH340和其他USB串口设备），逐个连接以确保即插即用。"""
-        if not SERIAL_AVAILABLE:
-            logger.debug('[DeviceStore] pyserial not available (Windows), skipping real device scan.')
-            return
+        """通过 DeviceDriverManager 发现所有设备并注册。"""
         try:
-            from .real_device_manager import get_real_device_manager
-            available_ports = serial.tools.list_ports.comports()
-            logger.debug(f'[DeviceStore] Found {len(available_ports)} serial ports')
+            from .drivers.manager import get_device_manager
 
-            for port_info in available_ports:
-                device_name = port_info.device
+            manager = get_device_manager()
+            devices = manager.discover_all()
 
-                if not self._is_usb_serial_port(port_info):
-                    continue
-
-                is_ch340 = self._is_ch340_port(port_info)
-
-                device_id = f'real-{device_name.replace("/", "-")}'
-
-                # 如果已经存在则跳过，避免重复添加
-                if device_id in self._devices:
+            for meta in devices:
+                # 用 driver_type + device_id 生成唯一存储 ID
+                store_id = f'{meta.driver_type}:{meta.device_id}'
+                if store_id in self._devices:
                     continue
 
                 device = DeviceConfig(
-                    device_id=device_id,
-                    name=f'{port_info.description or "USB 串口"} ({device_name})',
-                    device_type='wearable_eeg',
-                    sampling_rate=250,
-                    channel_count=8,
+                    device_id=store_id,
+                    name=meta.name,
+                    device_type=meta.driver_type,
+                    sampling_rate=meta.sample_rate,
+                    channel_count=meta.channel_count,
                     config={
-                        'port': device_name,
-                        'baudrate': 460800,
-                        'description': port_info.description or '',
-                        'manufacturer': port_info.manufacturer or '',
-                        'product': port_info.product or '',
-                        'hwid': port_info.hwid or '',
-                        'is_ch340': is_ch340,
-                        'vid': getattr(port_info, 'vid', None),
-                        'pid': getattr(port_info, 'pid', None),
+                        'device_id': meta.device_id,
+                        'address': meta.address,
+                        'extra': meta.extra,
                     },
                 )
-
-                self._devices[device_id] = device
-                logger.debug(f'[DeviceStore] Added real device: {device_name} (CH340: {is_ch340})')
-
-                # 自动连接设备
-                manager = get_real_device_manager()
-                manager.connect_device(device_name, baudrate=460800)
+                self._devices[store_id] = device
+                logger.debug(f'[DeviceStore] Added device: {store_id} ({meta.name})')
 
         except Exception as e:
-            logger.debug(f'[DeviceStore] Error scanning real devices: {e}')
+            logger.debug(f'[DeviceStore] Error discovering devices: {e}')
             import traceback
             traceback.print_exc()
-    
-    def _is_usb_serial_port(self, port_info) -> bool:
-        """检查是否是USB串口设备"""
-        try:
-            # 检查是否有VID/PID（USB设备）
-            vid = getattr(port_info, 'vid', None)
-            pid = getattr(port_info, 'pid', None)
-            
-            # 检查描述中是否包含USB或串口关键词
-            description = (port_info.description or '').lower()
-            manufacturer = (port_info.manufacturer or '').lower()
-            product = (port_info.product or '').lower()
-            
-            # USB设备通常有VID/PID
-            if vid is not None and pid is not None:
-                return True
-            
-            # 检查常见关键词
-            usb_keywords = ['usb', 'serial', 'com', 'uart', 'ch340', 'ftdi', 'cp210']
-            for keyword in usb_keywords:
-                if (keyword in description or 
-                    keyword in manufacturer or 
-                    keyword in product):
-                    return True
-                    
-            return False
-        except Exception:
-            return False
-    
-    def _is_ch340_port(self, port_info) -> bool:
-        """检查是否是CH340设备"""
-        try:
-            vid = getattr(port_info, 'vid', None)
-            pid = getattr(port_info, 'pid', None)
-            
-            # CH340的VID通常是0x1A86
-            if vid == 0x1A86:
-                return True
-            
-            # 检查描述中是否包含CH340
-            description = (port_info.description or '').lower()
-            manufacturer = (port_info.manufacturer or '').lower()
-            product = (port_info.product or '').lower()
-            
-            ch340_keywords = ['ch340', 'ch341', '1a86']
-            for keyword in ch340_keywords:
-                if (keyword in description or 
-                    keyword in manufacturer or 
-                    keyword in product):
-                    return True
-                    
-            return False
-        except Exception:
-            return False
     
     def get_device(self, device_id: str) -> Optional[DeviceConfig]:
         """获取设备配置"""

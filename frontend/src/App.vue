@@ -23,13 +23,19 @@ import { onMounted, onUnmounted } from 'vue';
 import Sidebar from './components/Sidebar.vue';
 import StatusBar from './components/StatusBar.vue';
 import { sessionStore } from './services/sessionStore';
+import { graphRuntimeStore } from './services/graphRuntimeStore';
+import { controlWebSocket } from './services/controlWebSocket';
 
 onMounted(() => {
   sessionStore.startGlobalPolling();
+  // 初始化控制 WS（替代运行时状态轮询）
+  controlWebSocket.connect();
+  graphRuntimeStore.init();
 });
 
 onUnmounted(() => {
   sessionStore.stopGlobalPolling();
+  graphRuntimeStore.cleanup();
 });
 </script>
 

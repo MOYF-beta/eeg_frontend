@@ -248,18 +248,42 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             await self.send(text_data=json.dumps({'type': 'error', 'error': str(e)}))
 
     async def stream_data(self):
-        from .graph_store import get_graph, get_runtime_state, set_runtime_metrics
+        from .graph_store import (
+            get_graph, get_runtime_state, set_runtime_metrics,
+            get_control_revision,
+        )
         from .data_replay import get_replay_status
 
-        while self.running:
-            graph = get_graph()
-            self.graph_frozen = bool(graph.get('frozen', False))
-            self._sync_save_replay_nodes(graph)
-            runtime_state = get_runtime_state()
-            is_runtime_running = bool(runtime_state.get('running', False))
-            runtime_mode = str(runtime_state.get('mode') or 'live').lower()
+        # 缓存的控制状态 — 仅在 control_revision 变化时重读
+        last_control_rev = -1
+        cached_graph: Dict = {}
+        cached_frozen = False
+        cached_running = False
+        cached_runtime_mode = 'live'
+        cached_node_type_map: Dict[str, str] = {}
+        cached_fft_size = 512
 
-            if not self.graph_frozen or not is_runtime_running:
+        while self.running:
+            # --- 控制状态检查：仅比较修订号，O(1) ---
+            control_rev = get_control_revision()
+            if control_rev != last_control_rev:
+                last_control_rev = control_rev
+                cached_graph = get_graph()
+                cached_frozen = bool(cached_graph.get('frozen', False))
+                self.graph_frozen = cached_frozen
+                self._sync_save_replay_nodes(cached_graph)
+                rt = get_runtime_state()
+                cached_running = bool(rt.get('running', False))
+                cached_runtime_mode = str(rt.get('mode') or 'live').lower()
+                nodes = cached_graph.get('nodes', []) or []
+                cached_node_type_map = {
+                    str(n.get('id')): str(n.get('type') or '').upper()
+                    for n in nodes if n.get('id')
+                }
+                cached_fft_size = self._extract_fft_size(nodes)
+
+            # --- 流转条件 ---
+            if not cached_frozen or not cached_running:
                 self._engine.stop_all()
                 self._sample_buffer.clear()
                 self._sample_channel_names.clear()
@@ -268,8 +292,8 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 await asyncio.sleep(0.1)
                 continue
 
-            nodes = graph.get('nodes', []) or []
-            node_type_map = {str(node.get('id')): str(node.get('type') or '').upper() for node in nodes if node.get('id')}
+            nodes = cached_graph.get('nodes', []) or []
+            node_type_map = cached_node_type_map
 
             subscribed_output_nodes = {
                 node_id
@@ -278,7 +302,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             }
             save_nodes = set(self._save_nodes)
 
-            self._engine.update(graph, subscribed_output_nodes, save_nodes)
+            self._engine.update(cached_graph, subscribed_output_nodes, save_nodes)
 
             events = self._engine.poll_events(max_items_per_worker=1000)
             max_processing_delay_ms = 0
@@ -309,7 +333,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                         self._spectrum_buffers_by_node[node_id][ch_idx].append(float(val))
 
             t_send_start = time.perf_counter_ns()
-            fft_size = self._extract_fft_size(nodes)
+            fft_size = cached_fft_size
 
             for node_id, samples in list(self._sample_buffer.items()):
                 if not samples:
@@ -331,7 +355,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                     'channelNames': self._sample_channel_names.get(node_id, []),
                     'sampleRate': int(self._sample_rates.get(node_id, 1000)),
                     'processingDelayMs': int(node_delay_ms),
-                    'runtimeMode': runtime_mode,
+                    'runtimeMode': cached_runtime_mode,
                     'nonRealtime': bool(node_delay_ms > 10000),
                     'performanceWarning': '非实时：处理延迟持续升高' if node_delay_ms > 10000 else None,
                 }
@@ -365,7 +389,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             self._batch_first_utc.clear()
 
             progress = None
-            if runtime_mode == 'offline' and self._replay_nodes:
+            if cached_runtime_mode == 'offline' and self._replay_nodes:
                 progresses = []
                 for replay_node_id in self._replay_nodes:
                     status = get_replay_status(replay_node_id)

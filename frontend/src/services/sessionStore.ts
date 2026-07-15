@@ -465,14 +465,12 @@ class SessionStore {
 
   // ========== 工具方法 ==========
 
-  // ========== 全局轮询（单一计时器，避免多组件重复请求）==========
+  // ========== 控制通道（替代轮询）==========
 
   startGlobalPolling() {
-    if (this._pollTimer !== null) return;
-    // 首次立即拉取一次图结构，确保初始状态不为空
+    // 不再 setInterval 轮询，改为通过 controlWebSocket 订阅状态推送
+    // 首次仍需 fetch 一次图结构（控制 WS 可能还未连接）
     this._initialFetch();
-    this._pollTick();
-    this._pollTimer = window.setInterval(() => this._pollTick(), 2000);
   }
 
   private async _initialFetch() {
@@ -494,31 +492,11 @@ class SessionStore {
   }
 
   stopGlobalPolling() {
-    if (this._pollTimer !== null) {
-      clearInterval(this._pollTimer);
-      this._pollTimer = null;
-    }
+    // 控制 WS 接管，无需清理计时器
   }
 
   private async _pollTick() {
-    try {
-      // 运行时状态由 graphRuntimeStore 统一轮询，这里只同步计算图拓扑结构
-      if (!this.state.graph.frozen) {
-        const graphRes = await fetch('/api/graph/');
-        if (graphRes.ok) {
-          const graphData = await graphRes.json();
-          if (Array.isArray(graphData.nodes) && Array.isArray(graphData.edges)) {
-            this.state.graph.nodes = graphData.nodes;
-            this.state.graph.edges = graphData.edges;
-            this.state.graph.frozen = Boolean(graphData.frozen);
-            this.saveToStorage();
-            this.notify();
-          }
-        }
-      }
-    } catch (e) {
-      console.warn('[SessionStore] Poll tick failed:', e);
-    }
+    // 兼容保留：控制 WS 已接管图同步，此方法不再被定时调用
   }
 
   // 清空所有状态
