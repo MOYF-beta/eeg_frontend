@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
+
 import json
 import os
 import time
@@ -167,7 +170,7 @@ def _load_from_file() -> GraphPayload:
                 data = json.load(f)
                 # 验证数据结构
                 if 'nodes' in data and 'edges' in data and 'frozen' in data:
-                    print(f'[GraphStore] Loaded graph from {DATA_FILE}: {len(data["nodes"])} nodes, {len(data["edges"])} edges')
+                    logger.debug(f'[GraphStore] Loaded graph from {DATA_FILE}: {len(data["nodes"])} nodes, {len(data["edges"])} edges')
                     
                     # 确保每个节点都有deviceId字段
                     nodes = data.get('nodes', [])
@@ -181,7 +184,7 @@ def _load_from_file() -> GraphPayload:
                         'frozen': data.get('frozen', False),
                     }
     except Exception as e:
-        print(f'[GraphStore] Failed to load from file: {e}')
+        logger.debug(f'[GraphStore] Failed to load from file: {e}')
     return _DEFAULT_GRAPH.copy()
 
 
@@ -190,9 +193,9 @@ def _save_to_file(payload: GraphPayload) -> None:
     try:
         with open(DATA_FILE, 'w', encoding='utf-8') as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
-        print(f'[GraphStore] Saved graph to {DATA_FILE}')
+        logger.debug(f'[GraphStore] Saved graph to {DATA_FILE}')
     except Exception as e:
-        print(f'[GraphStore] Failed to save to file: {e}')
+        logger.debug(f'[GraphStore] Failed to save to file: {e}')
 
 
 def get_graph() -> GraphPayload:

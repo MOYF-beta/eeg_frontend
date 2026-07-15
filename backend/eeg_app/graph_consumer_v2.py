@@ -1,6 +1,9 @@
 from __future__ import annotations
 # pyright: reportMissingImports=false
 
+import logging
+logger = logging.getLogger(__name__)
+
 import asyncio
 import json
 import time
@@ -43,13 +46,13 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
         if self.graph_frozen:
             asyncio.create_task(self.stream_data())
 
-        print(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
+        logger.debug(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
 
     async def disconnect(self, code):
         self.running = False
         self._engine.stop_all()
         self._stop_all_save_replay()
-        print(f"[WebSocket] Client disconnected, code: {code}")
+        logger.debug(f"[WebSocket] Client disconnected, code: {code}")
 
     @staticmethod
     def _extract_fft_size(nodes):
@@ -166,9 +169,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 result = start_recording(node_id=node_id, filename=filename, format=format_type)
                 if result.get('ok'):
                     self._save_nodes.append(node_id)
-                    print(f"[WebSocket] SAVE node initialized: {node_id} -> {result.get('filepath')}")
+                    logger.debug(f"[WebSocket] SAVE node initialized: {node_id} -> {result.get('filepath')}")
                 else:
-                    print(f"[WebSocket] SAVE node failed: {node_id} - {result.get('error')}")
+                    logger.debug(f"[WebSocket] SAVE node failed: {node_id} - {result.get('error')}")
 
             is_replay_source = node_type == 'REPLAY' or (
                 node_type == 'SOURCE' and str(params.get('sourceMode') or 'live').lower() == 'replay'
@@ -183,9 +186,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 result = start_replay(node_id=node_id, filename=filename, loop=loop)
                 if result.get('ok'):
                     self._replay_nodes.append(node_id)
-                    print(f"[WebSocket] REPLAY node initialized: {node_id} -> {result.get('filename')}")
+                    logger.debug(f"[WebSocket] REPLAY node initialized: {node_id} -> {result.get('filename')}")
                 else:
-                    print(f"[WebSocket] REPLAY node failed: {node_id} - {result.get('error')}")
+                    logger.debug(f"[WebSocket] REPLAY node failed: {node_id} - {result.get('error')}")
 
     def _stop_all_save_replay(self):
         from .data_recorder import stop_recording
@@ -214,17 +217,17 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             if msg_type == 'subscribe':
                 node_ids = message.get('nodeIds', [])
                 self.subscribed_nodes.update(str(node_id) for node_id in node_ids)
-                print(f"[WebSocket] Subscribed to nodes: {node_ids}")
+                logger.debug(f"[WebSocket] Subscribed to nodes: {node_ids}")
 
             elif msg_type == 'unsubscribe':
                 node_ids = message.get('nodeIds', [])
                 if node_ids:
                     for nid in node_ids:
                         self.subscribed_nodes.discard(str(nid))
-                    print(f"[WebSocket] Unsubscribed from nodes: {node_ids}, remaining: {list(self.subscribed_nodes)}")
+                    logger.debug(f"[WebSocket] Unsubscribed from nodes: {node_ids}, remaining: {list(self.subscribed_nodes)}")
                 else:
                     self.subscribed_nodes.clear()
-                    print("[WebSocket] Unsubscribed from all nodes")
+                    logger.debug("[WebSocket] Unsubscribed from all nodes")
 
             elif msg_type == 'ping':
                 await self.send(text_data=json.dumps({'type': 'pong'}))
@@ -333,7 +336,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                     'performanceWarning': '非实时：处理延迟持续升高' if node_delay_ms > 10000 else None,
                 }
                 if len(samples) <= 2:
-                    print(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
+                    logger.debug(f"[WebSocket] SEND nodeId={node_id} channels={len(latest_channels)} names={self._sample_channel_names.get(node_id, [])[:3]} samples={len(samples)}")
 
                 if node_type in {'SPECTRUM', 'OSC'}:
                     bundle = self._compute_spectrum_bundle(node_id=node_id, sample_rate=int(self._sample_rates.get(node_id, 1000)), fft_size=fft_size)
@@ -343,7 +346,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 try:
                     await self.send(text_data=json.dumps(payload))
                 except Exception as exc:
-                    print(f"[WebSocket] Send error: {exc}")
+                    logger.debug(f"[WebSocket] Send error: {exc}")
                     self.running = False
                     break
 

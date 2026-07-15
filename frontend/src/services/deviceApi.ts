@@ -1,10 +1,23 @@
 import type { Device, SimulatedDeviceConfig } from './sessionStore';
 
-// API响应接口
+// 后端设备原始格式（/api/devices/ 返回的 data 字段结构）
+export interface RawDevice {
+  id: string;
+  name: string;
+  type: string;
+  sampling_rate: number;
+  channel_count: number;
+  config: Record<string, unknown>;
+  created_at?: number;
+  updated_at?: number;
+  connection_status?: Record<string, unknown>;
+}
+
+// 统一响应格式
 interface ApiResponse<T> {
-  code: number;
-  message: string;
-  data: T;
+  ok: boolean;
+  data?: T;
+  error?: string;
 }
 
 // 创建设备请求接口
@@ -57,18 +70,32 @@ interface UpdateDeviceRequest {
 
 // 设备API服务
 export const deviceApi = {
+  // 获取设备列表（原始后端格式）—— 单一权威入口
+  async fetchDevicesRaw(): Promise<RawDevice[]> {
+    const response = await fetch('/api/devices/');
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    const result: ApiResponse<RawDevice[]> = await response.json();
+    if (!result.ok) {
+      throw new Error(result.error || 'Failed to fetch devices');
+    }
+    return result.data!;
+  },
+
   // 获取设备列表
   async getDevices(): Promise<Device[]> {
     try {
-      const response = await fetch('/api/devices/');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const result: ApiResponse<Device[]> = await response.json();
-      if (result.code !== 0) {
-        throw new Error(result.message);
-      }
-      return result.data;
+      const rawDevices = await this.fetchDevicesRaw();
+      return rawDevices.map((device) => ({
+        id: device.id,
+        name: device.name,
+        status: (device.config?.connected as boolean) ? 'online' : 'offline',
+        type: device.type === 'wearable_eeg' ? 'real' : 'simulated',
+        samplingRate: device.sampling_rate,
+        channelCount: device.channel_count,
+        config: device.config || {},
+      }));
     } catch (error) {
       console.error('Failed to fetch devices:', error);
       throw error;
@@ -86,16 +113,13 @@ export const deviceApi = {
         body: JSON.stringify(deviceData),
       });
       
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
       const result: ApiResponse<Device> = await response.json();
-      if (result.code !== 0) {
-        throw new Error(result.message);
+      
+      if (!response.ok || !result.ok) {
+        throw new Error(result.error || `HTTP error! status: ${response.status}`);
       }
       
-      return result.data;
+      return result.data!;
     } catch (error) {
       console.error('Failed to create device:', error);
       throw error;
@@ -115,25 +139,15 @@ export const deviceApi = {
       
       const result: ApiResponse<Device> = await response.json();
       
-      if (!response.ok) {
-        // 尝试获取更详细的错误信息
-        let errorMessage = result.message || `HTTP error! status: ${response.status}`;
-        
-        // 特殊处理权限错误
+      if (!response.ok || !result.ok) {
+        let errorMessage = result.error || `HTTP error! status: ${response.status}`;
         if (response.status === 403) {
           errorMessage = '计算图正在运行中，无法修改设备';
-        } else if (response.status === 400) {
-          errorMessage = result.message || '请求参数错误';
         }
-        
         throw new Error(errorMessage);
       }
       
-      if (result.code !== 0) {
-        throw new Error(result.message);
-      }
-      
-      return result.data;
+      return result.data!;
     } catch (error) {
       console.error('Failed to update device:', error);
       throw error;
@@ -149,22 +163,12 @@ export const deviceApi = {
       
       const result: ApiResponse<void> = await response.json();
       
-      if (!response.ok) {
-        // 尝试获取更详细的错误信息
-        let errorMessage = result.message || `HTTP error! status: ${response.status}`;
-        
-        // 特殊处理权限错误
+      if (!response.ok || !result.ok) {
+        let errorMessage = result.error || `HTTP error! status: ${response.status}`;
         if (response.status === 403) {
           errorMessage = '计算图正在运行中，无法删除设备';
-        } else if (response.status === 400) {
-          errorMessage = result.message || '请求参数错误';
         }
-        
         throw new Error(errorMessage);
-      }
-      
-      if (result.code !== 0) {
-        throw new Error(result.message);
       }
     } catch (error) {
       console.error('Failed to delete device:', error);

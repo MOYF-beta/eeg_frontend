@@ -90,7 +90,7 @@
       />
       
       <v-text-field
-        v-model.number="form.params.channelCount"
+        v-model.number="form.params.channels"
         label="通道数"
         type="number"
         density="compact"

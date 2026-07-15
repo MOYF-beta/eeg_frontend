@@ -41,7 +41,9 @@
       "params": {
         "type": "lowpass",
         "cutoff": 50,
-        "order": 4
+        "order": 4,
+        "filterType": "lowpass",
+        "cutoffFreq": 25
       },
       "id": "node-1777211905622-234",
       "x": 200,
@@ -49,42 +51,34 @@
     },
     {
       "type": "SOURCE",
-      "name": "设备源:real--dev-ttyUSB0",
+      "name": "USB Serial (/dev/ttyUSB0)",
       "params": {
         "sampleRate": 1000,
         "channels": 8,
         "deviceId": "sim-001",
         "sourceMode": "live",
+        "port": "/dev/ttyUSB0",
         "filePath": "",
-        "loop": false,
-        "channelNames": [
-          "CH1",
-          "CH2",
-          "CH3",
-          "CH4",
-          "CH5",
-          "CH6",
-          "CH7",
-          "CH8"
-        ]
+        "loop": false
       },
-      "id": "node-1781257258758-878",
-      "x": -100,
-      "y": 370
+      "deviceId": "real--dev-ttyUSB0",
+      "id": "node-1783600110189-463",
+      "x": -12.66668701171875,
+      "y": 231.66666412353516
     }
   ],
   "edges": [
     {
-      "id": "cd5b0c81-9b16-41b8-9477-20d1168ad755",
-      "source": "node-1781257258758-878",
-      "target": "node-1777211905622-234",
+      "id": "c7013632-9373-48ad-b720-7028ce9647e3",
+      "source": "node-1777211905622-234",
+      "target": "debug-osc-1",
       "sourcePort": "out",
       "targetPort": "in"
     },
     {
-      "id": "c7013632-9373-48ad-b720-7028ce9647e3",
-      "source": "node-1777211905622-234",
-      "target": "debug-osc-1",
+      "id": "35a96216-029f-47c4-a8d8-72fbab6e43be",
+      "source": "node-1783600110189-463",
+      "target": "node-1777211905622-234",
       "sourcePort": "out",
       "targetPort": "in"
     }

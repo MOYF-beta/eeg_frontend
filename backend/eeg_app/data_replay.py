@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """数据回放管理器 - 实现REPLAY节点的数据文件回放功能"""
 
 import csv
@@ -72,7 +74,7 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
         # 跳过表头
         next(_active_replays[node_id]['reader'], None)
         
-        print(f'[DataReplay] Started replay from {filepath} ({sample_count} samples, {channels} channels)')
+        logger.debug(f'[DataReplay] Started replay from {filepath} ({sample_count} samples, {channels} channels)')
         return {
             'ok': True,
             'filename': filepath.name,
@@ -82,7 +84,7 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
         }
         
     except Exception as e:
-        print(f'[DataReplay] Failed to start replay: {e}')
+        logger.debug(f'[DataReplay] Failed to start replay: {e}')
         return {'ok': False, 'error': str(e)}
 
 
@@ -136,7 +138,7 @@ def read_next_sample(node_id: str) -> Optional[Dict]:
         }
         
     except Exception as e:
-        print(f'[DataReplay] Read error: {e}')
+        logger.debug(f'[DataReplay] Read error: {e}')
         return None
 
 
@@ -186,11 +188,11 @@ def stop_replay(node_id: str) -> Dict:
         }
         
         del _active_replays[node_id]
-        print(f'[DataReplay] Stopped replay: {result}')
+        logger.debug(f'[DataReplay] Stopped replay: {result}')
         return result
         
     except Exception as e:
-        print(f'[DataReplay] Error stopping replay: {e}')
+        logger.debug(f'[DataReplay] Error stopping replay: {e}')
         return {'ok': False, 'error': str(e)}
 
 

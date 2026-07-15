@@ -527,7 +527,6 @@ const isNodeBound = (nodeId: string) => {
 };
 
 const onNodeSelected = (nodeId: string | null) => {
-  console.log('[Oscilloscope] Node selected:', nodeId, 'viewId:', viewId);
   if (nodeId) {
     sessionStore.bindViewToNode(viewId, nodeId);
     selectedNodeId.value = nodeId;
@@ -1057,7 +1056,6 @@ const handleDataPacket = (packet: EegDataPacket) => {
     return;
   }
 
-  console.log(`[Oscilloscope] Matched packet nodeId="${packetNodeId}" channels=${packet.channels?.length} names=${JSON.stringify(packet.channelNames?.slice(0, 3))}`);
 
   isGraphFrozen.value = true;
 
@@ -1192,7 +1190,6 @@ let unsubConnected: (() => void) | null = null;
 let unsubData: (() => void) | null = null;
 let unsubStore: (() => void) | null = null;
 
-console.log('[Oscilloscope] Component code loaded - v5 scan sweep mode');
 
 // ========== localStorage 持久化 ==========
 const STORAGE_PREFIX = 'osc_settings_';

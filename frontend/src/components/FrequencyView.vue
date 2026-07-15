@@ -1174,7 +1174,6 @@ const handleDataPacket = (packet: EegDataPacket) => {
       return;
     }
 
-  console.log(`[FrequencyView] Matched packet nodeId="${packetNodeId}" channels=${packet.channels?.length} spectra=${packet.spectra?.length} fftSize=${packet.fftSize}`);
 
   isGraphFrozen.value = true;
 

@@ -3,3 +3,5 @@ channels>=4.0
 daphne>=4.0
 django-cors-headers>=4.3
 numpy>=1.26
+pyserial>=3.5
+pyserial-asyncio>=0.6

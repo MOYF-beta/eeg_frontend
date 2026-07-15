@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """数据保存管理器 - 实现SAVE节点的数据文件保存功能"""
 
 import csv
@@ -71,7 +73,7 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
             # TODO: 实现EDF和NPY格式
             return {'ok': False, 'error': f'Format {format} not yet implemented'}
         
-        print(f'[DataRecorder] Started recording to {filepath}')
+        logger.debug(f'[DataRecorder] Started recording to {filepath}')
         return {
             'ok': True,
             'filepath': str(filepath),
@@ -80,7 +82,7 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
         }
         
     except Exception as e:
-        print(f'[DataRecorder] Failed to start recording: {e}')
+        logger.debug(f'[DataRecorder] Failed to start recording: {e}')
         return {'ok': False, 'error': str(e)}
 
 
@@ -123,7 +125,7 @@ def write_sample(node_id: str, timestamp: float, channels: List[float]) -> bool:
         return True
         
     except Exception as e:
-        print(f'[DataRecorder] Write error: {e}')
+        logger.debug(f'[DataRecorder] Write error: {e}')
         return False
 
 
@@ -157,11 +159,11 @@ def stop_recording(node_id: str) -> Dict:
         }
         
         del _active_writers[node_id]
-        print(f'[DataRecorder] Stopped recording: {result}')
+        logger.debug(f'[DataRecorder] Stopped recording: {result}')
         return result
         
     except Exception as e:
-        print(f'[DataRecorder] Error stopping recording: {e}')
+        logger.debug(f'[DataRecorder] Error stopping recording: {e}')
         return {'ok': False, 'error': str(e)}
 
 
@@ -197,7 +199,7 @@ def list_saved_files() -> List[Dict]:
                 'modified': datetime.fromtimestamp(stat.st_mtime).isoformat(),
             })
     except Exception as e:
-        print(f'[DataRecorder] Error listing files: {e}')
+        logger.debug(f'[DataRecorder] Error listing files: {e}')
     return files
 
 

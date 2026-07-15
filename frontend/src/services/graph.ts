@@ -70,18 +70,12 @@ export type PythonPrototypeSpec = {
   outputNames: string[];
 };
 
-const protocol = window.location.protocol;
-const host = 'localhost';
-const baseUrl = `${protocol}//${host}:8000/api`;
+const baseUrl = '/api';
 
 export async function fetchGraph(): Promise<GraphPayload> {
   const res = await fetch(`${baseUrl}/graph/`);
   if (!res.ok) throw new Error('Failed to load graph');
   return res.json();
-}
-
-export async function saveGraph(payload: GraphPayload) {
-  return persistGraph();
 }
 
 export async function syncGraph(payload: GraphPayload, baseRevision?: number): Promise<GraphSyncResponse> {
@@ -167,16 +161,6 @@ export async function stopGraph() {
 export async function getGraphRuntimeState() {
   const res = await fetch(`${baseUrl}/graph/run/`, { method: 'GET' });
   if (!res.ok) throw new Error('Failed to get runtime state');
-  return res.json();
-}
-
-export async function debugGraph(payload: GraphPayload) {
-  const res = await fetch(`${baseUrl}/graph/debug/`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) throw new Error('Failed to send debug payload');
   return res.json();
 }
 

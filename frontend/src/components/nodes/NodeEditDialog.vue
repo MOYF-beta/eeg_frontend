@@ -77,29 +77,23 @@
   
   <!-- 边栏模式 -->
   <div v-else class="node-edit-sidebar">
-    <div class="sidebar-header">
-      <v-icon :color="iconColor" class="mr-2">{{ icon }}</v-icon>
-      <span class="sidebar-title">{{ isReadOnly ? '查看节点' : '编辑节点' }} - {{ nodeTypeName }}</span>
-    </div>
-    
-    <v-divider />
-    
-    <div class="sidebar-content">
-      <!-- 节点编辑内容 -->
-      <div class="node-edit-content">
-        <!-- 通用字段：名称 -->
-        <v-text-field
-          v-model="form.name"
-          label="节点名称"
-          density="compact"
-          variant="outlined"
-          class="mb-4"
-          :readonly="isReadOnly"
-          :disabled="isReadOnly"
-        />
-        
-        <!-- 动态表单内容 -->
-        <NodeEditFormContent
+    <div class="sidebar-body">
+      <div class="sidebar-content">
+        <!-- 节点编辑内容 -->
+        <div class="node-edit-content">
+          <!-- 通用字段：名称 -->
+          <v-text-field
+            v-model="form.name"
+            label="节点名称"
+            density="compact"
+            variant="outlined"
+            class="mb-4"
+            :readonly="isReadOnly"
+            :disabled="isReadOnly"
+          />
+          
+          <!-- 动态表单内容 -->
+          <NodeEditFormContent
           :node-type="nodeType"
           :form="form"
           :is-read-only="isReadOnly"
@@ -134,8 +128,9 @@
           @remove-merge-input="removeMergeInput"
           @import-python-file="importPythonFile"
         />
-      </div>
-    </div>
+        </div><!-- /node-edit-content -->
+      </div><!-- /sidebar-content -->
+    </div><!-- /sidebar-body -->
     
     <!-- 自动保存，无需保存按钮 -->
   </div>
@@ -798,18 +793,20 @@ watch(kernelText, (value) => {
   form.value.params.kernel = kernel.length > 0 ? kernel : [1];
 });
 
-// 监听form变化，自动保存
-watch(() => form.value, (newForm, oldForm) => {
+// 监听节点名称变化，自动保存
+watch(() => form.value.name, (newName, oldName) => {
   if (props.isReadOnly) return;
   if (!props.nodeData) return;
-  
-  // 检查是否有实际变化
-  const hasNameChanged = newForm.name !== oldForm?.name;
-  const hasParamsChanged = JSON.stringify(newForm.params) !== JSON.stringify(oldForm?.params);
-  
-  if (hasNameChanged || hasParamsChanged) {
+  if (newName !== oldName) {
     debouncedSave();
   }
+});
+
+// 监听节点参数变化，自动保存
+watch(() => form.value.params, (_newParams, _oldParams) => {
+  if (props.isReadOnly) return;
+  if (!props.nodeData) return;
+  debouncedSave();
 }, { deep: true });
 
 // 监听特定数组变化
@@ -877,7 +874,6 @@ const debouncedSave = () => {
 const save = async () => {
   // 只读模式下禁止保存
   if (props.isReadOnly) {
-    console.log('[NodeEditDialog] 只读模式下禁止保存');
     return;
   }
   

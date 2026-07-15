@@ -1,4 +1,5 @@
 import type { GraphNode, GraphEdge } from './graph';
+import { deviceApi } from './deviceApi';
 
 // 信号类型枚举
 export type SignalType = 'sine' | 'square' | 'triangle' | 'pulse' | 'multi_sine';
@@ -240,30 +241,8 @@ class SessionStore {
    */
   async loadDevicesFromBackend(): Promise<void> {
     try {
-      const response = await fetch('/api/devices/');
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const result = await response.json();
-      if (result.code !== 0) {
-        throw new Error(result.message);
-      }
-      
-      // 将后端设备格式转换为前端格式
-      const devices: Device[] = result.data.map((device: any) => ({
-        id: device.id,
-        name: device.name,
-        status: device.config.connected ? 'online' : 'offline',
-        type: device.type === 'wearable_eeg' ? 'real' : 'simulated',
-        samplingRate: device.sampling_rate,
-        channelCount: device.channel_count,
-        config: device.config || {}
-      }));
-      
+      const devices = await deviceApi.getDevices();
       this.setDevices(devices);
-      console.log(`Loaded ${devices.length} devices from backend`);
-      
     } catch (error) {
       console.error('Failed to load devices from backend:', error);
       // 保持现有设备列表
@@ -494,7 +473,6 @@ class SessionStore {
     this._initialFetch();
     this._pollTick();
     this._pollTimer = window.setInterval(() => this._pollTick(), 2000);
-    console.log('[SessionStore] Global polling started (2s interval)');
   }
 
   private async _initialFetch() {
@@ -524,28 +502,7 @@ class SessionStore {
 
   private async _pollTick() {
     try {
-      const runRes = await fetch('/api/graph/run/');
-      if (runRes.ok) {
-        const runData = await runRes.json();
-        if (runData.ok && runData.state) {
-          const s = runData.state;
-          this.runtime = {
-            running: Boolean(s.running),
-            mode: String(s.mode || 'live') as 'live' | 'offline',
-            progress: s.progress != null ? Number(s.progress) : null,
-            processingDelayMs: Number(s.processingDelayMs || 0),
-            nonRealtime: Boolean(s.nonRealtime),
-            warning: s.warning ? String(s.warning) : null,
-          };
-          const backendFrozen = Boolean(s.frozen);
-          if (this.state.graph.frozen !== backendFrozen) {
-            this.state.graph.frozen = backendFrozen;
-            this.saveToStorage();
-          }
-          this.notify();
-        }
-      }
-
+      // 运行时状态由 graphRuntimeStore 统一轮询，这里只同步计算图拓扑结构
       if (!this.state.graph.frozen) {
         const graphRes = await fetch('/api/graph/');
         if (graphRes.ok) {

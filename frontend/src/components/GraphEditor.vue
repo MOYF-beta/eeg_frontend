@@ -93,10 +93,10 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStartDevice($event, device.id)"
-              :title="!canEditGraphLocal ? `当前状态不允许拖拽设备: ${statusDescription}` : `拖拽 ${device.name} 作为数据源节点`"
+              :title="!canEditGraphLocal ? `当前状态不允许拖拽设备: ${statusDescription}` : `拖拽 ${device.port || device.name} 作为数据源节点`"
             >
               <span class="item-icon" style="background: #e3f2fd; color: #1976d2;">DEV</span>
-              <span class="item-name">{{ device.name }}</span>
+              <span class="item-name">{{ device.port || device.name }}</span>
             </div>
             <div v-if="runningDevices.length === 0" class="palette-empty">
               暂无在线设备
@@ -171,21 +171,57 @@
         <!-- 右侧编辑边栏 -->
         <div class="sidebar" :class="{ 'sidebar-collapsed': !sidebarVisible }">
           <div class="sidebar-header">
-            <div v-if="sidebarVisible" class="sidebar-title">
-              <v-icon :color="sidebarIconColor" class="mr-2">{{ sidebarIcon }}</v-icon>
-              {{ sidebarTitle }}
-            </div>
-            <v-icon v-else color="grey" class="ml-2">mdi-chevron-left</v-icon>
+            <template v-if="sidebarVisible">
+              <div class="sidebar-title-wrap">
+                <v-icon :color="sidebarIconColor" class="mr-2">{{ sidebarIcon }}</v-icon>
+                <div class="sidebar-title-text">
+                  <div class="sidebar-title">{{ sidebarTitle }}</div>
+                  <div class="sidebar-subtitle">{{ sidebarSubtitle }}</div>
+                </div>
+              </div>
+              <v-tooltip text="折叠边栏 (点击空白画布也可折叠)" location="bottom">
+                <template #activator="{ props }">
+                  <v-btn
+                    v-bind="props"
+                    icon
+                    variant="text"
+                    size="small"
+                    @click="closeSidebar"
+                  >
+                    <v-icon>mdi-chevron-right</v-icon>
+                  </v-btn>
+                </template>
+              </v-tooltip>
+            </template>
+            <v-tooltip v-else text="展开节点属性面板" location="bottom">
+              <template #activator="{ props }">
+                <v-btn
+                  v-bind="props"
+                  icon
+                  variant="text"
+                  size="small"
+                  @click="reopenSidebar"
+                >
+                  <v-icon>mdi-chevron-left</v-icon>
+                </v-btn>
+              </template>
+            </v-tooltip>
           </div>
 
           <!-- 边栏内容 -->
           <div v-if="sidebarVisible" class="sidebar-content">
+            <div v-if="!editingNode" class="sidebar-empty">
+              <v-icon size="40" color="grey-lighten-1">mdi-cube-outline</v-icon>
+              <div class="sidebar-empty-text">点击画布中的节点以编辑其属性</div>
+            </div>
             <NodeEditDialog
+              v-else
               v-model="nodeEditDialogOpen"
               :node-data="editingNode"
               :all-nodes="allNodes"
               :all-edges="allEdges"
               mode="sidebar"
+              :is-read-only="!canEditGraphLocal"
               @save="handleNodeSave"
               @bindOscilloscope="handleBindOscilloscope"
               class="sidebar-node-edit"
@@ -491,6 +527,8 @@ type PaletteDevice = {
   id: string;
   name: string;
   status: string;
+  port: string;
+  type: string;
 };
 
 const paletteDevices = ref<PaletteDevice[]>([]);
@@ -540,11 +578,6 @@ function syncUnsavedState() {
   const signature = payloadSignature(current);
   hasUnsavedChanges.value = signature !== lastPersistedSignature.value;
 
-  console.log('[GraphEditor][sync] syncUnsavedState, sig changed:', signature !== lastSyncedSignature.value,
-    'hasUnsaved:', hasUnsavedChanges.value,
-    'lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
-    'lastPersistedSig:', lastPersistedSignature.value.slice(0, 40));
-
   if (signature !== lastSyncedSignature.value) {
     scheduleRealtimeSync(current, signature);
   }
@@ -560,7 +593,6 @@ function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
     realtimeSyncInFlight.value = true;
     try {
       const result = await syncGraph(payload, currentRevision.value);
-      console.log('[GraphEditor][sync] syncGraph result, conflict:', result.conflict, 'rev:', result.revision);
       if (result.conflict && result.graph) {
         applyPayloadToCanvas(result.graph, { fromBackend: true, reason: 'conflict' });
         currentRevision.value = Number(result.revision || currentRevision.value);
@@ -581,7 +613,13 @@ function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
 async function loadPaletteDevices() {
   try {
     const apiDevices = await deviceApi.getDevices();
-    paletteDevices.value = apiDevices.map((d: any) => ({ id: d.id, name: d.name, status: d.status ?? 'online' }));
+    paletteDevices.value = apiDevices.map((d: any) => ({
+      id: d.id,
+      name: d.name,
+      status: d.status ?? 'online',
+      port: String(d.port || d.config?.port || ''),
+      type: String(d.type || ''),
+    }));
 
     // 同步填充 sessionStore，避免 NodeEditFormContent 中的设备选择器无数据
     const converted: Array<{ id: string; name: string; status: 'online' | 'offline'; samplingRate: number; channelCount: number; type: 'simulated' | 'real'; config: any }> = apiDevices.map((apiDevice: any) => ({
@@ -793,6 +831,32 @@ function stopRuntimeStatePolling() {
 // 右侧边栏可见性 — 选中节点时展开，单击空白时折叠
 const sidebarVisible = ref(false);
 
+// 边栏标题与图标计算属性
+const sidebarIconColor = computed(() => {
+  if (!editingNode.value) return 'grey';
+  const meta = nodeMetaMap[editingNode.value.type];
+  return meta?.color || 'grey';
+});
+
+const sidebarIcon = computed(() => {
+  if (!editingNode.value) return 'mdi-cube-outline';
+  const meta = nodeMetaMap[editingNode.value.type];
+  return meta?.icon || 'mdi-cube-outline';
+});
+
+const sidebarTitle = computed(() => {
+  if (!editingNode.value) return '节点属性';
+  const meta = nodeMetaMap[editingNode.value.type];
+  const typeName = meta?.name || editingNode.value.type;
+  return `${typeName} · ${editingNode.value.name || '未命名'}`;
+});
+
+const sidebarSubtitle = computed(() => {
+  if (frozen.value) return '查看节点（计算图已锁定）';
+  if (isRunning.value) return '查看节点（运行中）';
+  return '编辑节点 · 自动保存';
+});
+
 // 边栏切换后刷新画布尺寸
 watch(sidebarVisible, () => {
   nextTick(() => {
@@ -984,7 +1048,6 @@ async function stopRunLocal() {
     // 停止边动画
     stopEdgeAnimations();
     
-    console.log('[GraphEditor] Graph stopped locally');
     
     // 保存状态到会话存储
     saveStateToSessionStorage();
@@ -1041,7 +1104,6 @@ const editDialog = ref({
 let isInitializing = true;
 watch(frozen, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    console.log(`[GraphEditor] Frozen state changed: ${oldVal} -> ${newVal}`);
     
     // 初始化时不自动触发冻结操作
     if (!isInitializing) {
@@ -1055,7 +1117,6 @@ onMounted(() => {
   // 延迟设置，确保计算图已加载
   setTimeout(() => {
     isInitializing = false;
-    console.log('[GraphEditor] Initialization complete, frozen watcher enabled');
   }, 1000);
 });
 
@@ -1063,7 +1124,6 @@ onMounted(() => {
 function saveNodeEdit() {
   // 冻结状态下禁止编辑
   if (frozen.value) {
-    console.log('[GraphEditor] 冻结状态下禁止编辑节点');
     return;
   }
   
@@ -1203,6 +1263,23 @@ const nodeTypes: Record<GraphNodeType, { name: string; color: string; bg: string
   CUSTOM_CONV: { name: '卷积节点', color: '#00897B', bg: '#E0F2F1', icon: 'CNV', hasInput: true, hasOutput: true },
 };
 
+// 节点元信息映射（用于边栏图标/标题，使用 mdi 图标更直观）
+const nodeMetaMap: Record<string, { name: string; icon: string; color: string }> = {
+  SOURCE: { name: '数据源', icon: 'mdi-database', color: 'primary' },
+  REPLAY: { name: '回放', icon: 'mdi-play-circle', color: 'primary' },
+  FILTER: { name: '滤波器', icon: 'mdi-filter', color: 'success' },
+  DOWNSAMPLE: { name: '降采样', icon: 'mdi-arrow-collapse-down', color: 'brown' },
+  UPSAMPLE: { name: '升采样', icon: 'mdi-arrow-expand-up', color: 'blue-grey' },
+  SUM: { name: '求和器', icon: 'mdi-plus-circle', color: 'purple' },
+  AVERAGE: { name: '平均器', icon: 'mdi-format-vertical-align-center', color: 'purple' },
+  SPLIT: { name: '分离器', icon: 'mdi-call-split', color: 'warning' },
+  MERGE: { name: '合并器', icon: 'mdi-call-merge', color: 'orange' },
+  OSC: { name: '示波器', icon: 'mdi-chart-line', color: 'teal' },
+  SAVE: { name: '保存', icon: 'mdi-content-save', color: 'pink' },
+  CUSTOM_PYFUNC: { name: 'Python函数', icon: 'mdi-language-python', color: 'deep-purple' },
+  CUSTOM_CONV: { name: '卷积节点', icon: 'mdi-waveform', color: 'cyan-darken-2' },
+};
+
 const sourceNodes = [
   { type: 'REPLAY' as GraphNodeType, name: '文件回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD' },
 ];
@@ -1228,6 +1305,16 @@ function selectNode(nodeId: string) {
   selectedNodeId.value = nodeId;
   sidebarVisible.value = true;
   openNodeEditDialog(nodeId);
+}
+
+// 折叠边栏（保留选中状态，便于重新展开）
+function closeSidebar() {
+  sidebarVisible.value = false;
+}
+
+// 重新展开边栏
+function reopenSidebar() {
+  sidebarVisible.value = true;
 }
 
 // 打开节点编辑对话框
@@ -1267,7 +1354,6 @@ function openNodeEditDialog(nodeId: string) {
 async function handleNodeSave({ name, params, deviceId }: { name: string; params: Record<string, unknown>; deviceId?: string | null }) {
   // 检查编辑权限
   if (!canEditGraphLocal.value) {
-    console.log(`[GraphEditor] 当前状态不允许保存节点: ${statusDescription.value}`);
     alert(`当前状态不允许保存节点: ${statusDescription.value}`);
     return;
   }
@@ -1304,7 +1390,6 @@ async function handleNodeSave({ name, params, deviceId }: { name: string; params
 function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: string | null }) {
   // 冻结状态下禁止绑定/解绑
   if (frozen.value) {
-    console.log('[GraphEditor] 冻结状态下禁止绑定/解绑示波器');
     return;
   }
   
@@ -1372,6 +1457,10 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
     normalized.channels = Math.max(1, Number(normalized.channels || 8));
     normalized.filePath = String(normalized.filePath || '');
     normalized.loop = Boolean(normalized.loop || false);
+    // 保留端口号作为设备标识
+    if (normalized.port !== undefined) {
+      normalized.port = String(normalized.port || '');
+    }
   }
 
   if (type === 'OSC') {
@@ -1893,7 +1982,6 @@ function generateNodeLabel(type: GraphNodeType, name: string, params: Record<str
   const keyParam = getKeyParamDisplay(type, params);
   // 检查节点是否被示波器视图绑定
   const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
-  console.log('[generateNodeLabel] nodeId:', nodeId, 'isBound:', isBound);
   const boundIndicator = isBound ? '🔗 ' : '';
   
   if (keyParam) {
@@ -1923,10 +2011,13 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
       const timeWindow = params['timeWindow'] || 5;
       const mode = params['mode'] || 'scroll';
       return `${timeWindow}s ${mode}`;
-    case 'SOURCE':
+    case 'SOURCE': {
       const sampleRate = params['sampleRate'] || 1000;
       const channels = params['channels'] || 8;
-      return `${sampleRate}Hz ${channels}ch`;
+      const port = params['port'];
+      const portDesc = port ? ` ${port}` : '';
+      return `${sampleRate}Hz ${channels}ch${portDesc}`;
+    }
     case 'SAVE':
       const format = params['format'] || 'edf';
       return `.${format}`;
@@ -1992,7 +2083,6 @@ function onDragStartDevice(e: DragEvent, deviceId: string) {
 // 从后端加载数据
 async function loadFromBackend() {
   try {
-    console.log('[GraphEditor] Loading graph from backend...');
     const backendPayload = await fetchGraph();
     currentRevision.value = Number(backendPayload.revision || 0);
     persistedRevision.value = Number(backendPayload.persistedRevision || 0);
@@ -2005,8 +2095,6 @@ async function loadFromBackend() {
     }
 
     applyPayloadToCanvas(backendPayload, { fromBackend: true, reason: 'initial' });
-    console.log('[GraphEditor][init] loadFromBackend done, lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
-      'lastPersistedSig:', lastPersistedSignature.value.slice(0, 40));
   } catch (err) {
     console.error('Failed to load graph:', err);
     hasNodes.value = false;
@@ -2023,7 +2111,6 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
     return;
   }
 
-  console.log('[GraphEditor][ghost] applyPayloadToCanvas CALLED, reason:', options?.reason, 'isNodeDragging:', isNodeDragging);
   console.trace('[GraphEditor][ghost] applyPayloadToCanvas call stack');
 
   isApplyingBackendGraph.value = true;
@@ -2062,7 +2149,10 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
 
     if (options?.fromBackend) {
       lastSyncedSignature.value = payloadSignature(safePayload);
-      if (['initial', 'pull', 'persisted', 'saved'].includes(String(options.reason || ''))) {
+      const reason = String(options.reason || '');
+      if (['initial', 'pull', 'persisted', 'saved', 'freeze_changed', 'runtime'].includes(reason)) {
+        // 这些 reason 表示后端拓扑与当前一致（或仅运行时状态变化），
+        // 拓扑本身未变更，因此视为已持久化，不触发"未保存"误报。
         lastPersistedSignature.value = payloadSignature(safePayload);
         hasUnsavedChanges.value = false;
       } else {
@@ -2091,9 +2181,7 @@ function setGraphInteracting(graph: Graph, enabled: boolean) {
     
     // 更新界面提示
     if (!enabled) {
-      console.log('[GraphEditor] Graph editing disabled');
     } else {
-      console.log('[GraphEditor] Graph editing enabled');
     }
   }
 }
@@ -2105,7 +2193,6 @@ async function applyFrozen() {
     return;
   }
 
-  console.log(`[GraphEditor] applyFrozen called, frozen: ${frozen.value}, isRunning: ${isRunning.value}`);
 
   // 更新图形编辑权限：只有在未冻结且未运行时才允许编辑
   const canEdit = !frozen.value && !isRunning.value;
@@ -2114,22 +2201,16 @@ async function applyFrozen() {
   }
   
   if (frozen.value) {
-    console.log('[GraphEditor] Graph is frozen, disabling editing');
     
     // 如果计算图正在运行，自动建立WebSocket连接
     if (isRunning.value) {
-      console.log('[GraphEditor] Graph is running, connecting WebSocket...');
       await connectWebSocket();
-      console.log('[GraphEditor] WebSocket connected for running graph');
     }
   } else {
-    console.log(`[GraphEditor] Graph is unfrozen, editing ${canEdit ? 'enabled' : 'disabled'} (running: ${isRunning.value})`);
     
     // 如果计算图未运行，断开WebSocket连接
     if (!isRunning.value) {
-      console.log('[GraphEditor] Graph is not running, disconnecting WebSocket...');
       disconnectWebSocket();
-      console.log('[GraphEditor] WebSocket disconnected');
     }
   }
 }
@@ -2166,7 +2247,6 @@ function saveStateToSessionStorage() {
     // 只保存有效的状态（有节点或计算图正在运行）
     const isValidState = payload.nodes.length > 0 || isRunning.value;
     if (!isValidState) {
-      console.log('[GraphEditor] Skipping session storage save - empty graph and not running');
       return;
     }
     
@@ -2178,12 +2258,6 @@ function saveStateToSessionStorage() {
     };
     
     sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(state));
-    console.log('[GraphEditor] State saved to session storage:', {
-      nodes: payload.nodes.length,
-      edges: payload.edges.length,
-      frozen: payload.frozen,
-      isRunning: isRunning.value
-    });
   } catch (err) {
     console.error('[GraphEditor] Failed to save state to session storage:', err);
   }
@@ -2202,13 +2276,6 @@ function restoreStateFromSessionStorage(): boolean {
     if (!state.payload || !state.payload.nodes || state.payload.nodes.length === 0) {
       return false;
     }
-
-    console.log('[GraphEditor] Restoring state from session storage to canvas:', {
-      nodes: state.payload.nodes.length,
-      edges: state.payload.edges.length,
-      frozen: state.payload.frozen,
-      isRunning: state.isRunning
-    });
 
     // 清空画布
     graph.clearCells();
@@ -2254,7 +2321,6 @@ function restoreStateFromSessionStorage(): boolean {
     updateAllEdgeLabels();
     setGraphInteracting(graph, !frozen.value);
     
-    console.log(`[GraphEditor] State restored - Canvas has ${finalNodeCount} nodes, ${finalEdgeCount} edges`);
     return true;
   } catch (err) {
     console.error('[GraphEditor] Failed to restore state from session storage:', err);
@@ -2269,12 +2335,10 @@ function loadStateFromSessionStorage(): boolean {
     if (!stateJson) return false;
 
     const state = JSON.parse(stateJson);
-    console.log('[GraphEditor] Loaded state from session storage:', state);
     
     // 检查状态是否过期（超过5分钟）
     const isExpired = Date.now() - state.timestamp > 5 * 60 * 1000;
     if (isExpired) {
-      console.log('[GraphEditor] Session storage state expired, clearing');
       sessionStorage.removeItem(SESSION_STORAGE_KEY);
       return false;
     }
@@ -2289,11 +2353,9 @@ function loadStateFromSessionStorage(): boolean {
 // 清除会话存储状态
 function clearSessionStorage() {
   sessionStorage.removeItem(SESSION_STORAGE_KEY);
-  console.log('[GraphEditor] Cleared session storage');
 }
 
 async function save() {
-  console.log('[GraphEditor] Save button clicked, frozen:', frozen.value);
 
   if (!hasUnsavedChanges.value) {
     return;
@@ -2301,14 +2363,12 @@ async function save() {
   
   // 检查计算图是否正在运行
   if (isRunning.value) {
-    console.log('[GraphEditor] Graph is running, skipping save');
     alert('计算图正在运行中，无法保存。请先停止运行再保存。');
     return;
   }
   
   try {
     const payload = buildPayload();
-    console.log('[GraphEditor] Persisting graph with payload:', payload);
 
     // 保存语义为持久化，确保先把本地编辑推到后端权威图。
     const syncResult = await syncGraph(payload, currentRevision.value);
@@ -2322,7 +2382,6 @@ async function save() {
 
     const persistResult = await persistGraph();
     persistedRevision.value = Number(persistResult.persistedRevision || persistedRevision.value);
-    console.log('[GraphEditor] Graph saved successfully');
 
     lastPersistedSignature.value = payloadSignature(payload);
     lastSyncedSignature.value = payloadSignature(payload);
@@ -2351,7 +2410,6 @@ function exportGraph() {
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
   
-  console.log('[GraphEditor] Graph exported');
 }
 
 // 触发文件选择
@@ -2423,7 +2481,6 @@ async function loadGraphFromFile(event: Event) {
     updateAllEdgeLabels();
     syncUnsavedState();
     
-    console.log('[GraphEditor] Graph loaded from file:', file.name);
     alert('计算图加载成功，请点击保存应用到后端。');
   } catch (err) {
     console.error('[GraphEditor] Failed to load graph from file:', err);
@@ -2435,11 +2492,9 @@ async function loadGraphFromFile(event: Event) {
 }
 
 async function run(mode: 'live' | 'offline' = 'live') {
-  console.log('[GraphEditor] Run button clicked, mode:', mode, 'frozen:', frozen.value, 'hasNodes:', hasNodes.value);
   
   // 检查计算图是否已经在运行
   if (isRunning.value) {
-    console.log('[GraphEditor] Graph is already running');
     return;
   }
   
@@ -2451,11 +2506,9 @@ async function run(mode: 'live' | 'offline' = 'live') {
     return;
   }
   
-  console.log('[GraphEditor] Runtime started, calling runGraph API');
   // 调用后端API
   try {
     await graphRuntimeStore.runByMode(mode);
-    console.log('[GraphEditor] Graph run API called successfully');
     {
       setRuntimeState({
         isRunning: true,
@@ -2472,7 +2525,6 @@ async function run(mode: 'live' | 'offline' = 'live') {
       if (graph) {
         const nodeCount = graph.getNodes().length;
         const edgeCount = graph.getEdges().length;
-        console.log(`[GraphEditor] After run - Canvas has ${nodeCount} nodes, ${edgeCount} edges`);
       }
       
       // 保存状态到会话存储
@@ -2487,11 +2539,7 @@ async function run(mode: 'live' | 'offline' = 'live') {
   // 监听WebSocket连接状态变化
   const checkWebSocketConnection = () => {
     if (eegWebSocket.isConnected()) {
-      console.log('[GraphEditor] WebSocket connected successfully');
-      console.log('WebSocket连接成功，使用真实后端数据');
     } else {
-      console.log('[GraphEditor] WebSocket not connected yet, waiting for connection...');
-      console.log('WebSocket尚未连接，等待连接...');
       // 设置一个超时检查，如果5秒后仍未连接，提示用户
       setTimeout(() => {
         if (!eegWebSocket.isConnected()) {
@@ -2507,10 +2555,7 @@ async function run(mode: 'live' | 'offline' = 'live') {
   
   // 监听WebSocket状态变化
   const unsubscribe = eegWebSocket.onStatusChange((status) => {
-    console.log('[GraphEditor] WebSocket status changed:', status);
     if (status === 'connected') {
-      console.log('[GraphEditor] WebSocket connected, using real backend data');
-      console.log('WebSocket已连接，使用真实后端数据');
     } else if (status === 'error') {
       console.error('[GraphEditor] WebSocket connection error');
       console.error('WebSocket连接错误，请检查后端服务');
@@ -2717,27 +2762,31 @@ onMounted(async () => {
 
   unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
     const incomingSignature = payloadSignature(backendGraph);
-    console.log('[GraphEditor][ws] onGraph received, reason:', reason,
-      'incomingSig:', incomingSignature.slice(0, 40),
-      'lastSyncedSig:', lastSyncedSignature.value.slice(0, 40),
-      'hasUnsaved:', hasUnsavedChanges.value,
-      'isNodeDragging:', isNodeDragging);
     if (incomingSignature === lastSyncedSignature.value && !hasUnsavedChanges.value) {
-      console.log('[GraphEditor][ws] onGraph → signature match & no unsaved changes, skipping');
       return;
     }
 
     // 初始加载尚未完成时，跳过 initial/pull 推送（由 loadFromBackend 负责）
     if (!lastSyncedSignature.value && (reason === 'initial' || reason === 'pull')) {
-      console.log('[GraphEditor][ws] onGraph → skipping initial/pull before loadFromBackend completes');
       return;
     }
 
     // 'synced' 回声：后端确认了自己提交的更改，本地画布已是最新，跳过 clearCells() 重绘
     if (reason === 'synced') {
-      console.log('[GraphEditor][ws] onGraph → synced echo, updating signatures only');
       currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
       persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
+      lastSyncedSignature.value = incomingSignature;
+      lastPersistedSignature.value = incomingSignature;
+      hasUnsavedChanges.value = false;
+      return;
+    }
+
+    // 'freeze_changed' / 'runtime'：仅运行时状态（frozen）变化，拓扑未变。
+    // 只同步 frozen 标志和版本号，不做 clearCells() 重绘，避免拓扑签名误报"未保存"。
+    if (reason === 'freeze_changed' || reason === 'runtime') {
+      currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
+      persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
+      setRuntimeState({ frozen: Boolean((backendGraph as GraphPayload).frozen) });
       lastSyncedSignature.value = incomingSignature;
       lastPersistedSignature.value = incomingSignature;
       hasUnsavedChanges.value = false;
@@ -2772,7 +2821,12 @@ onMounted(async () => {
       const rect = container.value.getBoundingClientRect();
       const x = e.clientX - rect.left - 90;
       const y = e.clientY - rect.top - 35;
-      addNode('SOURCE', x, y, `设备源:${deviceId}`, { sourceMode: 'live' }, undefined, deviceId);
+      // 用端口号作为设备节点的统一标识，前后端一致
+      const device = paletteDevices.value.find((d) => d.id === deviceId);
+      const port = device?.port || '';
+      const deviceLabel = port ? `${port}` : (device?.name || deviceId);
+      const nodeName = device?.name ? `${device.name.split('(')[0].trim()} (${deviceLabel})` : `设备源 (${deviceLabel})`;
+      addNode('SOURCE', x, y, nodeName, { sourceMode: 'live', port }, undefined, deviceId);
       return;
     }
 
@@ -2865,7 +2919,6 @@ onMounted(async () => {
 
   graph.on('node:change:position', () => {
     if (!isNodeDragging) {
-      console.log('[GraphEditor][drag] First position change → isNodeDragging = true');
       isNodeDragging = true;
     }
     // 清除之前的防抖计时器
@@ -2874,7 +2927,6 @@ onMounted(async () => {
     }
     // 拖拽结束后同步状态
     dragDebounceTimer = window.setTimeout(() => {
-      console.log('[GraphEditor][drag] Debounce ended → isNodeDragging = false, calling syncUnsavedState');
       isNodeDragging = false;
       dragDebounceTimer = null;
       syncUnsavedState();
@@ -2912,19 +2964,17 @@ onMounted(async () => {
   // 单击空白区域取消选中并折叠边栏
   graph.on('blank:click', () => {
     selectedNodeId.value = null;
-    editingNode.value = null;
     sidebarVisible.value = false;
+    // 注意：保留 editingNode，以便用户重新展开边栏时仍可看到上次编辑的节点
   });
 
   // 订阅 sessionStore 变化，更新节点绑定状态显示
   unsubscribeSessionStore = sessionStore.subscribe((state) => {
-    console.log('[GraphEditor] Session store updated, viewBindings:', state.mappings?.viewBindings);
     // 当视图绑定变化时，更新所有 OSC 节点的标签
     graph.getNodes().forEach((node) => {
       const data = node.getData() as GraphNode;
       if (data && data.type === 'OSC') {
         const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
-        console.log('[GraphEditor] Updating node label:', node.id, labelText);
         node.attr('label/text', labelText);
       }
     });
@@ -3140,19 +3190,58 @@ onUnmounted(() => {
 .sidebar-header {
   display: flex;
   align-items: center;
-  padding: 12px;
+  justify-content: space-between;
+  padding: 10px 12px;
   border-bottom: 1px solid #e0e0e0;
   background: #fafafa;
   min-height: 56px;
 }
 
-.sidebar-title {
+.sidebar-title-wrap {
   flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.sidebar-title-text {
+  min-width: 0;
+}
+
+.sidebar-title {
   font-weight: 600;
   font-size: 14px;
   color: #333;
   display: flex;
   align-items: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-subtitle {
+  font-size: 11px;
+  color: #888;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #9e9e9e;
+  text-align: center;
+  padding: 24px;
+}
+
+.sidebar-empty-text {
+  margin-top: 12px;
+  font-size: 13px;
 }
 
 .sidebar-content {
@@ -3172,27 +3261,18 @@ onUnmounted(() => {
   flex-direction: column;
 }
 
-.node-edit-sidebar .sidebar-header {
-  padding: 16px;
-  background: #fff;
-  border-bottom: 1px solid #e0e0e0;
-}
-
-.node-edit-sidebar .sidebar-title {
-  font-size: 16px;
-  font-weight: 600;
+.node-edit-sidebar .sidebar-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .node-edit-sidebar .sidebar-content {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
-}
-
-.node-edit-sidebar .sidebar-actions {
-  padding: 16px;
-  background: #fafafa;
-  border-top: 1px solid #e0e0e0;
+  min-height: 0;
 }
 
 .node-edit-content {

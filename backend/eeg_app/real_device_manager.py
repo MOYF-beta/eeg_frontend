@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 """真实可穿戴EEG设备管理器 - 集成驱动脚本的异步逻辑"""
 
 import asyncio
@@ -11,12 +13,20 @@ from collections import deque
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, List, Optional, Set, Tuple, Any, Callable
-import serial
-import serial.tools.list_ports
 import threading
-import serial_asyncio
 from datetime import datetime
 import numpy as np
+
+# pyserial 依赖 termios（Unix-only），在 Windows 上需优雅降级
+try:
+    import serial
+    import serial.tools.list_ports
+    import serial_asyncio
+    SERIAL_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    serial = None  # type: ignore
+    serial_asyncio = None  # type: ignore
+    SERIAL_AVAILABLE = False
 
 # 设备状态枚举
 class DeviceStatus(Enum):
@@ -35,7 +45,7 @@ class DeviceConnection:
     last_error: Optional[str] = None
     connected_at: Optional[float] = None
     data_count: int = 0
-    serial_conn: Optional[serial.Serial] = None
+    serial_conn: Optional[Any] = None
     async_transport: Optional[Any] = None
     async_protocol: Optional[Any] = None
     data_buffer: bytes = b''
@@ -70,19 +80,19 @@ class BCIAsyncProtocol(asyncio.Protocol):
     def connection_made(self, transport):
         self.transport = transport
         serial_port = transport.serial  # serial_asyncio 提供的底层 pyserial 对象
-        print(f"[BCIAsyncProtocol] Connection made to {self.conn.port}")
-        print(f"[BCIAsyncProtocol] Serial details: baudrate={serial_port.baudrate}, "
+        logger.debug(f"[BCIAsyncProtocol] Connection made to {self.conn.port}")
+        logger.debug(f"[BCIAsyncProtocol] Serial details: baudrate={serial_port.baudrate}, "
               f"bytesize={serial_port.bytesize}, parity={serial_port.parity}, "
               f"stopbits={serial_port.stopbits}")
-        print(f"[BCIAsyncProtocol] DTR={serial_port.dtr}, RTS={serial_port.rts}")
-        print(f"[BCIAsyncProtocol] Timeout={serial_port.timeout}, write_timeout={serial_port.write_timeout}")
+        logger.debug(f"[BCIAsyncProtocol] DTR={serial_port.dtr}, RTS={serial_port.rts}")
+        logger.debug(f"[BCIAsyncProtocol] Timeout={serial_port.timeout}, write_timeout={serial_port.write_timeout}")
         # 确保 DTR/RTS 为高电平（某些设备需要这些信号才能正常工作）
         if not serial_port.dtr:
             serial_port.dtr = True
-            print(f"[BCIAsyncProtocol] Set DTR=True")
+            logger.debug(f"[BCIAsyncProtocol] Set DTR=True")
         if not serial_port.rts:
             serial_port.rts = True
-            print(f"[BCIAsyncProtocol] Set RTS=True")
+            logger.debug(f"[BCIAsyncProtocol] Set RTS=True")
         
     def data_received(self, data):
         self.data_received_count += 1
@@ -92,18 +102,18 @@ class BCIAsyncProtocol(asyncio.Protocol):
         if a5_count > 0:
             self._total_a5_seen += a5_count
             if self.valid_frame_count == 0 and self._total_a5_seen <= 10:
-                print(f"[BCIAsyncProtocol] Found 0xa5 byte! total_a5={self._total_a5_seen}, "
+                logger.debug(f"[BCIAsyncProtocol] Found 0xa5 byte! total_a5={self._total_a5_seen}, "
                       f"this chunk has {a5_count}, data hex={data[:40].hex()}")
         
         # 保留最先收到的原始字节用于调试
         if self._raw_dump_count < 5:
             self._raw_first_bytes += data
             self._raw_dump_count += 1
-            print(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count}: "
+            logger.debug(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count}: "
                   f"{len(data)} bytes, hex={data[:60].hex()}")
             if len(data) <= 60:
                 try:
-                    print(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count} ascii: "
+                    logger.debug(f"[BCIAsyncProtocol] RAW DUMP #{self._raw_dump_count} ascii: "
                           f"{data.decode('ascii', errors='replace')!r}")
                 except Exception:
                     pass
@@ -141,30 +151,30 @@ class BCIAsyncProtocol(asyncio.Protocol):
                                 try:
                                     listener(self.conn.port, channel_data)
                                 except Exception as e:
-                                    print(f"[BCIAsyncProtocol] Error in data listener: {e}")
+                                    logger.debug(f"[BCIAsyncProtocol] Error in data listener: {e}")
                         
                     except struct.error as e:
-                        print(f"[BCIAsyncProtocol] Error unpacking data: {e}")
+                        logger.debug(f"[BCIAsyncProtocol] Error unpacking data: {e}")
             else:
                 # 设备在未初始化时会发送 ASCII 文本消息
                 if self.valid_frame_count == 0 and self.data_received_count <= 30:
                     try:
                         ascii_text = line.decode('ascii', errors='replace')
-                        print(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
+                        logger.debug(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
                               f"len={len(line)}, first3={line[:3].hex()}, text={ascii_text[:80]!r}")
                     except Exception:
-                        print(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
+                        logger.debug(f"[BCIAsyncProtocol] Non-data frame #{self.data_received_count}: "
                               f"hex={line[:20].hex()}, len={len(line)}")
     
     def connection_lost(self, exc):
-        print(f"[BCIAsyncProtocol] Connection lost to {self.conn.port}: {exc}")
+        logger.debug(f"[BCIAsyncProtocol] Connection lost to {self.conn.port}: {exc}")
         self.conn.status = DeviceStatus.DISCONNECTED
         
     def pause_writing(self):
-        print(f"[BCIAsyncProtocol] Pause writing to {self.conn.port}")
+        logger.debug(f"[BCIAsyncProtocol] Pause writing to {self.conn.port}")
         
     def resume_writing(self):
-        print(f"[BCIAsyncProtocol] Resume writing to {self.conn.port}")
+        logger.debug(f"[BCIAsyncProtocol] Resume writing to {self.conn.port}")
 
 
 class RealDeviceManager:
@@ -248,7 +258,7 @@ class RealDeviceManager:
         ports = serial.tools.list_ports.comports()
         
         current_system = platform.system()
-        print(f"[RealDeviceManager] Scanning for CH340 devices on {current_system}...")
+        logger.debug(f"[RealDeviceManager] Scanning for CH340 devices on {current_system}...")
         
         for port in ports:
             # 获取设备信息
@@ -308,16 +318,16 @@ class RealDeviceManager:
             
             if is_ch340:
                 ch340_ports.append(device_name)
-                print(f"[RealDeviceManager] Found CH340 device: {device_name}")
-                print(f"  Detection method: {detection_method}")
-                print(f"  Description: {description}")
-                print(f"  Manufacturer: {manufacturer}")
-                print(f"  Product: {product}")
-                print(f"  HWID: {hwid}")
-                print(f"  VID: {hex(vid) if vid else 'N/A'}")
-                print(f"  PID: {hex(pid) if pid else 'N/A'}")
+                logger.debug(f"[RealDeviceManager] Found CH340 device: {device_name}")
+                logger.debug(f"  Detection method: {detection_method}")
+                logger.debug(f"  Description: {description}")
+                logger.debug(f"  Manufacturer: {manufacturer}")
+                logger.debug(f"  Product: {product}")
+                logger.debug(f"  HWID: {hwid}")
+                logger.debug(f"  VID: {hex(vid) if vid else 'N/A'}")
+                logger.debug(f"  PID: {hex(pid) if pid else 'N/A'}")
         
-        print(f"[RealDeviceManager] Found {len(ch340_ports)} CH340 device(s) on {current_system}")
+        logger.debug(f"[RealDeviceManager] Found {len(ch340_ports)} CH340 device(s) on {current_system}")
         return ch340_ports
     
     @staticmethod
@@ -415,7 +425,7 @@ class RealDeviceManager:
             ch340_ports = self.get_ch340_ports()
             available_ports = serial.tools.list_ports.comports()
 
-            print(f"[RealDeviceManager] scan_ports: total system ports={len(available_ports)}, ch340_ports={ch340_ports}")
+            logger.debug(f"[RealDeviceManager] scan_ports: total system ports={len(available_ports)}, ch340_ports={ch340_ports}")
             
             for port_info in available_ports:
                 device_name = port_info.device
@@ -439,18 +449,18 @@ class RealDeviceManager:
                     'pid': _to_hex_or_na(getattr(port_info, 'pid', None))
                 }
                 ports.append(port_data)
-                print(
+                logger.debug(
                     f"[RealDeviceManager] scan_ports include: {device_name}, "
                     f"is_ch340={is_ch340}, vid={port_data['vid']}, pid={port_data['pid']}, "
                     f"desc={port_data['description']}"
                 )
 
-            print(f"[RealDeviceManager] scan_ports result count={len(ports)}")
+            logger.debug(f"[RealDeviceManager] scan_ports result count={len(ports)}")
             if not ports:
-                print("[RealDeviceManager] scan_ports result is empty after filtering")
+                logger.debug("[RealDeviceManager] scan_ports result is empty after filtering")
                 
         except Exception as e:
-            print(f"[RealDeviceManager] Error scanning ports: {e}")
+            logger.debug(f"[RealDeviceManager] Error scanning ports: {e}")
             import traceback
             traceback.print_exc()
                 
@@ -471,13 +481,13 @@ class RealDeviceManager:
             if port in self._connections:
                 conn = self._connections[port]
                 if conn.status in [DeviceStatus.CONNECTED, DeviceStatus.ACQUIRING]:
-                    print(f"[RealDeviceManager] Device already connected on {port}")
+                    logger.debug(f"[RealDeviceManager] Device already connected on {port}")
                     return True
                 elif conn.status == DeviceStatus.CONNECTING:
-                    print(f"[RealDeviceManager] Device already connecting on {port}")
+                    logger.debug(f"[RealDeviceManager] Device already connecting on {port}")
                     return False
             
-            print(f"[RealDeviceManager] Connecting to device on {port} at {baudrate} baud (async={use_async})")
+            logger.debug(f"[RealDeviceManager] Connecting to device on {port} at {baudrate} baud (async={use_async})")
             
             # 创建连接对象
             conn = DeviceConnection(port=port, baudrate=baudrate, status=DeviceStatus.CONNECTING)
@@ -487,7 +497,7 @@ class RealDeviceManager:
                 if use_async:
                     # 异步连接
                     ok = self._run_coro_on_async_loop(self._connect_device_async(conn))
-                    print(f"[RealDeviceManager] Async connect completed for {port}: success={ok}, status={conn.status.value}")
+                    logger.debug(f"[RealDeviceManager] Async connect completed for {port}: success={ok}, status={conn.status.value}")
                     return bool(ok)
                 else:
                     # 同步连接（向后兼容）
@@ -495,7 +505,7 @@ class RealDeviceManager:
             except Exception as e:
                 conn.status = DeviceStatus.ERROR
                 conn.last_error = str(e)
-                print(f"[RealDeviceManager] Unexpected error when connecting to {port}: {e}")
+                logger.debug(f"[RealDeviceManager] Unexpected error when connecting to {port}: {e}")
                 return False
     
     def _connect_device_sync(self, conn: DeviceConnection) -> bool:
@@ -510,7 +520,7 @@ class RealDeviceManager:
                 conn.connected_at = time.time()
                 conn.last_error = None
                 
-                print(f"[RealDeviceManager] Successfully connected to device on {conn.port}")
+                logger.debug(f"[RealDeviceManager] Successfully connected to device on {conn.port}")
                 
                 # 初始化设备
                 self._initialize_device(conn)
@@ -519,7 +529,7 @@ class RealDeviceManager:
             else:
                 conn.status = DeviceStatus.ERROR
                 conn.last_error = "Failed to open serial port"
-                print(f"[RealDeviceManager] Failed to open serial port {conn.port}")
+                logger.debug(f"[RealDeviceManager] Failed to open serial port {conn.port}")
                 return False
                 
         except serial.SerialException as e:
@@ -536,7 +546,7 @@ class RealDeviceManager:
                             conn.status = DeviceStatus.CONNECTED
                             conn.connected_at = time.time()
                             conn.last_error = None
-                            print(f"[RealDeviceManager] Connected after sudo askpass permission fix: {conn.port}")
+                            logger.debug(f"[RealDeviceManager] Connected after sudo askpass permission fix: {conn.port}")
                             self._initialize_device(conn)
                             return True
                     except Exception as retry_e:
@@ -554,12 +564,12 @@ class RealDeviceManager:
 
             conn.status = DeviceStatus.ERROR
             conn.last_error = error_msg
-            print(f"[RealDeviceManager] SerialException when connecting to {conn.port}: {error_msg}")
+            logger.debug(f"[RealDeviceManager] SerialException when connecting to {conn.port}: {error_msg}")
             return False
         except Exception as e:
             conn.status = DeviceStatus.ERROR
             conn.last_error = str(e)
-            print(f"[RealDeviceManager] Unexpected error when connecting to {conn.port}: {e}")
+            logger.debug(f"[RealDeviceManager] Unexpected error when connecting to {conn.port}: {e}")
             return False
     
     async def _connect_device_async(self, conn: DeviceConnection) -> bool:
@@ -567,7 +577,7 @@ class RealDeviceManager:
         try:
             loop = asyncio.get_running_loop()
             
-            print(f"[RealDeviceManager] Creating async serial connection for {conn.port}...")
+            logger.debug(f"[RealDeviceManager] Creating async serial connection for {conn.port}...")
             transport, protocol = await serial_asyncio.create_serial_connection(
                 loop, 
                 lambda: BCIAsyncProtocol(conn), 
@@ -581,55 +591,55 @@ class RealDeviceManager:
             conn.connected_at = time.time()
             conn.last_error = None
             
-            print(f"[RealDeviceManager] Successfully connected to device on {conn.port} (async)")
+            logger.debug(f"[RealDeviceManager] Successfully connected to device on {conn.port} (async)")
             
             # ===== 关键调试：验证 transport.write 实际写入了数据 =====
             serial_port = transport.serial
-            print(f"[RealDeviceManager] Transport type: {type(transport).__name__}")
-            print(f"[RealDeviceManager] Serial port is_open: {serial_port.is_open}")
+            logger.debug(f"[RealDeviceManager] Transport type: {type(transport).__name__}")
+            logger.debug(f"[RealDeviceManager] Serial port is_open: {serial_port.is_open}")
             
             # 与驱动脚本完全一致：连接后立即发送初始化命令
             # 驱动脚本 main() 中 create_serial_connection 后立即 create_task(init_eeg_acquiring)
-            print(f"[RealDeviceManager] Sending init commands immediately...")
+            logger.debug(f"[RealDeviceManager] Sending init commands immediately...")
             for i in range(3):
                 cmd = b"C005\r\n"
                 written = transport.write(cmd)
-                print(f"[RealDeviceManager] C005 #{i+1}: write returned {written}, cmd={cmd!r}")
+                logger.debug(f"[RealDeviceManager] C005 #{i+1}: write returned {written}, cmd={cmd!r}")
                 await asyncio.sleep(0.05)
             
             for i in range(2):
                 cmd = b"C002\r\n"
                 written = transport.write(cmd)
-                print(f"[RealDeviceManager] C002 #{i+1}: write returned {written}, cmd={cmd!r}")
+                logger.debug(f"[RealDeviceManager] C002 #{i+1}: write returned {written}, cmd={cmd!r}")
                 await asyncio.sleep(0.01)
             
-            print(f"[RealDeviceManager] Init commands sent to {conn.port}")
+            logger.debug(f"[RealDeviceManager] Init commands sent to {conn.port}")
             
             # 等待设备响应
             for check in range(30):  # 最多等 3 秒
                 await asyncio.sleep(0.1)
                 if protocol.valid_frame_count > 0:
-                    print(f"[RealDeviceManager] ✓ Got valid frames after init on {conn.port} "
+                    logger.debug(f"[RealDeviceManager] ✓ Got valid frames after init on {conn.port} "
                           f"(after {(check+1)*0.1:.1f}s)")
                     break
                 # 每 0.5s 汇报一次状态
                 if (check + 1) % 5 == 0:
                     # 扫描 buffer 中是否有 \xa5 字节
                     has_a5 = b'\xa5' in protocol.buffer
-                    print(f"[RealDeviceManager] Waiting... received={protocol.data_received_count}, "
+                    logger.debug(f"[RealDeviceManager] Waiting... received={protocol.data_received_count}, "
                           f"valid={protocol.valid_frame_count}, "
                           f"buffer_len={len(protocol.buffer)}, has_0xa5_in_buffer={has_a5}")
             
             if protocol.valid_frame_count == 0:
                 # 最终诊断
-                print(f"[RealDeviceManager] ⚠ NO valid frames on {conn.port}")
-                print(f"[RealDeviceManager]   Total received callbacks: {protocol.data_received_count}")
-                print(f"[RealDeviceManager]   Valid frames: {protocol.valid_frame_count}")
-                print(f"[RealDeviceManager]   Total 0xa5 bytes seen: {protocol._total_a5_seen}")
-                print(f"[RealDeviceManager]   Raw first bytes (hex): {protocol._raw_first_bytes[:100].hex()}")
-                print(f"[RealDeviceManager]   Buffer remaining: {len(protocol.buffer)} bytes")
+                logger.debug(f"[RealDeviceManager] ⚠ NO valid frames on {conn.port}")
+                logger.debug(f"[RealDeviceManager]   Total received callbacks: {protocol.data_received_count}")
+                logger.debug(f"[RealDeviceManager]   Valid frames: {protocol.valid_frame_count}")
+                logger.debug(f"[RealDeviceManager]   Total 0xa5 bytes seen: {protocol._total_a5_seen}")
+                logger.debug(f"[RealDeviceManager]   Raw first bytes (hex): {protocol._raw_first_bytes[:100].hex()}")
+                logger.debug(f"[RealDeviceManager]   Buffer remaining: {len(protocol.buffer)} bytes")
                 if protocol.buffer:
-                    print(f"[RealDeviceManager]   Buffer tail (hex): {protocol.buffer[-50:].hex()}")
+                    logger.debug(f"[RealDeviceManager]   Buffer tail (hex): {protocol.buffer[-50:].hex()}")
             
             return True
             
@@ -654,14 +664,14 @@ class RealDeviceManager:
                         conn.status = DeviceStatus.CONNECTED
                         conn.connected_at = time.time()
                         conn.last_error = None
-                        print(f"[RealDeviceManager] Connected after sudo askpass permission fix: {conn.port}")
+                        logger.debug(f"[RealDeviceManager] Connected after sudo askpass permission fix: {conn.port}")
                         for i in range(3):
                             transport.write(b"C005\r\n")
                             await asyncio.sleep(0.05)
                         for i in range(2):
                             transport.write(b"C002\r\n")
                             await asyncio.sleep(0.01)
-                        print(f"[RealDeviceManager] Init commands sent after permission fix on {conn.port}")
+                        logger.debug(f"[RealDeviceManager] Init commands sent after permission fix on {conn.port}")
                         return True
                     except Exception as retry_e:
                         error_msg = f"{error_msg}; retry failed: {retry_e}"
@@ -678,7 +688,7 @@ class RealDeviceManager:
 
             conn.status = DeviceStatus.ERROR
             conn.last_error = error_msg
-            print(f"[RealDeviceManager] Error when connecting to {conn.port}: {error_msg}")
+            logger.debug(f"[RealDeviceManager] Error when connecting to {conn.port}: {error_msg}")
             return False
     
     def _initialize_device(self, conn: DeviceConnection):
@@ -700,10 +710,10 @@ class RealDeviceManager:
                 conn.serial_conn.write(cmd)
                 time.sleep(0.05)
                 
-            print(f"[RealDeviceManager] Device initialization commands sent to {conn.port}")
+            logger.debug(f"[RealDeviceManager] Device initialization commands sent to {conn.port}")
             
         except Exception as e:
-            print(f"[RealDeviceManager] Error initializing device on {conn.port}: {e}")
+            logger.debug(f"[RealDeviceManager] Error initializing device on {conn.port}: {e}")
             conn.last_error = f"Initialization error: {e}"
     
     def start_acquisition(self, port: str, use_async: bool = True) -> bool:
@@ -718,26 +728,26 @@ class RealDeviceManager:
         """
         with self._lock:
             if port not in self._connections:
-                print(f"[RealDeviceManager] Device not connected on {port}")
+                logger.debug(f"[RealDeviceManager] Device not connected on {port}")
                 return False
                 
             conn = self._connections[port]
             
             if conn.status != DeviceStatus.CONNECTED:
-                print(f"[RealDeviceManager] Device not in connected state on {port}")
+                logger.debug(f"[RealDeviceManager] Device not in connected state on {port}")
                 return False
                 
             if conn.thread and conn.thread.is_alive():
-                print(f"[RealDeviceManager] Acquisition already running on {port}")
+                logger.debug(f"[RealDeviceManager] Acquisition already running on {port}")
                 return True
                 
             if use_async and conn.async_transport:
-                print(f"[RealDeviceManager] Starting async data acquisition on {port}")
+                logger.debug(f"[RealDeviceManager] Starting async data acquisition on {port}")
                 # 异步采集不需要单独的线程，协议会自动处理
                 conn.status = DeviceStatus.ACQUIRING
                 return True
             else:
-                print(f"[RealDeviceManager] Starting sync data acquisition on {port}")
+                logger.debug(f"[RealDeviceManager] Starting sync data acquisition on {port}")
                 
                 # 创建数据采集线程
                 conn.stop_event.clear()
@@ -754,7 +764,7 @@ class RealDeviceManager:
     
     def _acquisition_thread(self, conn: DeviceConnection):
         """数据采集线程"""
-        print(f"[RealDeviceManager] Acquisition thread started for {conn.port}")
+        logger.debug(f"[RealDeviceManager] Acquisition thread started for {conn.port}")
         
         try:
             while not conn.stop_event.is_set() and conn.serial_conn and conn.serial_conn.is_open:
@@ -799,26 +809,26 @@ class RealDeviceManager:
                                         self._notify_data_listeners(conn.port, channel_data)
                                         
                                     except struct.error as e:
-                                        print(f"[RealDeviceManager] Error unpacking data from {conn.port}: {e}")
+                                        logger.debug(f"[RealDeviceManager] Error unpacking data from {conn.port}: {e}")
                 
                 except serial.SerialException as e:
-                    print(f"[RealDeviceManager] Serial error on {conn.port}: {e}")
+                    logger.debug(f"[RealDeviceManager] Serial error on {conn.port}: {e}")
                     conn.last_error = str(e)
                     conn.status = DeviceStatus.ERROR
                     break
                 except Exception as e:
-                    print(f"[RealDeviceManager] Error in acquisition thread for {conn.port}: {e}")
+                    logger.debug(f"[RealDeviceManager] Error in acquisition thread for {conn.port}: {e}")
                     # 继续运行，不中断线程
                 
                 # 短暂休眠以避免CPU占用过高
                 time.sleep(0.001)
                 
         except Exception as e:
-            print(f"[RealDeviceManager] Acquisition thread crashed for {conn.port}: {e}")
+            logger.debug(f"[RealDeviceManager] Acquisition thread crashed for {conn.port}: {e}")
             conn.status = DeviceStatus.ERROR
             conn.last_error = str(e)
         finally:
-            print(f"[RealDeviceManager] Acquisition thread stopped for {conn.port}")
+            logger.debug(f"[RealDeviceManager] Acquisition thread stopped for {conn.port}")
     
     def stop_acquisition(self, port: str) -> bool:
         """停止数据采集
@@ -838,7 +848,7 @@ class RealDeviceManager:
             if conn.status != DeviceStatus.ACQUIRING:
                 return True
                 
-            print(f"[RealDeviceManager] Stopping data acquisition on {port}")
+            logger.debug(f"[RealDeviceManager] Stopping data acquisition on {port}")
             
             # 停止采集线程
             if conn.stop_event:
@@ -869,14 +879,14 @@ class RealDeviceManager:
             if conn.status == DeviceStatus.ACQUIRING:
                 self.stop_acquisition(port)
             
-            print(f"[RealDeviceManager] Disconnecting device on {port}")
+            logger.debug(f"[RealDeviceManager] Disconnecting device on {port}")
             
             # 关闭串口连接
             if conn.serial_conn and conn.serial_conn.is_open:
                 try:
                     conn.serial_conn.close()
                 except Exception as e:
-                    print(f"[RealDeviceManager] Error closing serial connection on {port}: {e}")
+                    logger.debug(f"[RealDeviceManager] Error closing serial connection on {port}: {e}")
 
             # 关闭异步连接
             if conn.async_transport:
@@ -886,7 +896,7 @@ class RealDeviceManager:
                     else:
                         conn.async_transport.close()
                 except Exception as e:
-                    print(f"[RealDeviceManager] Error closing async transport on {port}: {e}")
+                    logger.debug(f"[RealDeviceManager] Error closing async transport on {port}: {e}")
             
             # 清理连接对象
             del self._connections[port]
@@ -1013,25 +1023,39 @@ class RealDeviceManager:
             try:
                 listener(port, channel_data)
             except Exception as e:
-                print(f"[RealDeviceManager] Error in data listener: {e}")
+                logger.debug(f"[RealDeviceManager] Error in data listener: {e}")
 
 
 # 全局设备管理器实例
-_real_device_manager = RealDeviceManager()
+_real_device_manager = None  # 延迟初始化，避免 Windows 上导入即报错
+
+
+def _ensure_serial_available():
+    """检查串口支持是否可用，不可用则抛出 ImportError"""
+    if not SERIAL_AVAILABLE:
+        raise ImportError(
+            "pyserial/serial_asyncio is not available on this platform (Windows). "
+            "Real device management is only supported on Linux/macOS."
+        )
 
 
 def get_real_device_manager() -> RealDeviceManager:
     """获取真实设备管理器实例"""
+    global _real_device_manager
+    if _real_device_manager is None:
+        _real_device_manager = RealDeviceManager()
     return _real_device_manager
 
 
 def scan_serial_ports() -> List[Dict[str, Any]]:
     """扫描串口端口（API接口）"""
+    _ensure_serial_available()
     return get_real_device_manager().scan_ports()
 
 
 def connect_real_device(port: str, baudrate: int = 460800) -> Dict[str, Any]:
     """连接真实设备（API接口）"""
+    _ensure_serial_available()
     manager = get_real_device_manager()
     success = manager.connect_device(port, baudrate)
     
@@ -1052,6 +1076,7 @@ def connect_real_device(port: str, baudrate: int = 460800) -> Dict[str, Any]:
 
 def start_device_acquisition(port: str) -> Dict[str, Any]:
     """开始设备数据采集（API接口）"""
+    _ensure_serial_available()
     manager = get_real_device_manager()
     success = manager.start_acquisition(port)
     
@@ -1069,6 +1094,7 @@ def start_device_acquisition(port: str) -> Dict[str, Any]:
 
 def stop_device_acquisition(port: str) -> Dict[str, Any]:
     """停止设备数据采集（API接口）"""
+    _ensure_serial_available()
     manager = get_real_device_manager()
     success = manager.stop_acquisition(port)
     
@@ -1086,6 +1112,7 @@ def stop_device_acquisition(port: str) -> Dict[str, Any]:
 
 def disconnect_real_device(port: str) -> Dict[str, Any]:
     """断开真实设备连接（API接口）"""
+    _ensure_serial_available()
     manager = get_real_device_manager()
     success = manager.disconnect_device(port)
     
@@ -1171,94 +1198,3 @@ def get_debug_output(port: Optional[str] = None, count: int = 100) -> Dict[str, 
         'ports': result_ports,
         'total_samples': total
     }
-
-
-def save_device_data(port: str, filename: Optional[str] = None, duration: float = 60.0) -> Dict[str, Any]:
-    """保存设备数据到文件（从驱动脚本移植）
-    
-    Args:
-        port: 串口端口
-        filename: 文件名（可选，默认自动生成）
-        duration: 录制时长（秒）
-        
-    Returns:
-        保存结果
-    """
-    import os
-    from datetime import datetime
-    
-    try:
-        manager = get_real_device_manager()
-        
-        if port not in manager._connections:
-            return {
-                'success': False,
-                'error': f'Device not connected on {port}'
-            }
-        
-        conn = manager._connections[port]
-        
-        # 生成文件名
-        if not filename:
-            time_str = datetime.now().strftime("%y_%m_%d_%H_%M_%S")
-            filename = f"{port.replace('/', '_')}_{time_str}.eegbin"
-        
-        # 确保文件在saved_data目录下
-        if not filename.startswith('saved_data/'):
-            filename = os.path.join('saved_data', filename)
-        
-        # 创建目录（如果不存在）
-        os.makedirs(os.path.dirname(filename), exist_ok=True)
-        
-        print(f"[RealDeviceManager] Starting data recording to {filename} for {duration} seconds")
-        
-        # 这里可以添加实际的数据保存逻辑
-        # 由于异步协议已经处理数据，我们可以直接从队列中获取数据并保存
-        
-        return {
-            'success': True,
-            'message': f'Data recording started to {filename}',
-            'filename': filename,
-            'duration': duration
-        }
-        
-    except Exception as e:
-        return {
-            'success': False,
-            'error': f'Failed to start data recording: {str(e)}'
-        }
-
-
-def read_data_from_file(file_path: str):
-    """从文件读取数据（从驱动脚本移植）
-    
-    Args:
-        file_path: 文件路径
-        
-    Returns:
-        (data_array, time_array) 数据数组和时间数组
-    """
-    data_list = []
-    time_list = []
-    
-    with open(file_path, 'rb') as f:
-        while True:
-            # 读取数据（8个int）
-            data_bytes = f.read(32)
-            if not data_bytes:
-                break
-            data_values = struct.unpack('<8i', data_bytes)
-            data_list.append(data_values)
-            
-            # 读取时间（1个double）
-            time_bytes = f.read(8)  # 8 bytes for double
-            if not time_bytes:
-                break
-            time_value = struct.unpack('<d', time_bytes)[0]
-            time_list.append(time_value)
-    
-    # 将列表转换为 numpy 数组
-    data_array = np.array(data_list)
-    time_array = np.array(time_list)
-    
-    return data_array, time_array

@@ -1,6 +1,12 @@
 import { ref, computed } from 'vue';
 import { getGraphRuntimeState, runGraph, stopGraph, setGraphFrozen } from './graph';
-import { eegWebSocket } from './websocket';
+import { eegWebSocket, type EegDataPacket } from './websocket';
+
+// EEG 数据包类型（兼容旧接口）
+export interface EegPacket {
+  t: number; // 时间戳（秒）
+  channels: number[]; // 各通道数值
+}
 
 // 计算图运行状态接口
 export interface GraphRuntimeState {
@@ -90,14 +96,12 @@ async function pollRuntimeState() {
       
       // 记录状态变化
       if (newState.isRunning !== state.value.isRunning) {
-        console.log(`[GraphRuntimeStore] Runtime state changed: isRunning=${newState.isRunning}, mode=${newState.runtimeMode}`);
       }
       
       updateState(newState);
       
       // 如果计算图开始运行，确保WebSocket已连接
       if (newState.isRunning && !eegWebSocket.isConnected()) {
-        console.log('[GraphRuntimeStore] Graph is running but WebSocket not connected, connecting...');
         eegWebSocket.connect();
       }
     } else {
@@ -197,6 +201,34 @@ function cleanup() {
   stopPolling();
 }
 
+// ========== 数据流转发（从 runtime.ts 合并）==========
+
+// 数据包订阅者回调
+const packetSubscribers: ((packet: EegPacket) => void)[] = [];
+
+// WebSocket 数据转发：EegDataPacket → EegPacket
+eegWebSocket.onData((packet: EegDataPacket) => {
+  const eegPacket: EegPacket = {
+    t: packet.timestamp / 1000,
+    channels: packet.channels,
+  };
+  packetSubscribers.forEach((cb) => cb(eegPacket));
+});
+
+// 订阅数据流（示波器调用）
+function subscribeData(callback: (packet: EegPacket) => void) {
+  packetSubscribers.push(callback);
+  return () => {
+    const index = packetSubscribers.indexOf(callback);
+    if (index > -1) packetSubscribers.splice(index, 1);
+  };
+}
+
+// 发送 Mock 数据包（用于测试）
+function emitPacket(packet: EegPacket) {
+  packetSubscribers.forEach((cb) => cb(packet));
+}
+
 // 导出
 export const graphRuntimeStore = {
   // 状态
@@ -223,7 +255,11 @@ export const graphRuntimeStore = {
   stopRun,
   setFreeze,
   init,
-  cleanup
+  cleanup,
+
+  // 数据流
+  subscribeData,
+  emitPacket,
 };
 
 // 默认导出

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
+
 import importlib.util
 import inspect
 import os
@@ -24,7 +27,7 @@ def _load_module(path: Path) -> Optional[ModuleType]:
         spec.loader.exec_module(module)
         return module
     except Exception as exc:
-        print(f'[GraphNodes] Failed to load custom node module {path}: {exc}')
+        logger.debug(f'[GraphNodes] Failed to load custom node module {path}: {exc}')
         return None
 
 
@@ -43,7 +46,7 @@ def load_custom_nodes(custom_path: Optional[str] = None) -> Path:
             try:
                 module.register_custom_nodes(register_node)
             except Exception as exc:
-                print(f'[GraphNodes] register_custom_nodes failed in {file}: {exc}')
+                logger.debug(f'[GraphNodes] register_custom_nodes failed in {file}: {exc}')
             continue
 
         for _, member in inspect.getmembers(module, inspect.isclass):
@@ -52,6 +55,6 @@ def load_custom_nodes(custom_path: Optional[str] = None) -> Path:
             try:
                 register_node(member)
             except Exception as exc:
-                print(f'[GraphNodes] Failed to register class {member.__name__} from {file}: {exc}')
+                logger.debug(f'[GraphNodes] Failed to register class {member.__name__} from {file}: {exc}')
 
     return path

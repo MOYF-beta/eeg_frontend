@@ -3,6 +3,7 @@
  */
 
 import { ref } from 'vue'
+import { deviceApi, type RawDevice } from './deviceApi'
 
 // 串口设备接口
 export interface SerialPort {
@@ -87,11 +88,11 @@ export interface SerialDebugOutput {
   total_samples: number
 }
 
-// API响应格式
+// 统一响应格式
 interface ApiResponse<T = any> {
-  code: number
-  message: string
-  data: T
+  ok: boolean
+  data?: T
+  error?: string
 }
 
 class RealDeviceApi {
@@ -119,8 +120,8 @@ class RealDeviceApi {
       
       const result: ApiResponse<{ ports: SerialPort[] }> = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       this.ports.value = result.data.ports
@@ -158,11 +159,11 @@ class RealDeviceApi {
       const result: ApiResponse<DeviceConnectionStatus> = await response.json()
 
       if (!response.ok) {
-        throw new Error(result?.message || `HTTP error! status: ${response.status}`)
+        throw new Error(result?.error || `HTTP error! status: ${response.status}`)
       }
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       // 更新设备列表
@@ -198,8 +199,8 @@ class RealDeviceApi {
       
       const result: ApiResponse = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       // 更新设备列表
@@ -235,8 +236,8 @@ class RealDeviceApi {
       
       const result: ApiResponse = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       // 更新设备列表
@@ -272,8 +273,8 @@ class RealDeviceApi {
       
       const result: ApiResponse = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       // 更新设备列表
@@ -304,8 +305,8 @@ class RealDeviceApi {
       
       const result: ApiResponse<DeviceConnectionStatus> = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       return result.data
@@ -322,23 +323,12 @@ class RealDeviceApi {
   async getDevices(): Promise<DeviceInfo[]> {
     this.isLoading.value = true
     this.error.value = null
-    
+
     try {
-      const response = await fetch('/api/devices/')
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`)
-      }
-      
-      const result: ApiResponse<DeviceInfo[]> = await response.json()
-      
-      if (result.code !== 0) {
-        throw new Error(result.message)
-      }
-      
-      this.devices.value = result.data
-      return result.data
-      
+      const rawDevices = await deviceApi.fetchDevicesRaw()
+      this.devices.value = rawDevices as unknown as DeviceInfo[]
+      return this.devices.value
+
     } catch (err) {
       this.error.value = err instanceof Error ? err.message : 'Unknown error'
       console.error('Failed to get devices:', err)
@@ -361,8 +351,8 @@ class RealDeviceApi {
       
       const result: ApiResponse<{ devices: DeviceConnectionStatus[] }> = await response.json()
       
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
       
       return result.data.devices
@@ -390,8 +380,8 @@ class RealDeviceApi {
 
       const result: ApiResponse<SerialDebugOutput> = await response.json()
 
-      if (result.code !== 0) {
-        throw new Error(result.message)
+      if (!result.ok) {
+        throw new Error(result.error || "Request failed")
       }
 
       return result.data

@@ -1,120 +1,57 @@
-import { reactive, readonly } from 'vue';
+/**
+ * runtime.ts — 已合并到 graphRuntimeStore。
+ *
+ * 此文件保留为兼容层，重新导出 graphRuntimeStore 并提供旧版 graphRuntime 接口。
+ * 新代码请直接使用 graphRuntimeStore。
+ */
+
 import { sessionStore } from './sessionStore';
-import { eegWebSocket, type EegDataPacket } from './websocket';
+import { eegWebSocket } from './websocket';
+import { graphRuntimeStore, type EegPacket } from './graphRuntimeStore';
 
-// EEG 数据包类型（兼容旧接口）
-export interface EegPacket {
-  t: number; // 时间戳
-  channels: number[]; // 各通道数值
-}
-
-// 计算图运行状态
-interface GraphRuntimeState {
-  isRunning: boolean;
-  activeOscNodes: string[]; // 当前活动的示波器节点ID
-  lastPacket: EegPacket | null;
-  wsStatus: 'disconnected' | 'connecting' | 'connected' | 'error';
-  error: string | null;
-}
-
-// 创建响应式状态
-const state = reactive<GraphRuntimeState>({
-  isRunning: false,
-  activeOscNodes: [],
-  lastPacket: null,
-  wsStatus: 'disconnected',
-  error: null,
-});
-
-// 订阅者回调
-const subscribers: ((packet: EegPacket) => void)[] = [];
-
-// WebSocket数据转发
-const wsUnsubscribe = eegWebSocket.onData((packet: EegDataPacket) => {
-  // 转换为旧格式
-  const eegPacket: EegPacket = {
-    t: packet.timestamp / 1000, // 转换为秒
-    channels: packet.channels,
-  };
-
-  state.lastPacket = eegPacket;
-  subscribers.forEach((cb) => cb(eegPacket));
-});
-
-// WebSocket状态监听
-const wsStatusUnsubscribe = eegWebSocket.onStatusChange((status) => {
-  state.wsStatus = status;
-});
-
-// WebSocket错误监听
-const wsErrorUnsubscribe = eegWebSocket.onError(() => {
-  state.error = 'WebSocket连接错误';
-});
+export type { EegPacket };
 
 export const graphRuntime = {
-  // 获取只读状态
-  state: readonly(state),
+  /** 旧版 state 代理（映射到 graphRuntimeStore 的计算属性） */
+  state: {
+    get isRunning() { return graphRuntimeStore.isRunning.value; },
+    get error() { return graphRuntimeStore.runtimeWarning.value; },
+    get wsStatus() {
+      return eegWebSocket.getStatus() as 'disconnected' | 'connecting' | 'connected' | 'error';
+    },
+  },
 
-  // 开始运行（冻结计算图后调用）
-  async start(nodeIds?: string[]) {
-    // 验证是否可以冻结
-    const validation = sessionStore.validateFreeze();
-    if (!validation.valid) {
-      state.error = validation.errors.join('; ');
-      console.error('Cannot start:', validation.errors);
+  /** 开始运行（旧版接口：冻结 + 连接 WS） */
+  async start(_nodeIds?: string[]) {
+    try {
+      await graphRuntimeStore.runByMode('live');
+      return true;
+    } catch {
       return false;
     }
-
-    state.error = null;
-
-    // 如果没有传入nodeIds，从SessionStorage获取
-    if (!nodeIds) {
-      const graph = sessionStore.getGraph();
-      nodeIds = graph.nodes.filter((n) => n.type === 'OSC').map((n) => n.id);
-    }
-
-    state.activeOscNodes = nodeIds;
-    state.isRunning = true;
-
-    // 连接WebSocket
-    eegWebSocket.connect();
-
-    return true;
   },
 
-  // 停止运行（解冻计算图后调用）
+  /** 停止运行（旧版接口：解冻 + 断开 WS） */
   stop() {
-    state.isRunning = false;
-    state.activeOscNodes = [];
-    state.lastPacket = null;
-    state.error = null;
-
-    // 断开WebSocket
-    eegWebSocket.disconnect();
+    graphRuntimeStore.stopRun().catch(() => {});
   },
 
-  // 发送数据包（从计算图到示波器）- 用于Mock测试
+  /** 发送 Mock 数据包 */
   emitPacket(packet: EegPacket) {
-    if (!state.isRunning) return;
-    state.lastPacket = packet;
-    subscribers.forEach((cb) => cb(packet));
+    graphRuntimeStore.emitPacket(packet);
   },
 
-  // 订阅数据（示波器调用）
+  /** 订阅数据流 */
   subscribe(callback: (packet: EegPacket) => void) {
-    subscribers.push(callback);
-    return () => {
-      const index = subscribers.indexOf(callback);
-      if (index > -1) subscribers.splice(index, 1);
-    };
+    return graphRuntimeStore.subscribeData(callback);
   },
 
-  // 检查节点是否是活动的OSC节点
-  isActiveOscNode(nodeId: string): boolean {
-    return state.activeOscNodes.includes(nodeId);
+  /** 检查节点是否是活动的 OSC 节点 */
+  isActiveOscNode(_nodeId: string): boolean {
+    return graphRuntimeStore.isRunning.value;
   },
 
-  // 获取节点的映射信息
+  /** 获取节点的映射信息 */
   getNodeMapping(nodeId: string): { deviceId?: string; oscId?: string } {
     return {
       deviceId: sessionStore.getInputMappings()[nodeId],
@@ -122,8 +59,8 @@ export const graphRuntime = {
     };
   },
 
-  // 清理资源（应用卸载时调用）
+  /** 清理资源 */
   dispose() {
-    state.error = null;
+    // 现在由 graphRuntimeStore.cleanup() 管理
   },
 };

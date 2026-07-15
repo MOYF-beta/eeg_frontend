@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+logger = logging.getLogger(__name__)
+
 import json
 import math
 import queue
@@ -117,7 +120,7 @@ class GraphWorker:
 
         if len(order) < len(indegree):
             unresolved = [nid for nid in indegree if nid not in order]
-            print(
+            logger.debug(
                 f'[GraphWorker] Cycle detected in graph component! '
                 f'Unresolved node ids: {sorted(unresolved)}. '
                 f'Stopping worker to prevent zero-value injection.'
@@ -199,7 +202,7 @@ class GraphWorker:
                             return channels, frame_ts
                     return [], None
             except Exception as exc:
-                print(f'[GraphWorker] Failed to read channels from device {device_id}: {exc}')
+                logger.debug(f'[GraphWorker] Failed to read channels from device {device_id}: {exc}')
 
         channels_count = 8
         try:
@@ -252,7 +255,7 @@ class GraphWorker:
         if preferred_port in outputs:
             return outputs[preferred_port]
         if outputs:
-            print(
+            logger.debug(
                 f'[GraphWorker] Port "{preferred_port}" not found in outputs, '
                 f'available ports: {sorted(outputs.keys())}. '
                 'Returning empty signal to prevent cross-channel data corruption.'
@@ -403,7 +406,7 @@ class GraphWorker:
                     try:
                         node_outputs[node_id] = processor.compute(node, inputs, context) or {}
                     except Exception as exc:
-                        print(f'[GraphWorker] Node compute failed: {node_id}({node_type}) -> {exc}')
+                        logger.debug(f'[GraphWorker] Node compute failed: {node_id}({node_type}) -> {exc}')
                         node_outputs[node_id] = {}
                     node_compute_total_ns += time.perf_counter_ns() - t1
 

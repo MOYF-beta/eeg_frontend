@@ -1,3 +1,5 @@
+import logging
+logger = logging.getLogger(__name__)
 import json
 import time
 
@@ -20,7 +22,7 @@ from .graph_store import (
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path, start_recording, stop_recording
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
-from .device_store import get_all_devices, create_device, update_device, delete_device, get_device_config
+from .device_store import get_all_devices, create_device, update_device, delete_device
 from .graph_sync import broadcast_graph_state
 from .perf_monitor import get_perf_monitor
 
@@ -54,6 +56,8 @@ def devices(request, device_id=None):
     - GET /api/devices/{device_id}/ - 获取单个设备
     - PATCH /api/devices/{device_id}/ - 更新设备
     - DELETE /api/devices/{device_id}/ - 删除设备
+    
+    统一响应格式: {ok: bool, data?: any, error?: string}
     """
     
     if request.method == 'GET':
@@ -63,60 +67,37 @@ def devices(request, device_id=None):
             device = next((d for d in devices_list if d['id'] == device_id), None)
             if not device:
                 return JsonResponse({
-                    'code': 404,
-                    'message': f'Device {device_id} not found'
+                    'ok': False, 'error': f'Device {device_id} not found'
                 }, status=404)
             
-            return JsonResponse({
-                'code': 0,
-                'message': 'success',
-                'data': device
-            })
+            return JsonResponse({'ok': True, 'data': device})
         else:
             # 获取所有设备
             devices_list = get_all_devices()
-            return JsonResponse({
-                'code': 0,
-                'message': 'success',
-                'data': devices_list
-            })
+            return JsonResponse({'ok': True, 'data': devices_list})
     
     elif request.method == 'POST':
         # 创建设备
         try:
             data = json.loads(request.body)
-            
-            # 创建设备
             device = create_device(data)
-            
             return JsonResponse({
-                'code': 0,
-                'message': 'Device created successfully',
+                'ok': True,
                 'data': {
                     'id': device['id'],
                     'name': device['name'],
                     'status': 'ready'
                 }
             }, status=201)
-            
         except json.JSONDecodeError:
-            return JsonResponse({
-                'code': 400,
-                'message': 'Invalid JSON data'
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
         except Exception as e:
-            return JsonResponse({
-                'code': 500,
-                'message': f'Failed to create device: {str(e)}'
-            }, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to create device: {str(e)}'}, status=500)
     
     elif request.method == 'PATCH':
         # 更新设备
         if not device_id:
-            return JsonResponse({
-                'code': 400,
-                'message': 'Device ID is required'
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': 'Device ID is required'}, status=400)
         
         try:
             data = json.loads(request.body)
@@ -125,80 +106,49 @@ def devices(request, device_id=None):
             runtime_state = get_runtime_state()
             if runtime_state.get('running'):
                 return JsonResponse({
-                    'code': 403,
-                    'message': 'Cannot modify devices while graph is running'
+                    'ok': False, 'error': 'Cannot modify devices while graph is running'
                 }, status=403)
             
             # 更新设备
             device = update_device(device_id, data)
             if not device:
                 return JsonResponse({
-                    'code': 404,
-                    'message': f'Device {device_id} not found'
+                    'ok': False, 'error': f'Device {device_id} not found'
                 }, status=404)
             
-            return JsonResponse({
-                'code': 0,
-                'message': 'Device updated successfully',
-                'data': device
-            })
-            
+            return JsonResponse({'ok': True, 'data': device})
         except json.JSONDecodeError:
-            return JsonResponse({
-                'code': 400,
-                'message': 'Invalid JSON data'
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
         except ValueError as e:
-            # 通道数量修改错误
-            return JsonResponse({
-                'code': 400,
-                'message': str(e)
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': str(e)}, status=400)
         except Exception as e:
-            return JsonResponse({
-                'code': 500,
-                'message': f'Failed to update device: {str(e)}'
-            }, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to update device: {str(e)}'}, status=500)
     
     elif request.method == 'DELETE':
         # 删除设备
         if not device_id:
-            return JsonResponse({
-                'code': 400,
-                'message': 'Device ID is required'
-            }, status=400)
+            return JsonResponse({'ok': False, 'error': 'Device ID is required'}, status=400)
         try:
             # 检查计算图是否正在运行
             runtime_state = get_runtime_state()
             if runtime_state.get('running'):
                 return JsonResponse({
-                    'code': 403,
-                    'message': 'Cannot delete devices while graph is running'
+                    'ok': False, 'error': 'Cannot delete devices while graph is running'
                 }, status=403)
             
             # 删除设备
             success = delete_device(device_id)
             if not success:
                 return JsonResponse({
-                    'code': 404,
-                    'message': f'Device {device_id} not found'
+                    'ok': False, 'error': f'Device {device_id} not found'
                 }, status=404)
             
-            return JsonResponse({
-                'code': 0,
-                'message': 'Device deleted successfully'
-            })
+            return JsonResponse({'ok': True})
         except Exception as e:
-            return JsonResponse({
-                'code': 500,
-                'message': f'Failed to delete device: {str(e)}'
-            }, status=500)
+            return JsonResponse({'ok': False, 'error': f'Failed to delete device: {str(e)}'}, status=500)
     
     else:
-        return JsonResponse({
-            'code': 405,
-            'message': 'Method not allowed'
-        }, status=405)
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
 
 def saved_files(request):
@@ -326,12 +276,12 @@ def graph_debug(request):
     except Exception:
         payload = {'error': 'invalid json'}
     # Print the payload to server terminal for debugging
-    print('--- GRAPH DEBUG OUTPUT ---')
+    logger.debug('--- GRAPH DEBUG OUTPUT ---')
     try:
-        print(json.dumps(payload, ensure_ascii=False, indent=2))
+        logger.debug(json.dumps(payload, ensure_ascii=False, indent=2))
     except Exception:
-        print(str(payload))
-    print('--- END GRAPH DEBUG OUTPUT ---')
+        logger.debug(str(payload))
+    logger.debug('--- END GRAPH DEBUG OUTPUT ---')
     return JsonResponse({'ok': True})
 
 

@@ -822,7 +822,6 @@ async function onChannelConfigConfirm(result: TenTwentyDialogResult) {
         channelNames: newNames,
       };
       await syncGraph(graph);
-      console.log('[TenTwentyTopoMap] Graph node channelNames updated:', newNames);
     }
   } catch (err) {
     console.error('[TenTwentyTopoMap] Failed to sync graph node channels:', err);

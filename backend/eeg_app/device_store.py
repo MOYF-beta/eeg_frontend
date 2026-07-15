@@ -1,10 +1,20 @@
+import logging
+logger = logging.getLogger(__name__)
 """设备配置存储和管理"""
 
 import json
 import os
+import sys
 import time
-import serial.tools.list_ports
 from typing import Dict, List, Optional, Any
+
+# pyserial 依赖 termios（Unix-only 标准库模块），在 Windows 上需优雅降级
+try:
+    import serial.tools.list_ports
+    SERIAL_AVAILABLE = True
+except (ImportError, ModuleNotFoundError):
+    serial = None  # type: ignore
+    SERIAL_AVAILABLE = False
 
 # 设备配置结构
 class DeviceConfig:
@@ -79,19 +89,22 @@ class DeviceStore:
     
     def _initialize_devices(self) -> None:
         """初始化设备：扫描真实设备并自动连接。"""
-        print('[DeviceStore] Initializing devices...')
+        logger.debug('[DeviceStore] Initializing devices...')
 
         # 扫描并自动连接真实设备
         self._scan_real_devices()
 
-        print(f'[DeviceStore] Initialized {len(self._devices)} devices')
+        logger.debug(f'[DeviceStore] Initialized {len(self._devices)} devices')
     
     def _scan_real_devices(self) -> None:
         """扫描真实设备（CH340和其他USB串口设备），逐个连接以确保即插即用。"""
+        if not SERIAL_AVAILABLE:
+            logger.debug('[DeviceStore] pyserial not available (Windows), skipping real device scan.')
+            return
         try:
             from .real_device_manager import get_real_device_manager
             available_ports = serial.tools.list_ports.comports()
-            print(f'[DeviceStore] Found {len(available_ports)} serial ports')
+            logger.debug(f'[DeviceStore] Found {len(available_ports)} serial ports')
 
             for port_info in available_ports:
                 device_name = port_info.device
@@ -127,14 +140,14 @@ class DeviceStore:
                 )
 
                 self._devices[device_id] = device
-                print(f'[DeviceStore] Added real device: {device_name} (CH340: {is_ch340})')
+                logger.debug(f'[DeviceStore] Added real device: {device_name} (CH340: {is_ch340})')
 
                 # 自动连接设备
                 manager = get_real_device_manager()
                 manager.connect_device(device_name, baudrate=460800)
 
         except Exception as e:
-            print(f'[DeviceStore] Error scanning real devices: {e}')
+            logger.debug(f'[DeviceStore] Error scanning real devices: {e}')
             import traceback
             traceback.print_exc()
     
@@ -215,7 +228,7 @@ class DeviceStore:
         )
         
         self._devices[device_id] = device
-        print(f'[DeviceStore] Created device: {device.name} (ID: {device_id})')
+        logger.debug(f'[DeviceStore] Created device: {device.name} (ID: {device_id})')
         return device
     
     def update_device(self, device_id: str, updates: Dict) -> Optional[DeviceConfig]:
@@ -235,7 +248,7 @@ class DeviceStore:
                 setattr(device, field, updates[field])
         
         device.updated_at = time.time()
-        print(f'[DeviceStore] Updated device: {device.name} (ID: {device_id})')
+        logger.debug(f'[DeviceStore] Updated device: {device.name} (ID: {device_id})')
         return device
     
     def delete_device(self, device_id: str) -> bool:
@@ -243,7 +256,7 @@ class DeviceStore:
         if device_id in self._devices:
             device_name = self._devices[device_id].name
             del self._devices[device_id]
-            print(f'[DeviceStore] Deleted device: {device_name} (ID: {device_id})')
+            logger.debug(f'[DeviceStore] Deleted device: {device_name} (ID: {device_id})')
             return True
         return False
 

@@ -70,19 +70,15 @@ class EegWebSocket {
   connect(trackReference = true) {
     if (trackReference) {
       this.connectionCount++;
-      console.log(`[WebSocket] connect() called, connection count: ${this.connectionCount}`);
     } else {
-      console.log(`[WebSocket] reconnect() called, connection count: ${this.connectionCount}`);
     }
     
     // 如果已经连接或正在连接，直接返回
     if (this.ws?.readyState === WebSocket.CONNECTING) {
-      console.log('[WebSocket] Already connecting, skipping...');
       return;
     }
 
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log('[WebSocket] Already connected');
       return;
     }
 
@@ -93,13 +89,11 @@ class EegWebSocket {
 
     this.setStatus('connecting');
     this.isManualDisconnect = false;
-    console.log('[WebSocket] Establishing new connection to:', this.config.url);
 
     try {
       this.ws = new WebSocket(this.config.url);
 
       this.ws.onopen = () => {
-        console.log('[WebSocket] Connection established');
         this.setStatus('connected');
         this.reconnectAttempts = 0;
         this.startHeartbeat();
@@ -119,7 +113,6 @@ class EegWebSocket {
       };
 
       this.ws.onclose = () => {
-        console.log('WebSocket closed');
         this.setStatus('disconnected');
         this.stopHeartbeat();
         this.ws = null;
@@ -127,7 +120,6 @@ class EegWebSocket {
         if (!this.isManualDisconnect) {
           this.attemptReconnect();
         } else {
-          console.log('Manual disconnect, skipping reconnect');
           this.isManualDisconnect = false;
         }
       };
@@ -143,11 +135,9 @@ class EegWebSocket {
     if (this.connectionCount > 0) {
       this.connectionCount--;
     }
-    console.log(`[WebSocket] disconnect() called, connection count: ${this.connectionCount}`);
     
     // 只有当所有组件都断开连接时才真正断开WebSocket
     if (this.connectionCount <= 0) {
-      console.log('[WebSocket] All components disconnected, closing WebSocket...');
       this.isManualDisconnect = true; // 标记为主动断开
       this.stopReconnect();
       this.stopHeartbeat();
@@ -163,7 +153,6 @@ class EegWebSocket {
       this.setStatus('disconnected');
       this.connectionCount = 0; // 重置计数器
     } else {
-      console.log(`[WebSocket] ${this.connectionCount} components still connected, keeping WebSocket open`);
     }
   }
 
@@ -176,9 +165,6 @@ class EegWebSocket {
     }
 
     this.reconnectAttempts++;
-    console.log(
-      `Reconnecting... Attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts}`
-    );
 
     this.reconnectTimer = window.setTimeout(() => {
       this.connect(false);
@@ -283,7 +269,6 @@ class EegWebSocket {
     const ids = Array.from(this._subRefCounts.keys());
     if (ids.length > 0) {
       this._sendWire('subscribe', ids);
-      console.log('[WebSocket] Re-subscribed after reconnect:', ids);
     }
   }
 
@@ -294,7 +279,6 @@ class EegWebSocket {
     }
     if (newSubs.length > 0) {
       this._sendWire('subscribe', newSubs);
-      console.log('[WebSocket] Subscribe (new refs):', newSubs);
     }
   }
 
@@ -305,7 +289,6 @@ class EegWebSocket {
     }
     if (removals.length > 0) {
       this._sendWire('unsubscribe', removals);
-      console.log('[WebSocket] Unsubscribe (last refs):', removals);
     }
   }
 
@@ -314,7 +297,6 @@ class EegWebSocket {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
     this._subRefCounts.clear();
     this.ws.send(JSON.stringify({ type: 'unsubscribe' }));
-    console.log('[WebSocket] Unsubscribed from all nodes');
   }
 
   updateSubscription() {
