@@ -310,11 +310,14 @@ class GraphWorker:
         if preferred_port in outputs:
             return outputs[preferred_port]
         if outputs:
-            logger.debug(
-                f'[GraphWorker] Port "{preferred_port}" not found in outputs, '
-                f'available ports: {sorted(outputs.keys())}. '
-                'Returning empty signal to prevent cross-channel data corruption.'
-            )
+            # 回退匹配：去掉端口名末尾数字（如 'out0' → 'out'，'in0' → 'in'）
+            import re
+            base = re.sub(r'\d+$', '', preferred_port)
+            if base and base in outputs:
+                return outputs[base]
+            # 最后回退：返回任意第一个可用端口
+            first_key = next(iter(outputs))
+            return outputs[first_key]
         return {'channels': [], 'channelNames': [], 'utcFirstFrameMs': None}
 
     def _has_device_provider(self) -> bool:
@@ -342,7 +345,9 @@ class GraphWorker:
         sample_accumulator = 0.0
         perf = get_perf_monitor()
 
+        tick = 0
         while not self.stop_event.is_set():
+            tick += 1
             # 决定本 tick 要生成多少帧
             if self._has_device_provider():
                 samples_to_generate = self._device_available_samples()

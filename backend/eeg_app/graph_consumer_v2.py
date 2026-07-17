@@ -263,6 +263,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
         )
         from .data_replay import get_replay_status
 
+        # 订阅消息与 stream_data 并发执行，首个 tick 延迟 100ms 确保 subscribe 已处理。
+        await asyncio.sleep(0.1)
+
         # 缓存的控制状态 — 仅在 control_revision 变化时重读
         last_control_rev = -1
         cached_graph: Dict = {}
@@ -271,7 +274,6 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
         cached_runtime_mode = 'live'
         cached_node_type_map: Dict[str, str] = {}
         cached_fft_size = 512
-
         while self.running:
             # --- 控制状态检查：仅比较修订号，O(1) ---
             control_rev = get_control_revision()

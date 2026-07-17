@@ -225,7 +225,8 @@ class ControlConsumer(AsyncWebsocketConsumer):
                 'revision': get_graph_revision(),
                 'persistedRevision': get_persisted_revision(),
             },
-            'runtime': runtime,
+            # 在 runtime 中冗余 frozen 字段，便于前端 graphRuntimeStore 直接读取
+            'runtime': {**runtime, 'frozen': bool(graph.get('frozen', False))},
             'devices': devices,
         }
         try:

@@ -78,6 +78,9 @@ function getStatusDescription(isRunning: boolean, frozen: boolean): string {
 // 从控制 WS 状态推送更新本地状态
 function applyControlState(cs: ControlState) {
   const rt = cs.runtime;
+  // frozen 权威来源是 graph.frozen（后端 _RUNTIME_STATE 不含 frozen 字段），
+  // runtime.frozen 仅作向后兼容回退。
+  const frozenVal = cs.graph?.frozen ?? rt.frozen ?? false;
   updateState({
     isRunning: rt.running,
     runtimeMode: (rt.mode || 'live') as 'live' | 'offline',
@@ -85,7 +88,7 @@ function applyControlState(cs: ControlState) {
     processingDelayMs: Number(rt.processingDelayMs || 0),
     nonRealtime: Boolean(rt.nonRealtime),
     runtimeWarning: rt.warning ? String(rt.warning) : null,
-    frozen: Boolean(rt.frozen ?? false),
+    frozen: Boolean(frozenVal),
   });
 
   // 运行中确保数据 WS 已连接
