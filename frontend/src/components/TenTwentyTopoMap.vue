@@ -844,8 +844,10 @@ async function loadGraph() {
 onMounted(async () => {
   await loadGraph();
 
-  // 定期刷新计算图状态
-  graphStateTimer = setInterval(loadGraph, 3000);
+  // 定期刷新计算图状态（降频至10s，避免与 WS 推送冲突）
+  // 主要状态更新依赖 sessionStore.subscribe 和 eegWebSocket.onData，
+  // 此定时器仅作为兜底同步
+  graphStateTimer = setInterval(loadGraph, 10000);
 
   await nextTick();
   initChart();

@@ -86,7 +86,7 @@ def generate_python_prototype_spec(
         primary_in = in_names[0]
         primary_out = out_names[0]
         editable_lines = [
-            f'{primary_out} = np.asarray({primary_in}, dtype=float).copy()',
+            f'{primary_out} = asarray({primary_in}, dtype=float).copy()',
             f"print('{primary_out} shape:', {primary_out}.shape)",
         ]
         for idx in range(1, len(out_names)):

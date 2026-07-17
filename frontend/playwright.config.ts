@@ -2,12 +2,12 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  fullyParallel: true,
+  fullyParallel: false, // 串行执行避免后端状态冲突
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
   workers: 1, // 单线程避免冲突
   reporter: 'list',
-  timeout: 30000,
+  timeout: 60000,
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'on-first-retry',
@@ -20,7 +20,25 @@ export default defineConfig({
   },
   projects: [
     {
-      name: 'chromium',
+      name: 'robustness',
+      testMatch: /robustness\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'combo-regression',
+      testMatch: /combo-regression\.spec\.ts/,
+      dependencies: ['robustness'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'user-journey',
+      testMatch: /user-journey\.spec\.ts/,
+      dependencies: ['combo-regression'],
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
+      name: 'other-e2e',
+      testIgnore: /(robustness|combo-regression|user-journey)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],

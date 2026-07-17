@@ -70,17 +70,17 @@ interface UpdateDeviceRequest {
 
 // 设备API服务
 export const deviceApi = {
-  // 获取设备列表（原始后端格式）—— 单一权威入口
+  // 获取设备列表（原始后端格式）—— 统一从 /api/real-devices/ 获取
   async fetchDevicesRaw(): Promise<RawDevice[]> {
-    const response = await fetch('/api/devices/');
+    const response = await fetch('/api/real-devices/');
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
     }
-    const result: ApiResponse<RawDevice[]> = await response.json();
+    const result: ApiResponse<{ devices: RawDevice[]; count: number }> = await response.json();
     if (!result.ok) {
       throw new Error(result.error || 'Failed to fetch devices');
     }
-    return result.data!;
+    return result.data?.devices ?? [];
   },
 
   // 获取设备列表
@@ -90,8 +90,8 @@ export const deviceApi = {
       return rawDevices.map((device) => ({
         id: device.id,
         name: device.name,
-        status: (device.config?.connected as boolean) ? 'online' : 'offline',
-        type: device.type === 'wearable_eeg' ? 'real' : 'simulated',
+        status: (device as any).status === 'online' || (device.config?.connected as boolean) ? 'online' : 'offline',
+        type: (device.type === 'wearable_eeg' || device.type === 'ch340_eeg') ? 'real' : 'simulated',
         samplingRate: device.sampling_rate,
         channelCount: device.channel_count,
         config: device.config || {},
@@ -119,7 +119,10 @@ export const deviceApi = {
         throw new Error(result.error || `HTTP error! status: ${response.status}`);
       }
       
-      return result.data!;
+      if (!result.data) {
+        throw new Error('Empty response from server');
+      }
+      return result.data;
     } catch (error) {
       console.error('Failed to create device:', error);
       throw error;
@@ -147,7 +150,10 @@ export const deviceApi = {
         throw new Error(errorMessage);
       }
       
-      return result.data!;
+      if (!result.data) {
+        throw new Error('Empty response from server');
+      }
+      return result.data;
     } catch (error) {
       console.error('Failed to update device:', error);
       throw error;

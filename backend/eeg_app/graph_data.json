@@ -1,83 +1,38 @@
 {
   "nodes": [
     {
-      "type": "OUTPUT",
-      "name": "调试示波器",
-      "params": {
-        "fftSize": 512,
-        "saveEnabled": false,
-        "filename": "",
-        "format": "CSV",
-        "timeWindow": 5,
-        "yScale": 1,
-        "mode": "scroll",
-        "selectedChannels": [
-          0,
-          1,
-          2,
-          3,
-          4,
-          5,
-          6,
-          7
-        ],
-        "availableChannels": [
-          "CH1",
-          "CH2",
-          "CH3",
-          "CH4",
-          "CH5",
-          "CH6",
-          "CH7",
-          "CH8"
-        ]
-      },
-      "id": "debug-osc-1",
-      "x": 510,
-      "y": 370
-    },
-    {
-      "type": "FILTER",
-      "name": "滤波器",
-      "params": {
-        "type": "highpass",
-        "cutoff": 60,
-        "order": 4
-      },
-      "id": "node-1777211905622-234",
-      "x": 200,
-      "y": 370
-    },
-    {
+      "id": "e2e-source-1",
       "type": "SOURCE",
-      "name": "USB Serial (/dev/ttyUSB0)",
+      "name": "E2E 数据源",
+      "x": 120,
+      "y": 140,
+      "deviceId": "sim_alpha",
       "params": {
-        "sampleRate": 1000,
-        "channels": 8,
-        "deviceId": "sim-001",
         "sourceMode": "live",
-        "port": "/dev/ttyUSB0",
-        "filePath": "",
-        "loop": false
-      },
-      "id": "node-1783600110189-463",
-      "x": -12.66668701171875,
-      "y": 231.66666412353516
+        "sampleRate": 250,
+        "channels": 4,
+        "deviceId": "sim_alpha"
+      }
+    },
+    {
+      "id": "e2e-output-1",
+      "type": "OUTPUT",
+      "name": "E2E 示波器",
+      "x": 460,
+      "y": 140,
+      "params": {
+        "timeWindow": 5,
+        "mode": "scroll",
+        "saveEnabled": false
+      }
     }
   ],
   "edges": [
     {
-      "id": "c7013632-9373-48ad-b720-7028ce9647e3",
-      "source": "node-1777211905622-234",
-      "target": "debug-osc-1",
+      "id": "e2e-edge-1",
+      "source": "e2e-source-1",
       "sourcePort": "out",
-      "targetPort": "in"
-    },
-    {
-      "id": "35a96216-029f-47c4-a8d8-72fbab6e43be",
-      "source": "node-1783600110189-463",
-      "target": "node-1777211905622-234",
-      "sourcePort": "out",
+      "target": "e2e-output-1",
       "targetPort": "in"
     }
   ],

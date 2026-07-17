@@ -1,8 +1,8 @@
 /**
  * runtime.ts — 已合并到 graphRuntimeStore。
  *
- * 此文件保留为兼容层，重新导出 graphRuntimeStore 并提供旧版 graphRuntime 接口。
- * 新代码请直接使用 graphRuntimeStore。
+ * @deprecated 此文件保留为兼容层。新代码请直接使用 graphRuntimeStore。
+ * 计划移除时间：下一个大版本。
  */
 
 import { sessionStore } from './sessionStore';
@@ -33,7 +33,7 @@ export const graphRuntime = {
 
   /** 停止运行（旧版接口：解冻 + 断开 WS） */
   stop() {
-    graphRuntimeStore.stopRun().catch(() => {});
+    graphRuntimeStore.stopRun();
   },
 
   /** 发送 Mock 数据包 */

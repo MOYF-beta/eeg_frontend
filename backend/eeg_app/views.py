@@ -1,7 +1,6 @@
 import logging
 logger = logging.getLogger(__name__)
 import json
-import time
 
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -15,7 +14,6 @@ from .graph_store import (
 from .data_recorder import list_saved_files, get_active_recordings, get_file_path, start_recording, stop_recording
 from .data_replay import list_replayable_files
 from .python_node_templates import generate_python_prototype_spec, get_default_code_library
-from .device_store import get_all_devices, create_device, update_device, delete_device
 from .perf_monitor import get_perf_monitor
 
 
@@ -40,107 +38,14 @@ def status(request):
 
 @csrf_exempt
 def devices(request, device_id=None):
-    """设备管理API
-    
-    支持以下操作：
-    - GET /api/devices/ - 获取所有设备
-    - POST /api/devices/ - 创建设备
-    - GET /api/devices/{device_id}/ - 获取单个设备
-    - PATCH /api/devices/{device_id}/ - 更新设备
-    - DELETE /api/devices/{device_id}/ - 删除设备
-    
-    统一响应格式: {ok: bool, data?: any, error?: string}
+    """设备管理 API — 委托给 real_device_views.real_devices（统一数据源）。
+
+    保留此路由仅为向后兼容，所有设备操作统一走 /api/real-devices/ 体系。
     """
-    
-    if request.method == 'GET':
-        if device_id:
-            # 获取单个设备
-            devices_list = get_all_devices()
-            device = next((d for d in devices_list if d['id'] == device_id), None)
-            if not device:
-                return JsonResponse({
-                    'ok': False, 'error': f'Device {device_id} not found'
-                }, status=404)
-            
-            return JsonResponse({'ok': True, 'data': device})
-        else:
-            # 获取所有设备
-            devices_list = get_all_devices()
-            return JsonResponse({'ok': True, 'data': devices_list})
-    
-    elif request.method == 'POST':
-        # 创建设备
-        try:
-            data = json.loads(request.body)
-            device = create_device(data)
-            return JsonResponse({
-                'ok': True,
-                'data': {
-                    'id': device['id'],
-                    'name': device['name'],
-                    'status': 'ready'
-                }
-            }, status=201)
-        except json.JSONDecodeError:
-            return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'ok': False, 'error': f'Failed to create device: {str(e)}'}, status=500)
-    
-    elif request.method == 'PATCH':
-        # 更新设备
-        if not device_id:
-            return JsonResponse({'ok': False, 'error': 'Device ID is required'}, status=400)
-        
-        try:
-            data = json.loads(request.body)
-            
-            # 检查计算图是否正在运行
-            runtime_state = get_runtime_state()
-            if runtime_state.get('running'):
-                return JsonResponse({
-                    'ok': False, 'error': 'Cannot modify devices while graph is running'
-                }, status=403)
-            
-            # 更新设备
-            device = update_device(device_id, data)
-            if not device:
-                return JsonResponse({
-                    'ok': False, 'error': f'Device {device_id} not found'
-                }, status=404)
-            
-            return JsonResponse({'ok': True, 'data': device})
-        except json.JSONDecodeError:
-            return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
-        except ValueError as e:
-            return JsonResponse({'ok': False, 'error': str(e)}, status=400)
-        except Exception as e:
-            return JsonResponse({'ok': False, 'error': f'Failed to update device: {str(e)}'}, status=500)
-    
-    elif request.method == 'DELETE':
-        # 删除设备
-        if not device_id:
-            return JsonResponse({'ok': False, 'error': 'Device ID is required'}, status=400)
-        try:
-            # 检查计算图是否正在运行
-            runtime_state = get_runtime_state()
-            if runtime_state.get('running'):
-                return JsonResponse({
-                    'ok': False, 'error': 'Cannot delete devices while graph is running'
-                }, status=403)
-            
-            # 删除设备
-            success = delete_device(device_id)
-            if not success:
-                return JsonResponse({
-                    'ok': False, 'error': f'Device {device_id} not found'
-                }, status=404)
-            
-            return JsonResponse({'ok': True})
-        except Exception as e:
-            return JsonResponse({'ok': False, 'error': f'Failed to delete device: {str(e)}'}, status=500)
-    
-    else:
-        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+    from . import real_device_views
+    # 将 request 封装，添加 device_id 参数供下游使用
+    request._device_id_override = device_id
+    return real_device_views.real_devices(request)
 
 
 def saved_files(request):
@@ -231,31 +136,27 @@ def graph_record(request):
     DELETE: 停止所有录制
     """
     from .data_recorder import start_recording, stop_recording, get_active_recordings
-    from .graph_store import get_graph
+    from .graph_store import get_output_nodes_for_recording
 
     if request.method == 'POST':
-        graph = get_graph()
-        nodes = graph.get('nodes', []) or []
+        output_nodes = get_output_nodes_for_recording()
         started = []
         errors = []
-        for node in nodes:
-            node_type = str(node.get('type') or '').upper()
+        for node in output_nodes:
             node_id = node.get('id')
             if not node_id:
                 continue
-            # 录制所有输出节点 (OUTPUT)
-            if node_type == 'OUTPUT':
-                params = node.get('params', {}) or {}
-                filename = params.get('filename')
-                result = start_recording(
-                    node_id=node_id,
-                    filename=filename,
-                    format='CSV',
-                )
-                if result.get('ok'):
-                    started.append({'nodeId': node_id, 'filepath': result.get('filepath')})
-                else:
-                    errors.append({'nodeId': node_id, 'error': result.get('error')})
+            params = node.get('params', {}) or {}
+            filename = params.get('filename')
+            result = start_recording(
+                node_id=node_id,
+                filename=filename,
+                format='CSV',
+            )
+            if result.get('ok'):
+                started.append({'nodeId': node_id, 'filepath': result.get('filepath')})
+            else:
+                errors.append({'nodeId': node_id, 'error': result.get('error')})
 
         return JsonResponse({
             'ok': True,

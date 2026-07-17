@@ -3,6 +3,7 @@ logger = logging.getLogger(__name__)
 """数据回放管理器 - 实现REPLAY节点的数据文件回放功能"""
 
 import csv
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional
@@ -11,6 +12,7 @@ from .data_recorder import get_data_dir
 
 # 当前活跃的回放会话
 _active_replays: Dict[str, Dict] = {}
+_replay_lock = threading.RLock()
 
 
 def start_replay(node_id: str, filename: str, loop: bool = False, speed: float = 1.0) -> Dict:
@@ -28,7 +30,9 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
     global _active_replays
     
     # 如果已经在回放，先停止
-    if node_id in _active_replays:
+    with _replay_lock:
+        already_replaying = node_id in _active_replays
+    if already_replaying:
         stop_replay(node_id)
     
     # 查找文件
@@ -54,7 +58,8 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
             for _ in reader:
                 sample_count += 1
         
-        _active_replays[node_id] = {
+        with _replay_lock:
+            _active_replays[node_id] = {
             'filepath': str(filepath),
             'filename': filepath.name,
             'loop': loop,
@@ -73,8 +78,6 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
         _active_replays[node_id]['reader'] = csv.reader(_active_replays[node_id]['file_handle'])
         # 跳过表头
         next(_active_replays[node_id]['reader'], None)
-        
-        logger.debug(f'[DataReplay] Started replay from {filepath} ({sample_count} samples, {channels} channels)')
         return {
             'ok': True,
             'filename': filepath.name,
@@ -86,6 +89,20 @@ def start_replay(node_id: str, filename: str, loop: bool = False, speed: float =
     except Exception as e:
         logger.debug(f'[DataReplay] Failed to start replay: {e}')
         return {'ok': False, 'error': str(e)}
+
+
+def _replay_info(node_id: str) -> Optional[Dict]:
+    """线程安全地获取回放会话信息"""
+    with _replay_lock:
+        info = _active_replays.get(node_id)
+        if info is None:
+            return None
+        return {
+            'filepath': info.get('filepath'),
+            'loop': info.get('loop', False),
+            'current_idx': info.get('current_idx', 0),
+            'sample_count': info.get('sample_count', 0),
+        }
 
 
 def read_next_sample(node_id: str) -> Optional[Dict]:
@@ -100,10 +117,10 @@ def read_next_sample(node_id: str) -> Optional[Dict]:
     """
     global _active_replays
     
-    if node_id not in _active_replays:
-        return None
-    
-    replay_info = _active_replays[node_id]
+    with _replay_lock:
+        if node_id not in _active_replays:
+            return None
+        replay_info = _active_replays[node_id]
     
     try:
         row = next(replay_info['reader'], None)
@@ -116,7 +133,8 @@ def read_next_sample(node_id: str) -> Optional[Dict]:
                 replay_info['file_handle'] = open(replay_info['filepath'], 'r', encoding='utf-8')
                 replay_info['reader'] = csv.reader(replay_info['file_handle'])
                 next(replay_info['reader'], None)  # 跳过表头
-                replay_info['current_idx'] = 0
+                with _replay_lock:
+                    _active_replays[node_id]['current_idx'] = 0
                 row = next(replay_info['reader'], None)
                 if row is None:
                     return None
@@ -128,13 +146,15 @@ def read_next_sample(node_id: str) -> Optional[Dict]:
         timestamp = int(row[0])
         channels = [float(v) for v in row[2:]]
         
-        replay_info['current_idx'] += 1
-        replay_info['last_timestamp'] = timestamp
+        with _replay_lock:
+            _active_replays[node_id]['current_idx'] += 1
+            _active_replays[node_id]['last_timestamp'] = timestamp
+            current_idx = _active_replays[node_id]['current_idx']
         
         return {
             'timestamp': timestamp,
             'channels': channels,
-            'sampleIdx': replay_info['current_idx'],
+            'sampleIdx': current_idx,
         }
         
     except Exception as e:
@@ -146,17 +166,18 @@ def get_replay_status(node_id: str) -> Optional[Dict]:
     """获取回放状态"""
     global _active_replays
     
-    if node_id not in _active_replays:
-        return None
+    with _replay_lock:
+        if node_id not in _active_replays:
+            return None
+        info = dict(_active_replays[node_id])
     
-    info = _active_replays[node_id]
     return {
-        'filename': info['filename'],
-        'currentIdx': info['current_idx'],
-        'sampleCount': info['sample_count'],
-        'progress': round(info['current_idx'] / info['sample_count'] * 100, 1) if info['sample_count'] > 0 else 0,
-        'loop': info['loop'],
-        'speed': info['speed'],
+        'filename': info.get('filename', ''),
+        'currentIdx': info.get('current_idx', 0),
+        'sampleCount': info.get('sample_count', 0),
+        'progress': round(info.get('current_idx', 0) / info.get('sample_count', 1) * 100, 1) if info.get('sample_count', 0) > 0 else 0,
+        'loop': info.get('loop', False),
+        'speed': info.get('speed', 1.0),
     }
 
 
@@ -171,10 +192,10 @@ def stop_replay(node_id: str) -> Dict:
     """
     global _active_replays
     
-    if node_id not in _active_replays:
-        return {'ok': False, 'error': 'Not replaying'}
-    
-    replay_info = _active_replays[node_id]
+    with _replay_lock:
+        if node_id not in _active_replays:
+            return {'ok': False, 'error': 'Not replaying'}
+        replay_info = _active_replays.pop(node_id)
     
     try:
         if replay_info['file_handle']:
@@ -182,23 +203,23 @@ def stop_replay(node_id: str) -> Dict:
         
         result = {
             'ok': True,
-            'filename': replay_info['filename'],
-            'samplesPlayed': replay_info['current_idx'],
-            'progress': round(replay_info['current_idx'] / replay_info['sample_count'] * 100, 1) if replay_info['sample_count'] > 0 else 0,
+            'filename': replay_info.get('filename', ''),
+            'samplesPlayed': replay_info.get('current_idx', 0),
+            'progress': round(replay_info.get('current_idx', 0) / max(replay_info.get('sample_count', 1), 1) * 100, 1),
         }
         
-        del _active_replays[node_id]
-        logger.debug(f'[DataReplay] Stopped replay: {result}')
+        logger.info('[DataReplay] Stopped replay: %s', result)
         return result
         
     except Exception as e:
-        logger.debug(f'[DataReplay] Error stopping replay: {e}')
+        logger.error('[DataReplay] Error stopping replay: %s', e)
         return {'ok': False, 'error': str(e)}
 
 
 def is_replaying(node_id: str) -> bool:
-    """检查是否正在回放"""
-    return node_id in _active_replays
+    """检查是否正在回放（线程安全）"""
+    with _replay_lock:
+        return node_id in _active_replays
 
 
 def list_replayable_files() -> List[Dict]:

@@ -3,7 +3,6 @@
  */
 
 import { ref } from 'vue'
-import { deviceApi, type RawDevice } from './deviceApi'
 
 // 串口设备接口
 export interface SerialPort {
@@ -318,15 +317,22 @@ class RealDeviceApi {
   }
 
   /**
-   * 获取所有设备（统一设备列表）
+   * 获取所有设备（统一设备列表，直接从 /api/real-devices/ 获取）
    */
   async getDevices(): Promise<DeviceInfo[]> {
     this.isLoading.value = true
     this.error.value = null
 
     try {
-      const rawDevices = await deviceApi.fetchDevicesRaw()
-      this.devices.value = rawDevices as unknown as DeviceInfo[]
+      const response = await fetch(`${this.baseUrl}/`)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const result: ApiResponse<{ devices: DeviceInfo[]; count: number }> = await response.json()
+      if (!result.ok) {
+        throw new Error(result.error || 'Failed to fetch devices')
+      }
+      this.devices.value = result.data!.devices
       return this.devices.value
 
     } catch (err) {

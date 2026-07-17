@@ -172,6 +172,9 @@ class GraphWorker:
         self.source_providers: Dict[str, _SourceProvider] = {}
         self._build_source_providers()
 
+        # 缓存节点 processor 实例，避免每个 tick 创建新对象
+        self._processor_cache: Dict[str, Any] = {}
+
     def _build_source_providers(self) -> None:
         """根据节点配置为每个 SOURCE/REPLAY 节点创建对应的 provider。"""
         from .drivers.manager import get_device_manager
@@ -182,18 +185,12 @@ class GraphWorker:
             node_type = str(node.get('type') or '').upper()
             params = node.get('params') or {}
 
-            # REPLAY 节点
+            # REPLAY 节点 — 文件回放
             if node_type == 'REPLAY':
                 self.source_providers[node_id] = _ReplaySourceProvider(node_id, self.sample_rate)
                 continue
 
-            # SOURCE 节点 — replay 模式
-            mode = str(params.get('sourceMode') or 'live').lower()
-            if mode == 'replay':
-                self.source_providers[node_id] = _ReplaySourceProvider(node_id, self.sample_rate)
-                continue
-
-            # SOURCE 节点 — live 模式，检查设备绑定
+            # SOURCE 节点 — 实时设备采集
             device_id = self._resolve_source_device_id(node)
             if device_id:
                 meta = manager.get_device_meta(device_id)
@@ -267,10 +264,10 @@ class GraphWorker:
 
         if len(order) < len(indegree):
             unresolved = [nid for nid in indegree if nid not in order]
-            logger.debug(
-                f'[GraphWorker] Cycle detected in graph component! '
-                f'Unresolved node ids: {sorted(unresolved)}. '
-                f'Stopping worker to prevent zero-value injection.'
+            logger.error(
+                '[GraphWorker] Cycle detected in graph component %s! '
+                'Unresolved node ids: %s. Stopping worker.',
+                self.spec.worker_id, sorted(unresolved),
             )
             self.stop_event.set()
             return []
@@ -297,7 +294,12 @@ class GraphWorker:
         try:
             self.event_queue.put_nowait(event)
         except queue.Full:
-            # 防止阻塞，队列满时丢弃最旧的数据并重试一次
+            # 队列满时丢弃最旧的数据并记录警告
+            logger.warning(
+                '[GraphWorker] Event queue full for worker %s (size=%d). '
+                'Dropping oldest frame. Consider increasing maxsize or reducing sample rate.',
+                self.spec.worker_id, self.event_queue.maxsize,
+            )
             try:
                 _ = self.event_queue.get_nowait()
                 self.event_queue.put_nowait(event)
@@ -403,10 +405,12 @@ class GraphWorker:
                         src_sig = self._pick_output(node_outputs[src], src_port)
                         inputs[tgt_port].append(src_sig)
 
-                    # 执行节点计算
+                    # 执行节点计算（使用缓存 processor 实例）
                     t1 = time.perf_counter_ns()
-                    node_cls = get_node_class(node_type) or get_node_class('PASSTHROUGH')
-                    processor = node_cls()
+                    if node_id not in self._processor_cache:
+                        node_cls = get_node_class(node_type) or get_node_class('PASSTHROUGH')
+                        self._processor_cache[node_id] = node_cls()
+                    processor = self._processor_cache[node_id]
                     context = NodeExecutionContext(
                         node_state=node_state,
                         sample_rate=self.sample_rate,
@@ -416,7 +420,7 @@ class GraphWorker:
                     try:
                         node_outputs[node_id] = processor.compute(node, inputs, context) or {}
                     except Exception as exc:
-                        logger.debug(f'[GraphWorker] Node compute failed: {node_id}({node_type}) -> {exc}')
+                        logger.error('[GraphWorker] Node compute failed: %s(%s) -> %s', node_id, node_type, exc)
                         node_outputs[node_id] = {}
                     node_compute_total_ns += time.perf_counter_ns() - t1
 

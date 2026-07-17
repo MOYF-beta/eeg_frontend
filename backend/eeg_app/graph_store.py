@@ -3,8 +3,10 @@ from __future__ import annotations
 import logging
 logger = logging.getLogger(__name__)
 
+import copy
 import json
 import os
+import threading
 import time
 from typing import Dict, List, TypedDict
 
@@ -115,6 +117,9 @@ _DEFAULT_GRAPH: GraphPayload = {
     'frozen': False,
 }
 
+# 线程锁 — 保护所有全局可变状态
+_graph_lock = threading.RLock()
+
 # 内存中的图数据
 _GRAPH: GraphPayload = {
     'nodes': [],
@@ -149,19 +154,14 @@ def _is_live_input_node(node: Dict) -> bool:
     if node_type == 'REPLAY':
         return False
     if node_type == 'SOURCE':
-        source_mode = str(params.get('sourceMode') or 'live').lower()
-        return source_mode != 'replay'
+        return True  # SOURCE 始终为实时采集
     return False
 
 
 def _has_offline_input_node(node: Dict) -> bool:
     node_type = str(node.get('type') or '').upper()
-    params = node.get('params') or {}
     if node_type == 'REPLAY':
         return True
-    if node_type == 'SOURCE':
-        source_mode = str(params.get('sourceMode') or 'live').lower()
-        return source_mode == 'replay'
     return False
 
 
@@ -202,25 +202,28 @@ def _save_to_file(payload: GraphPayload) -> None:
 
 
 def get_graph() -> GraphPayload:
-    """获取当前图数据"""
-    return _GRAPH
+    """获取当前图数据的深拷贝（线程安全）"""
+    with _graph_lock:
+        return copy.deepcopy(_GRAPH)
 
 
 def set_graph(payload: GraphPayload, persist: bool = False) -> None:
     """设置图数据，persist=True 时同时落盘。"""
     global _GRAPH_REVISION, _PERSISTED_REVISION
-    # 检查计算图是否正在运行
-    if _RUNTIME_STATE['running']:
-        raise RuntimeError('Cannot modify graph while it is running')
-    
-    _GRAPH['nodes'] = payload.get('nodes', [])
-    _GRAPH['edges'] = payload.get('edges', [])
-    _GRAPH['frozen'] = payload.get('frozen', False)
-    _GRAPH_REVISION += 1
-    bump_control_revision()
+    with _graph_lock:
+        # 检查计算图是否正在运行
+        if _RUNTIME_STATE['running']:
+            raise RuntimeError('Cannot modify graph while it is running')
+        
+        _GRAPH['nodes'] = list(payload.get('nodes', []))
+        _GRAPH['edges'] = list(payload.get('edges', []))
+        _GRAPH['frozen'] = bool(payload.get('frozen', False))
+        _GRAPH_REVISION += 1
+        bump_control_revision()
     if persist:
-        _save_to_file(_GRAPH)
-        _PERSISTED_REVISION = _GRAPH_REVISION
+        _save_to_file(get_graph())
+        with _graph_lock:
+            _PERSISTED_REVISION = _GRAPH_REVISION
 
 
 def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None, persist: bool = False) -> Dict:
@@ -228,64 +231,75 @@ def apply_graph_sync(payload: GraphPayload, base_revision: int | None = None, pe
 
     persist=True 时同时落盘（自动保存模式）。
     """
-    current_revision = get_graph_revision()
-    if base_revision is not None and int(base_revision) != current_revision:
-        return {
-            'ok': False,
-            'conflict': True,
-            'revision': current_revision,
-            'persistedRevision': get_persisted_revision(),
-            'graph': get_graph(),
-            'error': 'revision conflict',
-        }
+    with _graph_lock:
+        current_revision = int(_GRAPH_REVISION)
+        if base_revision is not None and int(base_revision) != current_revision:
+            return {
+                'ok': False,
+                'conflict': True,
+                'revision': current_revision,
+                'persistedRevision': int(_PERSISTED_REVISION),
+                'graph': dict(_GRAPH),
+                'error': 'revision conflict',
+            }
 
     set_graph(payload, persist=persist)
-    return {
-        'ok': True,
-        'conflict': False,
-        'revision': get_graph_revision(),
-        'persistedRevision': get_persisted_revision(),
-    }
+    with _graph_lock:
+        return {
+            'ok': True,
+            'conflict': False,
+            'revision': int(_GRAPH_REVISION),
+            'persistedRevision': int(_PERSISTED_REVISION),
+        }
 
 
 def persist_graph() -> Dict:
     """将当前内存图持久化到文件。"""
     global _PERSISTED_REVISION
-    _save_to_file(_GRAPH)
-    _PERSISTED_REVISION = _GRAPH_REVISION
+    with _graph_lock:
+        graph_copy = dict(_GRAPH)
+        rev = int(_GRAPH_REVISION)
+    _save_to_file(graph_copy)
+    with _graph_lock:
+        _PERSISTED_REVISION = rev
+        persisted_rev = int(_PERSISTED_REVISION)
     return {
-        'revision': _GRAPH_REVISION,
-        'persistedRevision': _PERSISTED_REVISION,
+        'revision': rev,
+        'persistedRevision': persisted_rev,
     }
 
 
 def get_graph_revision() -> int:
-    return int(_GRAPH_REVISION)
+    with _graph_lock:
+        return int(_GRAPH_REVISION)
 
 
 def get_persisted_revision() -> int:
-    return int(_PERSISTED_REVISION)
+    with _graph_lock:
+        return int(_PERSISTED_REVISION)
 
 
 def bump_control_revision() -> int:
     """递增控制修订号，通知数据 consumer 控制状态已变更。"""
     global _CONTROL_REVISION
-    _CONTROL_REVISION += 1
-    return _CONTROL_REVISION
+    with _graph_lock:
+        _CONTROL_REVISION += 1
+        return int(_CONTROL_REVISION)
 
 
 def get_control_revision() -> int:
-    return int(_CONTROL_REVISION)
+    with _graph_lock:
+        return int(_CONTROL_REVISION)
 
 
 def set_frozen(value: bool) -> None:
     """设置冻结状态（不落盘，持久化由 sync_graph 负责）。"""
-    # 检查计算图是否正在运行
-    if _RUNTIME_STATE['running']:
-        raise RuntimeError('Cannot freeze/unfreeze graph while it is running')
-    
-    _GRAPH['frozen'] = value
-    bump_control_revision()
+    with _graph_lock:
+        # 检查计算图是否正在运行
+        if _RUNTIME_STATE['running']:
+            raise RuntimeError('Cannot freeze/unfreeze graph while it is running')
+        _GRAPH['frozen'] = value
+        bump_control_revision()
 
 
 def validate_graph(payload: GraphPayload) -> List[str]:
@@ -342,6 +356,23 @@ def validate_graph(payload: GraphPayload) -> List[str]:
     return errors
 
 
+def get_output_nodes_for_recording(graph: GraphPayload | None = None) -> List[Dict]:
+    """获取计算图中需要录制的 OUTPUT 节点列表。
+    
+    用于统一 control_consumer.cmd_record 和 views.graph_record 中的录制逻辑。
+    """
+    if graph is None:
+        graph = get_graph()
+    nodes = graph.get('nodes', []) or []
+    result = []
+    for node in nodes:
+        nt = str(node.get('type') or '').upper()
+        params = node.get('params') or {}
+        if nt == 'OUTPUT' and bool(params.get('saveEnabled', False)):
+            result.append(node)
+    return result
+
+
 def run_graph(mode: str = 'live') -> Dict:
     """运行计算图"""
     global _RUNTIME_STATE
@@ -350,50 +381,60 @@ def run_graph(mode: str = 'live') -> Dict:
     if normalized_mode not in {'live', 'offline'}:
         normalized_mode = 'live'
 
-    nodes = _GRAPH.get('nodes', []) or []
-    if normalized_mode == 'offline':
-        has_live = any(_is_live_input_node(node) for node in nodes)
-        has_offline = any(_has_offline_input_node(node) for node in nodes)
-        if has_live:
-            return {
-                'status': 'error',
-                'error': 'offline mode does not allow realtime source nodes',
-            }
-        if not has_offline:
-            return {
-                'status': 'error',
-                'error': 'offline mode requires at least one replay source',
-            }
+    with _graph_lock:
+        nodes = list(_GRAPH.get('nodes', []) or [])
+        if normalized_mode == 'offline':
+            has_live = any(_is_live_input_node(node) for node in nodes)
+            has_offline = any(_has_offline_input_node(node) for node in nodes)
+            if has_live:
+                return {
+                    'status': 'error',
+                    'error': 'offline mode does not allow realtime source nodes',
+                }
+            if not has_offline:
+                return {
+                    'status': 'error',
+                    'error': 'offline mode requires at least one replay source',
+                }
 
-    _RUNTIME_STATE['running'] = True
-    _RUNTIME_STATE['mode'] = normalized_mode
-    _RUNTIME_STATE['startedAt'] = time.time()
-    _RUNTIME_STATE['stoppedAt'] = None
-    _RUNTIME_STATE['progress'] = 0 if normalized_mode == 'offline' else None
-    _RUNTIME_STATE['processingDelayMs'] = 0
-    _RUNTIME_STATE['nonRealtime'] = False
-    _RUNTIME_STATE['warning'] = None
-    bump_control_revision()
+        _RUNTIME_STATE['running'] = True
+        _RUNTIME_STATE['mode'] = normalized_mode
+        _RUNTIME_STATE['startedAt'] = time.time()
+        _RUNTIME_STATE['stoppedAt'] = None
+        _RUNTIME_STATE['progress'] = 0 if normalized_mode == 'offline' else None
+        _RUNTIME_STATE['processingDelayMs'] = 0
+        _RUNTIME_STATE['nonRealtime'] = False
+        _RUNTIME_STATE['warning'] = None
+        bump_control_revision()
+        started_at = _RUNTIME_STATE['startedAt']
+        node_count = len(_GRAPH['nodes'])
+        edge_count = len(_GRAPH['edges'])
+
     return {
         'status': 'running',
         'mode': normalized_mode,
-        'startedAt': _RUNTIME_STATE['startedAt'],
-        'nodeCount': len(_GRAPH['nodes']),
-        'edgeCount': len(_GRAPH['edges']),
+        'startedAt': started_at,
+        'nodeCount': node_count,
+        'edgeCount': edge_count,
     }
 
 
 def stop_graph() -> Dict:
     """停止计算图"""
     global _RUNTIME_STATE
-    _RUNTIME_STATE['running'] = False
-    _RUNTIME_STATE['stoppedAt'] = time.time()
-    bump_control_revision()
+    with _graph_lock:
+        _RUNTIME_STATE['running'] = False
+        _RUNTIME_STATE['stoppedAt'] = time.time()
+        bump_control_revision()
+        mode = _RUNTIME_STATE['mode']
+        started_at = _RUNTIME_STATE['startedAt']
+        stopped_at = _RUNTIME_STATE['stoppedAt']
+
     return {
         'status': 'stopped',
-        'mode': _RUNTIME_STATE['mode'],
-        'startedAt': _RUNTIME_STATE['startedAt'],
-        'stoppedAt': _RUNTIME_STATE['stoppedAt'],
+        'mode': mode,
+        'startedAt': started_at,
+        'stoppedAt': stopped_at,
     }
 
 
@@ -403,38 +444,44 @@ def set_runtime_metrics(
     non_realtime: bool | None = None,
     warning: str | None = None,
 ) -> None:
-    if processing_delay_ms is not None:
-        try:
-            _RUNTIME_STATE['processingDelayMs'] = max(0, int(float(processing_delay_ms)))
-        except Exception:
-            pass
-    if progress is not None:
-        try:
-            _RUNTIME_STATE['progress'] = max(0.0, min(100.0, float(progress)))
-        except Exception:
-            pass
-    if non_realtime is not None:
-        _RUNTIME_STATE['nonRealtime'] = bool(non_realtime)
-    if warning is not None:
-        _RUNTIME_STATE['warning'] = warning
+    with _graph_lock:
+        if processing_delay_ms is not None:
+            try:
+                _RUNTIME_STATE['processingDelayMs'] = max(0, int(float(processing_delay_ms)))
+            except Exception:
+                pass
+        if progress is not None:
+            try:
+                _RUNTIME_STATE['progress'] = max(0.0, min(100.0, float(progress)))
+            except Exception:
+                pass
+        if non_realtime is not None:
+            _RUNTIME_STATE['nonRealtime'] = bool(non_realtime)
+        if warning is not None:
+            _RUNTIME_STATE['warning'] = warning
 
 
 def get_runtime_state() -> Dict:
-    """获取运行时状态"""
-    return {
-        'running': _RUNTIME_STATE['running'],
-        'mode': _RUNTIME_STATE['mode'],
-        'startedAt': _RUNTIME_STATE['startedAt'],
-        'stoppedAt': _RUNTIME_STATE['stoppedAt'],
-        'progress': _RUNTIME_STATE['progress'],
-        'processingDelayMs': _RUNTIME_STATE['processingDelayMs'],
-        'nonRealtime': _RUNTIME_STATE['nonRealtime'],
-        'warning': _RUNTIME_STATE['warning'],
-        'frozen': _GRAPH['frozen'],  # 添加冻结状态
-    }
+    """获取运行时状态（返回拷贝，线程安全）"""
+    with _graph_lock:
+        return {
+            'running': _RUNTIME_STATE['running'],
+            'mode': _RUNTIME_STATE['mode'],
+            'startedAt': _RUNTIME_STATE['startedAt'],
+            'stoppedAt': _RUNTIME_STATE['stoppedAt'],
+            'progress': _RUNTIME_STATE['progress'],
+            'processingDelayMs': _RUNTIME_STATE['processingDelayMs'],
+            'nonRealtime': _RUNTIME_STATE['nonRealtime'],
+            'warning': _RUNTIME_STATE['warning'],
+            'frozen': _GRAPH['frozen'],
+        }
 
 
-# 初始化时从文件加载数据
-_GRAPH = _load_from_file()
+# 初始化时从文件加载数据（线程安全）
+_init_graph = _load_from_file()
+with _graph_lock:
+    _GRAPH['nodes'] = _init_graph.get('nodes', [])
+    _GRAPH['edges'] = _init_graph.get('edges', [])
+    _GRAPH['frozen'] = _init_graph.get('frozen', False)
 _GRAPH_REVISION = 1
 _PERSISTED_REVISION = 1

@@ -311,15 +311,17 @@ class Ch340EegDriver(DeviceDriver):
             conn = self._connections.get(device_id)
             if not conn:
                 return False
-            return self._stop_streaming_impl(conn)
-
-    def _stop_streaming_impl(self, conn: _Connection) -> bool:
-        if conn.status != DeviceStatus.ACQUIRING:
-            return True
-        conn.stop_event.set()
-        if conn.thread and conn.thread.is_alive():
-            conn.thread.join(timeout=2.0)
-        conn.status = DeviceStatus.CONNECTED
+            if conn.status != DeviceStatus.ACQUIRING:
+                return True
+            conn.stop_event.set()
+            thread = conn.thread
+        # 在锁外 join，避免持锁阻塞其他设备操作
+        if thread and thread.is_alive():
+            thread.join(timeout=2.0)
+        with self._lock:
+            conn = self._connections.get(device_id)
+            if conn:
+                conn.status = DeviceStatus.CONNECTED
         return True
 
     def read_data(self, device_id: str, count: int = 1) -> List[DeviceFrame]:

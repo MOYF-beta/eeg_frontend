@@ -413,11 +413,11 @@ function updateChannelInfo() {
 
 function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
   if (type === 'SOURCE') {
-    params.sourceMode = params.sourceMode || 'live';
-    params.filePath = String(params.filePath || '');
-    params.loop = Boolean(params.loop || false);
     params.sampleRate = Math.max(1, Number(params.sampleRate || 1000));
     params.channels = Math.max(1, Number(params.channels || 8));
+    delete params.sourceMode;
+    delete params.filePath;
+    delete params.loop;
   }
 
   if (type === 'FILTER') {
@@ -445,7 +445,7 @@ function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
     params.format = String(params.format || 'CSV');
   }
 
-  if (type === 'SUM') {
+  if (type === 'SUM' || type === 'AVERAGE') {
     const legacyWeights = typeof params.weights === 'string'
       ? params.weights.split(',').map((w: string) => Number(w.trim())).filter((v: number) => !Number.isNaN(v))
       : [];
@@ -473,7 +473,7 @@ function ensureVisualParamDefaults(type: string, params: Record<string, any>) {
       : [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }];
     mergeInputs.value = normalized;
     params.inputs = normalized;
-    params.strategy = params.strategy || 'interleave';
+    params.strategy = params.strategy || 'concat';
   }
 
   if (type === 'SPLIT') {
@@ -908,7 +908,7 @@ const save = async () => {
       label: item.label || '输入',
       gain: Number(item.gain ?? 1),
     }));
-    form.value.params.strategy = form.value.params.strategy || 'interleave';
+    form.value.params.strategy = form.value.params.strategy || 'concat';
   }
 
   if (nodeType.value === 'SPLIT') {
@@ -920,12 +920,11 @@ const save = async () => {
   
   // 保存通道信息
   if (nodeType.value === 'SOURCE') {
-    form.value.params.sourceMode = form.value.params.sourceMode || 'live';
-    form.value.params.filePath = String(form.value.params.filePath || '');
-    form.value.params.loop = Boolean(form.value.params.loop || false);
     form.value.params.channelNames = channelNames.value;
-    // 保存设备ID到params
-    form.value.params.deviceId = form.value.params.sourceMode === 'replay' ? null : selectedDeviceId.value;
+    form.value.params.deviceId = selectedDeviceId.value;
+    delete form.value.params.sourceMode;
+    delete form.value.params.filePath;
+    delete form.value.params.loop;
   }
   
   // 保存输出节点配置

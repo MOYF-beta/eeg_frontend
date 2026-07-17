@@ -67,7 +67,9 @@
 
 <script setup lang="ts">
 import { ref } from 'vue';
+import { onMounted, onUnmounted } from 'vue';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
+import { useToast } from '../composables/useToast';
 
 // 从graphRuntimeStore获取状态
 const {
@@ -76,6 +78,8 @@ const {
   runByMode,
   stopRun
 } = graphRuntimeStore;
+
+const toast = useToast();
 
 // 录制状态
 const isRecording = ref(false);
@@ -96,7 +100,7 @@ async function handleRunClick(mode: 'live' | 'offline') {
     await runByMode(mode);
   } catch (err) {
     console.error(`[Sidebar] Failed to run graph in ${mode} mode:`, err);
-    alert(`运行计算图失败: ${err instanceof Error ? err.message : '未知错误'}`);
+    toast.show(`运行计算图失败: ${err instanceof Error ? err.message : '未知错误'}`, 'error');
   }
 }
 
@@ -131,15 +135,8 @@ async function toggleRecording() {
   }
 }
 
-// 初始化graphRuntimeStore
-import { onMounted, onUnmounted } from 'vue';
-onMounted(() => {
-  graphRuntimeStore.init();
-});
-
-onUnmounted(() => {
-  graphRuntimeStore.cleanup();
-});
+// 注：graphRuntimeStore 的 init/cleanup 由 App.vue 全权管理，
+// Sidebar 不重复调用，避免在 Sidebar 卸载时误断全局 WebSocket 连接。
 </script>
 
 <style scoped>

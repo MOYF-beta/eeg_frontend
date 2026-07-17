@@ -40,7 +40,7 @@ class PerfMonitor:
         with self._lock:
             self._latest = metrics
             self._pipeline_history.append(metrics)
-            self._total_samples += 1
+            # 注：样本计数由 add_samples() 负责，此处不计数以避免重复
 
     def add_samples(self, count: int) -> None:
         with self._lock:

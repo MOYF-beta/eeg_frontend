@@ -1,23 +1,17 @@
 import { createRouter, createWebHistory } from 'vue-router';
-import DevicesView from '../views/DevicesView.vue';
-import VisualizationView from '../views/VisualizationView.vue';
-import CpgraphView from '../views/CpgraphView.vue';
-import FullscreenView from '../views/FullscreenView.vue';
-import SerialDebugView from '../views/SerialDebugView.vue';
-import DevHubView from '../views/DevHubView.vue';
 
 const routes = [
   { path: '/', redirect: '/cpgraph' },
-  { path: '/devices', name: 'Devices', component: DevicesView },
-  { path: '/visualization', name: 'Visualization', component: VisualizationView },
-  { path: '/cpgraph', name: 'Cpgraph', component: CpgraphView, meta: { fullHeight: true } },
-  { path: '/dev', name: 'DevHub', component: DevHubView },
-  { path: '/dev/serial-debug', name: 'SerialDebug', component: SerialDebugView },
+  { path: '/devices', name: 'Devices', component: () => import('../views/DevicesView.vue') },
+  { path: '/visualization', name: 'Visualization', component: () => import('../views/VisualizationView.vue') },
+  { path: '/cpgraph', name: 'Cpgraph', component: () => import('../views/CpgraphView.vue'), meta: { fullHeight: true } },
+  { path: '/dev', name: 'DevHub', component: () => import('../views/DevHubView.vue') },
+  { path: '/dev/serial-debug', name: 'SerialDebug', component: () => import('../views/SerialDebugView.vue') },
   { path: '/serial-debug', redirect: '/dev/serial-debug' },
   {
     path: '/fullscreen/:type/:nodeId',
     name: 'Fullscreen',
-    component: FullscreenView,
+    component: () => import('../views/FullscreenView.vue'),
     props: true
   },
 ];

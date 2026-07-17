@@ -4,6 +4,7 @@ logger = logging.getLogger(__name__)
 
 import csv
 import os
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ DATA_DIR.mkdir(exist_ok=True)
 
 # 当前打开的文件句柄
 _active_writers: Dict[str, Dict] = {}
+_active_writers_lock = threading.RLock()
 
 
 def get_data_dir() -> Path:
@@ -35,8 +37,10 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
     """
     global _active_writers
     
-    # 如果已经在录制，先停止
-    if node_id in _active_writers:
+    # 如果已经在录制，先停止（持锁安全）
+    with _active_writers_lock:
+        already_recording = node_id in _active_writers
+    if already_recording:
         stop_recording(node_id)
     
     # 生成文件名
@@ -59,21 +63,22 @@ def start_recording(node_id: str, filename: Optional[str] = None, format: str = 
             f = open(filepath, 'w', newline='', encoding='utf-8')
             writer = csv.writer(f)
 
-            _active_writers[node_id] = {
-                'file': f,
-                'writer': writer,
-                'format': 'CSV',
-                'filepath': str(filepath),
-                'start_time': time.time(),
-                'sample_count': 0,
-                'channel_count': None,
-                'header_written': False,
-            }
+            with _active_writers_lock:
+                _active_writers[node_id] = {
+                    'file': f,
+                    'writer': writer,
+                    'format': 'CSV',
+                    'filepath': str(filepath),
+                    'start_time': time.time(),
+                    'sample_count': 0,
+                    'channel_count': None,
+                    'header_written': False,
+                }
         else:
             # TODO: 实现EDF和NPY格式
             return {'ok': False, 'error': f'Format {format} not yet implemented'}
         
-        logger.debug(f'[DataRecorder] Started recording to {filepath}')
+        logger.info('[DataRecorder] Started recording to %s', filepath)
         return {
             'ok': True,
             'filepath': str(filepath),
@@ -99,10 +104,10 @@ def write_sample(node_id: str, timestamp: float, channels: List[float]) -> bool:
     """
     global _active_writers
     
-    if node_id not in _active_writers:
-        return False
-    
-    writer_info = _active_writers[node_id]
+    with _active_writers_lock:
+        if node_id not in _active_writers:
+            return False
+        writer_info = _active_writers[node_id]
     
     try:
         if writer_info['format'] == 'CSV':
@@ -140,10 +145,10 @@ def stop_recording(node_id: str) -> Dict:
     """
     global _active_writers
     
-    if node_id not in _active_writers:
-        return {'ok': False, 'error': 'Not recording'}
-    
-    writer_info = _active_writers[node_id]
+    with _active_writers_lock:
+        if node_id not in _active_writers:
+            return {'ok': False, 'error': 'Not recording'}
+        writer_info = _active_writers.pop(node_id)
     
     try:
         writer_info['file'].close()
@@ -158,22 +163,24 @@ def stop_recording(node_id: str) -> Dict:
             'sampleRate': round(writer_info['sample_count'] / duration, 2) if duration > 0 else 0,
         }
         
-        del _active_writers[node_id]
-        logger.debug(f'[DataRecorder] Stopped recording: {result}')
+        logger.info('[DataRecorder] Stopped recording: %s', result)
         return result
         
     except Exception as e:
-        logger.debug(f'[DataRecorder] Error stopping recording: {e}')
+        logger.error('[DataRecorder] Error stopping recording: %s', e)
         return {'ok': False, 'error': str(e)}
 
 
 def is_recording(node_id: str) -> bool:
     """检查是否正在录制"""
-    return node_id in _active_writers
+    with _active_writers_lock:
+        return node_id in _active_writers
 
 
 def get_active_recordings() -> List[Dict]:
     """获取所有活跃的录制会话"""
+    with _active_writers_lock:
+        writers = dict(_active_writers)
     return [
         {
             'nodeId': node_id,
@@ -182,7 +189,7 @@ def get_active_recordings() -> List[Dict]:
             'sampleCount': info['sample_count'],
             'duration': round(time.time() - info['start_time'], 2),
         }
-        for node_id, info in _active_writers.items()
+        for node_id, info in writers.items()
     ]
 
 

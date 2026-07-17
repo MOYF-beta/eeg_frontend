@@ -4,26 +4,38 @@
       <v-toolbar-title>计算图编辑器</v-toolbar-title>
       <v-spacer />
       <div class="d-flex align-center ga-2">
-        <!-- 状态提示 -->
-        <v-chip size="small" :color="isRunning ? 'warning' : (frozen ? 'info' : 'default')">
+        <!-- 运行/冻结状态 -->
+        <v-chip v-if="isRunning || frozen" size="small" :color="isRunning ? 'warning' : 'info'">
           <v-icon size="small" class="mr-1">
-            {{ isRunning ? 'mdi-play' : (frozen ? 'mdi-lock' : 'mdi-pencil') }}
+            {{ isRunning ? 'mdi-play' : 'mdi-lock' }}
           </v-icon>
-          {{ statusDescription }}
+          {{ isRunning ? '运行中' : '已冻结' }}
         </v-chip>
 
-        <v-chip v-if="hasUnsavedChanges" size="small" color="warning" variant="tonal">
-          <v-icon size="small" class="mr-1">mdi-content-save-alert</v-icon>
-          同步中...
+        <!-- 同步状态 -->
+        <v-chip
+          size="small"
+          :color="syncStatusChip.color"
+          :variant="syncStatus === 'error' ? 'tonal' : 'flat'"
+          :class="{ 'cursor-pointer': syncStatus === 'error' }"
+          @click="syncStatus === 'error' ? retrySync() : undefined"
+        >
+          <v-icon size="small" class="mr-1">{{ syncStatusChip.icon }}</v-icon>
+          {{ syncStatusChip.text }}
         </v-chip>
 
         <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
+        
+        <div class="d-flex align-center ga-1 ml-2">
+          <span class="text-caption port-legend-in">● 输入</span>
+          <span class="text-caption port-legend-out">● 输出</span>
+        </div>
         <v-btn 
           size="small" 
           variant="tonal" 
           @click="triggerFileLoad"
           :disabled="!canEditGraphLocal"
-          :title="!canEditGraphLocal ? `当前状态不允许加载计算图: ${statusDescription}` : '从文件加载计算图'"
+                    :title="!canEditGraphLocal ? '运行中不允许加载计算图' : '从文件加载计算图'"
         >
           加载
         </v-btn>
@@ -32,7 +44,7 @@
           color="info" 
           @click="clear"
           :disabled="!canEditGraphLocal"
-          :title="!canEditGraphLocal ? `当前状态不允许清空计算图: ${statusDescription}` : '清空计算图'"
+                    :title="!canEditGraphLocal ? '运行中不允许清空计算图' : '清空计算图'"
         >
           清空
         </v-btn>
@@ -73,13 +85,13 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStartDevice($event, device.id)"
-              :title="!canEditGraphLocal ? `当前状态不允许拖拽设备: ${statusDescription}` : `拖拽 ${device.port || device.name} 作为数据源节点`"
+                            :title="!canEditGraphLocal ? '运行中不允许拖拽设备' : `拖拽 ${device.port || device.name} 作为数据源节点`"
             >
               <span class="item-icon" style="background: #e3f2fd; color: #1976d2;">DEV</span>
               <span class="item-name">{{ device.port || device.name }}</span>
             </div>
             <div v-if="runningDevices.length === 0" class="palette-empty">
-              暂无在线设备
+              暂无可用设备（请启动虚拟设备服务器）
             </div>
           </div>
 
@@ -92,7 +104,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -110,7 +122,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -128,7 +140,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `当前状态不允许添加节点: ${statusDescription}` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -476,6 +488,7 @@ import {
 import { deviceApi } from '../services/deviceApi';
 import { realDeviceApi, type DeviceInfo } from '../services/realDeviceApi';
 import { graphRuntime, type EegPacket } from '../services/runtime';
+import { useToast } from '../composables/useToast';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
@@ -491,14 +504,24 @@ const SESSION_STORAGE_KEY = 'eeg_graph_editor_state';
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const hasNodes = ref(false);
-const hasUnsavedChanges = ref(false);
+
+// ======== 双图同步状态模型 ========
+// 编辑器签名 = 当前画布内容的 hash
+// 后端签名 = 服务端确认的最新版本的 hash
+// 待确认签名 = 已发往服务端但尚未收到确认的 hash（'' = 无待确认）
+const editorSignature = ref('');
+const backendSignature = ref('');
+const pendingSignature = ref('');
+type SyncStatus = 'idle' | 'saving' | 'ok' | 'error';
+const syncStatus = ref<SyncStatus>('idle');
+const syncError = ref('');
+let syncOkTimer: number | null = null;
+const hasUnsavedChanges = computed(() => editorSignature.value !== backendSignature.value);
+
 const isApplyingBackendGraph = ref(false);
-const lastSyncedSignature = ref('');
-const lastPersistedSignature = ref('');
 const currentRevision = ref(0);
 const persistedRevision = ref(0);
 let realtimeSyncTimer: number | null = null;
-const realtimeSyncInFlight = ref(false);
 let isNodeDragging = false;
 let dragDebounceTimer: number | null = null;
 
@@ -511,7 +534,7 @@ type PaletteDevice = {
 };
 
 const paletteDevices = ref<PaletteDevice[]>([]);
-const runningDevices = computed(() => paletteDevices.value.filter((d) => d.status === 'online' || d.status === 'ready'));
+const runningDevices = computed(() => paletteDevices.value);
 const createDeviceDialogOpen = ref(false);
 const newDeviceForm = ref({
   name: '新设备',
@@ -549,52 +572,160 @@ function payloadSignature(payload: GraphPayload): string {
   return JSON.stringify(normalized);
 }
 
+// ======== 双图同步模型 ========
+
+function setSyncStatus(status: SyncStatus, errorMsg: string = '') {
+  syncStatus.value = status;
+  syncError.value = errorMsg;
+  if (status === 'ok') {
+    if (syncOkTimer) clearTimeout(syncOkTimer);
+    syncOkTimer = window.setTimeout(() => {
+      if (syncStatus.value === 'ok') syncStatus.value = 'idle';
+    }, 3000);
+  }
+}
+
 function syncUnsavedState() {
   if (isApplyingBackendGraph.value) return;
   if (isNodeDragging) return;
   if (nodeEditDialogOpen.value) return;
-  const current = buildPayload();
-  const signature = payloadSignature(current);
-  hasUnsavedChanges.value = signature !== lastPersistedSignature.value;
 
-  if (signature !== lastSyncedSignature.value) {
-    scheduleRealtimeSync(current, signature);
+  const current = buildPayload();
+  const sig = payloadSignature(current);
+  editorSignature.value = sig;
+
+  // 如果签名和待确认的一致（说明服务器还没处理上一次）或和后端一致，跳过
+  if (sig === pendingSignature.value || sig === backendSignature.value) {
+    return;
   }
+
+  // 有变更需要同步
+  scheduleRealtimeSync(current, sig);
 }
 
 function scheduleRealtimeSync(payload: GraphPayload, signature: string) {
   if (isRunning.value || isApplyingBackendGraph.value) return;
-  if (realtimeSyncTimer) {
-    clearTimeout(realtimeSyncTimer);
-  }
+  if (realtimeSyncTimer) clearTimeout(realtimeSyncTimer);
+
   realtimeSyncTimer = window.setTimeout(() => {
-    if (realtimeSyncInFlight.value) return;
-    realtimeSyncInFlight.value = true;
+    // 重新取当前画布签名（用户可能在 250ms 内又改了）
+    const current = buildPayload();
+    const sig = payloadSignature(current);
+    editorSignature.value = sig;
+    if (sig === backendSignature.value || sig === pendingSignature.value) return;
+
     try {
-      // 通过 WebSocket 发送，后端 cmd_sync_graph 自动持久化
-      // 冲突结果通过 onCmdResult 回调处理（applyPayloadToCanvas 回退到后端版本）
-      // 成功确认通过 onGraph reason='synced' 回调处理（更新 signature）
-      controlWebSocket.syncGraph(payload, currentRevision.value);
-      // 乐观更新：标记本地已同步（冲突时会被 onCmdResult 回滚）
-      lastSyncedSignature.value = signature;
-      hasUnsavedChanges.value = false;
+      pendingSignature.value = sig;
+      setSyncStatus('saving');
+      controlWebSocket.syncGraph(current, currentRevision.value);
     } catch (err) {
-      console.warn('[GraphEditor] Realtime sync failed:', err);
-      hasUnsavedChanges.value = true;
-    } finally {
-      realtimeSyncInFlight.value = false;
+      console.warn('[GraphEditor] Sync send failed:', err);
+      pendingSignature.value = '';
+      setSyncStatus('error', '发送失败');
     }
   }, 250);
 }
 
+function retrySync() {
+  if (syncStatus.value !== 'error') return;
+  if (isRunning.value || isApplyingBackendGraph.value) return;
+  if (isNodeDragging) return;
+  const current = buildPayload();
+  const sig = payloadSignature(current);
+  editorSignature.value = sig;
+  pendingSignature.value = sig;
+  setSyncStatus('saving');
+  try {
+    controlWebSocket.syncGraph(current, currentRevision.value);
+  } catch (err) {
+    pendingSignature.value = '';
+    setSyncStatus('error', '重试失败');
+  }
+}
+
+// 服务端确认同步成功
+function handleSyncConfirmed(incomingSignature: string, rev: number, persistedRev: number) {
+  if (incomingSignature === pendingSignature.value) {
+    backendSignature.value = pendingSignature.value;
+    pendingSignature.value = '';
+    setSyncStatus('ok');
+  } else if (incomingSignature === backendSignature.value) {
+    // 其他客户端同步了相同的状态
+    pendingSignature.value = '';
+    setSyncStatus('ok');
+  }
+  currentRevision.value = rev;
+  persistedRevision.value = persistedRev;
+}
+
+// 同步冲突（服务端拒绝）
+function handleSyncConflict(serverGraph: GraphPayload, rev: number, persistedRev: number) {
+  pendingSignature.value = '';
+  setSyncStatus('error', '同步冲突：数据已被其他客户端修改，请重试');
+  currentRevision.value = rev;
+  persistedRevision.value = persistedRev;
+  // 不覆盖用户画布 — 用户自行决定重试
+}
+
+// 服务端推送新状态（非当前客户端触发的变更）
+// 核心原则：画布是用户操作的唯一权威——服务端推送只更新元数据，永不覆盖画布
+function handleServerPush(payload: GraphPayload, reason: string, rev: number, persistedRev: number) {
+  const sig = payloadSignature(payload);
+
+  // 初始加载尚未完成，跳过
+  if (!backendSignature.value && (reason === 'initial' || reason === 'pull')) {
+    return;
+  }
+
+  // 运行时状态变化（拓扑未变），只同步 frozen 和版本号
+  if (reason === 'freeze_changed' || reason === 'runtime') {
+    currentRevision.value = rev;
+    persistedRevision.value = persistedRev;
+    setRuntimeState({ frozen: Boolean(payload.frozen) });
+    backendSignature.value = sig;
+    editorSignature.value = sig;
+    return;
+  }
+
+  // 服务端推送与当前后端签名一致（对 sync_graph 命令的回声确认）
+  if (reason === 'connected' || reason === 'heartbeat') {
+    if (sig === backendSignature.value) {
+      currentRevision.value = rev;
+      persistedRevision.value = persistedRev;
+      return;
+    }
+    // 服务端状态与本地后端签名不一致（其他客户端修改了图）
+    if (pendingSignature.value !== '' || editorSignature.value !== backendSignature.value) {
+      // 有未同步编辑，阻止覆盖，提示用户
+      console.warn('[GraphEditor] Server push blocked: user has unsaved changes. reason:', reason);
+      setSyncStatus('error', '远程数据已更新但你有未同步的编辑');
+      currentRevision.value = rev;
+      persistedRevision.value = persistedRev;
+      return;
+    }
+    // 无本地编辑，接受服务端新状态，更新签名但不动画布
+    currentRevision.value = rev;
+    persistedRevision.value = persistedRev;
+    backendSignature.value = sig;
+    editorSignature.value = sig;
+    return;
+  }
+
+  // 未知 reason：保守处理，只更新元数据不动画布
+  console.warn('[GraphEditor] Unhandled server push reason:', reason);
+  currentRevision.value = rev;
+  persistedRevision.value = persistedRev;
+}
+
 async function loadPaletteDevices() {
   try {
+    // getDevices() 返回归一化的 camelCase 格式
     const apiDevices = await deviceApi.getDevices();
     paletteDevices.value = apiDevices.map((d: any) => ({
       id: d.id,
       name: d.name,
       status: d.status ?? 'online',
-      port: String(d.port || d.config?.port || ''),
+      port: String(d.config?.port || d.id || ''),
       type: String(d.type || ''),
     }));
 
@@ -603,14 +734,10 @@ async function loadPaletteDevices() {
       id: String(apiDevice.id || ''),
       name: String(apiDevice.name || apiDevice.id || ''),
       status: (apiDevice.status === 'offline' ? 'offline' : 'online') as 'online' | 'offline',
-      samplingRate: Number(apiDevice.sampling_rate || 1000),
-      channelCount: Number(apiDevice.channel_count || 8),
-      type: (apiDevice.type === 'wearable_eeg' ? 'real' : 'simulated') as 'simulated' | 'real',
-      config: {
-        ...(apiDevice.config || {}),
-        port: apiDevice.port || (apiDevice.config && apiDevice.config.port) || '',
-        baudrate: apiDevice.baudrate || (apiDevice.config && apiDevice.config.baudrate) || 460800,
-      },
+      samplingRate: Number(apiDevice.samplingRate || 1000),
+      channelCount: Number(apiDevice.channelCount || 8),
+      type: (apiDevice.type === 'real' ? 'real' : 'simulated') as 'simulated' | 'real',
+      config: apiDevice.config || {},
     }));
     sessionStore.setDevices(converted as any);
   } catch (err) {
@@ -662,8 +789,8 @@ async function refreshManagedDevices() {
     const apiDevices = await deviceApi.getDevices();
     managedDevices.value = (apiDevices as any[]).map((d: any) => ({
       id: d.id, name: d.name, type: d.type,
-      sampling_rate: d.sampling_rate ?? 1000,
-      channel_count: d.channel_count ?? 8,
+      sampling_rate: d.samplingRate ?? 1000,
+      channel_count: d.channelCount ?? 8,
       config: d.config,
     })) as DeviceInfo[];
     // 同步 palette
@@ -702,55 +829,21 @@ async function createDevice() {
 // ==================== 自动设备扫描与连接（即插即用）====================
 let autoScanTimer: number | null = null;
 
-async function autoScanAndConnectDevices() {
+async function refreshDeviceList() {
+  // 仅刷新设备列表（不自动创建/连接设备），设备发现由后端驱动管理
   try {
-    // 扫描可用端口
-    const ports = await realDeviceApi.scanPorts();
-    if (ports.length === 0) return;
-
-    // 获取现有设备列表
-    const existingDevices = await deviceApi.getDevices();
-    const existingPorts = new Set(
-      (existingDevices as any[])
-        .map((d: any) => d.config?.port)
-        .filter(Boolean)
-    );
-
-    for (const portInfo of ports) {
-      const port = portInfo.port;
-
-      // 如果设备记录不存在，先创建设备记录
-      if (!existingPorts.has(port)) {
-        await deviceApi.createDevice({
-          name: `${portInfo.description || '串口设备'} (${port})`,
-          type: 'physical',
-          address: port,
-          sampling_rate: 250,
-          channel_count: 8,
-        });
-      }
-
-      // 尝试连接（后端会幂等处理）
-      try {
-        await realDeviceApi.connectDevice(port);
-      } catch (e) {
-        // 连接失败也继续
-      }
-    }
-
-    // 同步 palette 设备列表
     await loadPaletteDevices();
   } catch (err) {
-    console.warn('[GraphEditor] Auto-scan failed:', err);
+    console.warn('[GraphEditor] Device refresh failed:', err);
   }
 }
 
 function startAutoScan() {
   stopAutoScan();
   // 立即执行一次
-  autoScanAndConnectDevices();
-  // 每 15 秒扫描一次
-  autoScanTimer = window.setInterval(autoScanAndConnectDevices, 15000);
+  refreshDeviceList();
+  // 每 15 秒刷新一次设备列表
+  autoScanTimer = window.setInterval(refreshDeviceList, 15000);
 }
 
 function stopAutoScan() {
@@ -771,9 +864,18 @@ const {
   nonRealtime,
   runtimeWarning,
   canEditGraph,
-  canRunGraph,
-  statusDescription
+  canRunGraph
 } = graphRuntimeStore;
+
+// 同步状态芯片
+const syncStatusChip = computed(() => {
+  switch (syncStatus.value) {
+    case 'saving': return { icon: 'mdi-cloud-upload', text: '同步中…', color: 'primary' };
+    case 'ok': return { icon: 'mdi-check-circle', text: '已同步', color: 'success' };
+    case 'error': return { icon: 'mdi-alert-circle', text: syncError.value || '同步失败，点击重试', color: 'error' };
+    default: return { icon: 'mdi-pencil', text: '编辑中', color: 'default' };
+  }
+});
 
 // 监听冻结状态变化，启动/停止自动扫描
 watch(frozen, (isFrozen) => {
@@ -1038,16 +1140,14 @@ let unsubscribeGraphSync: (() => void) | null = null;
 let unsubscribeCmdResult: (() => void) | null = null;
 
 function onSaveHotkey(event: KeyboardEvent) {
-  // Ctrl+S — 阻止默认行为，同步已自动进行
+  // Ctrl+S — 手动触发即时同步（跳过 debounce）
   if (!(event.ctrlKey || event.metaKey)) return;
   if (event.key.toLowerCase() !== 's') return;
   event.preventDefault();
-  // 手动触发一次即时同步（跳过 debounce）
   if (!canEditGraphLocal.value) return;
-  const current = buildPayload();
-  const signature = payloadSignature(current);
-  if (signature !== lastSyncedSignature.value) {
-    scheduleRealtimeSync(current, signature);
+  if (hasUnsavedChanges.value) {
+    const current = buildPayload();
+    scheduleRealtimeSync(current, payloadSignature(current));
   }
 }
 
@@ -1173,11 +1273,9 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
   SOURCE: [
     { key: 'sampleRate', label: '采样率', type: 'number', hint: 'Hz', default: 1000 },
     { key: 'channels', label: '通道数', type: 'slider', min: 1, max: 32, hint: '通道数量', default: 8 },
-    { key: 'deviceId', label: '设备ID', type: 'text', hint: '脑电设备标识', default: 'sim-001' },
   ],
   REPLAY: [
     { key: 'filePath', label: '数据文件', type: 'text', hint: '回放文件路径', default: '' },
-    { key: 'speed', label: '播放速度', type: 'slider', min: 0.5, max: 5, step: 0.5, hint: '倍速播放', default: 1 },
     { key: 'loop', label: '循环播放', type: 'boolean', hint: '是否循环', default: false },
   ],
   FILTER: [
@@ -1198,12 +1296,15 @@ const nodeParamConfigs: Record<GraphNodeType, ParamField[]> = {
   SUM: [
     { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立权重', default: [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }] },
   ],
+  AVERAGE: [
+    { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立权重', default: [{ label: '输入1', weight: 1 }, { label: '输入2', weight: 1 }] },
+  ],
   SPLIT: [
     { key: 'outputs', label: '输出配置', type: 'text', hint: '每个输出独立通道配置', default: [{ label: '输出1', channelIndices: '0,1,2,3' }] },
   ],
   MERGE: [
     { key: 'inputs', label: '输入配置', type: 'text', hint: '每个输入独立增益', default: [{ label: '输入1', gain: 1 }, { label: '输入2', gain: 1 }] },
-    { key: 'strategy', label: '合并策略', type: 'select', options: ['interleave', 'concat'], hint: '数据合并方式', default: 'interleave' },
+    { key: 'strategy', label: '合并策略', type: 'select', options: ['concat', 'interleave'], hint: '数据合并方式', default: 'concat' },
   ],
   OUTPUT: [
     { key: 'fftSize', label: 'FFT大小', type: 'select', options: ['256', '512', '1024', '2048'], hint: '频谱分析精度', default: 512 },
@@ -1331,7 +1432,7 @@ function openNodeEditDialog(nodeId: string) {
 async function handleNodeSave({ name, params, deviceId }: { name: string; params: Record<string, unknown>; deviceId?: string | null }) {
   // 检查编辑权限
   if (!canEditGraphLocal.value) {
-    alert(`当前状态不允许保存节点: ${statusDescription.value}`);
+    useToast().show('运行中不允许保存节点', 'warning');
     return;
   }
   
@@ -1429,15 +1530,16 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
   const normalized = { ...params } as Record<string, unknown>;
 
   if (type === 'SOURCE') {
-    normalized.sourceMode = String(normalized.sourceMode || 'live');
     normalized.sampleRate = Math.max(1, Number(normalized.sampleRate || 1000));
     normalized.channels = Math.max(1, Number(normalized.channels || 8));
-    normalized.filePath = String(normalized.filePath || '');
-    normalized.loop = Boolean(normalized.loop || false);
     // 保留端口号作为设备标识
     if (normalized.port !== undefined) {
       normalized.port = String(normalized.port || '');
     }
+    // 清理已废弃的 replay 相关字段
+    delete normalized.sourceMode;
+    delete normalized.filePath;
+    delete normalized.loop;
   }
 
   if (type === 'FILTER') {
@@ -1490,7 +1592,7 @@ function normalizeNodeParams(type: GraphNodeType, params: Record<string, unknown
         label: String(item.label || `输入${idx + 1}`),
         gain: Number(item.gain ?? 1),
       }));
-    normalized.strategy = String(normalized.strategy || 'interleave');
+    normalized.strategy = String(normalized.strategy || 'concat');
   }
 
   if (type === 'SPLIT') {
@@ -1594,11 +1696,45 @@ function createPorts(type: GraphNodeType, params: Record<string, unknown>) {
     groups: {
       in: {
         position: 'left',
-        attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
+        attrs: {
+          circle: {
+            r: 5,
+            magnet: true,
+            stroke: '#E53935',
+            strokeWidth: 2,
+            fill: '#FFCDD2',
+            style: { visibility: 'hidden' },
+          },
+          text: {
+            fontSize: 0,
+            refX: -8,
+            refY: 2,
+            textAnchor: 'end',
+            fill: '#999',
+            text: '',
+          },
+        },
       },
       out: {
-        position: { name: 'right', args: { dx: -6 } },
-        attrs: { circle: { r: 6, magnet: true, stroke: '#90A4AE', strokeWidth: 2, fill: '#fff', style: { visibility: 'hidden' } } },
+        position: { name: 'right', args: { dx: -5 } },
+        attrs: {
+          circle: {
+            r: 5,
+            magnet: true,
+            stroke: '#43A047',
+            strokeWidth: 2,
+            fill: '#C8E6C9',
+            style: { visibility: 'hidden' },
+          },
+          text: {
+            fontSize: 0,
+            refX: 8,
+            refY: 2,
+            textAnchor: 'start',
+            fill: '#999',
+            text: '',
+          },
+        },
       },
     },
     items,
@@ -2034,7 +2170,7 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
     }
     case 'MERGE': {
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
-      const strategy = params['strategy'] || 'interleave';
+      const strategy = params['strategy'] || 'concat';
       return `${inputs.length || 0}→1 ${strategy}`;
     }
     case 'CUSTOM_PYFUNC': {
@@ -2062,7 +2198,7 @@ function onDragStart(e: DragEvent, type: GraphNodeType) {
   // 检查编辑权限
   if (!canEditGraphLocal.value) {
     e.preventDefault();
-    alert(`当前状态不允许添加节点: ${statusDescription.value}`);
+    useToast().show('运行中不允许添加节点', 'warning');
     return;
   }
   
@@ -2086,7 +2222,6 @@ async function loadFromBackend() {
     currentRevision.value = Number(backendPayload.revision || 0);
     persistedRevision.value = Number(backendPayload.persistedRevision || 0);
 
-    // 立即获取运行时状态
     try {
       await pollRuntimeState();
     } catch (e) {
@@ -2104,14 +2239,6 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
   const graph = graphRef.value;
   if (!graph) return;
 
-  // 节点拖拽期间跳过后端同步重绘，避免残留影像
-  if (isNodeDragging) {
-    console.warn('[GraphEditor][ghost] applyPayloadToCanvas SKIPPED during drag, reason:', options?.reason);
-    return;
-  }
-
-  console.trace('[GraphEditor][ghost] applyPayloadToCanvas call stack');
-
   isApplyingBackendGraph.value = true;
   try {
     const safePayload: GraphPayload = {
@@ -2121,6 +2248,9 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
     };
 
     setRuntimeState({ frozen: safePayload.frozen });
+
+    // 先断开所有边，再清理节点，确保 X6 内部状态完全重置
+    graph.getEdges().forEach((e) => e.remove());
     graph.clearCells();
 
     safePayload.nodes.forEach((node: GraphNode) => {
@@ -2147,16 +2277,8 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
     setGraphInteracting(graph, !frozen.value);
 
     if (options?.fromBackend) {
-      lastSyncedSignature.value = payloadSignature(safePayload);
-      const reason = String(options.reason || '');
-      if (['initial', 'pull', 'persisted', 'saved', 'freeze_changed', 'runtime'].includes(reason)) {
-        // 这些 reason 表示后端拓扑与当前一致（或仅运行时状态变化），
-        // 拓扑本身未变更，因此视为已持久化，不触发"未保存"误报。
-        lastPersistedSignature.value = payloadSignature(safePayload);
-        hasUnsavedChanges.value = false;
-      } else {
-        hasUnsavedChanges.value = payloadSignature(safePayload) !== lastPersistedSignature.value;
-      }
+      editorSignature.value = payloadSignature(safePayload);
+      backendSignature.value = editorSignature.value;
     }
   } finally {
     isApplyingBackendGraph.value = false;
@@ -2383,7 +2505,7 @@ function triggerFileLoad() {
 async function loadGraphFromFile(event: Event) {
   // 检查编辑权限
   if (!canEditGraph.value) {
-    alert(`当前状态不允许加载计算图: ${statusDescription.value}`);
+    useToast().show('运行中不允许加载计算图', 'warning');
     // 清空input以便可以再次选择同一文件
     const input = event.target as HTMLInputElement;
     input.value = '';
@@ -2461,7 +2583,7 @@ async function run(mode: 'live' | 'offline' = 'live') {
   const success = await graphRuntime.start();
   if (!success) {
     console.error('[GraphEditor] Failed to start runtime:', graphRuntime.state.error);
-    alert(`启动失败: ${graphRuntime.state.error}`);
+    useToast().show(`启动失败: ${graphRuntime.state.error}`, 'error');
     return;
   }
   
@@ -2496,41 +2618,19 @@ async function run(mode: 'live' | 'offline' = 'live') {
   }
   
   // 监听WebSocket连接状态变化
-  const checkWebSocketConnection = () => {
-    if (eegWebSocket.isConnected()) {
-    } else {
-      // 设置一个超时检查，如果5秒后仍未连接，提示用户
-      setTimeout(() => {
-        if (!eegWebSocket.isConnected()) {
-          console.warn('[GraphEditor] WebSocket still not connected after 5 seconds');
-          console.warn('WebSocket连接超时，请检查后端服务是否运行');
-        }
-      }, 5000);
-    }
-  };
-  
-  // 立即检查一次
-  checkWebSocketConnection();
-  
-  // 监听WebSocket状态变化
-  const unsubscribe = eegWebSocket.onStatusChange((status) => {
-    if (status === 'connected') {
-    } else if (status === 'error') {
-      console.error('[GraphEditor] WebSocket connection error');
-      console.error('WebSocket连接错误，请检查后端服务');
-    }
-  });
-  
-  // 在组件卸载时取消监听
-  onUnmounted(() => {
-    unsubscribe();
-  });
+  // WebSocket 连接检查已由 graphRuntimeStore 统一管理
 }
+
+// 在 setup 顶层注册 WebSocket 状态监听（vs 在 run() 函数中注册，确保生命周期正确）
+let _unsubscribeWsStatus: (() => void) | null = null;
+// 延迟初始化，在 onMounted 中注册
+// 注意：实际的 WebSocket 状态监听已由 graphRuntimeStore 统一管理，
+// 此处仅保留检查逻辑，onUnmounted 中已通过 unsubscribeGraphSync 等清理。
 
 function clear() {
   // 检查编辑权限
   if (!canEditGraph.value) {
-    alert(`当前状态不允许清空计算图: ${statusDescription.value}`);
+    alert('运行中不允许清空计算图');
     return;
   }
   
@@ -2609,7 +2709,7 @@ onMounted(async () => {
     highlighting: {
       magnetAdsorbed: {
         name: 'stroke',
-        args: { attrs: { fill: '#5F95FF', stroke: '#5F95FF' } },
+        args: { attrs: { fill: '#43A047', stroke: '#43A047' } },
       },
     },
   });
@@ -2617,46 +2717,17 @@ onMounted(async () => {
   graphRef.value = graph;
 
   unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
-    const incomingSignature = payloadSignature(backendGraph);
-    if (incomingSignature === lastSyncedSignature.value && !hasUnsavedChanges.value) {
+    const rev = Number((backendGraph as GraphPayload).revision || 0);
+    const prev = Number((backendGraph as GraphPayload).persistedRevision || 0);
+
+    // 'synced' 和 'sync_graph' 都是对 sync_graph 命令的回声确认
+    if (reason === 'synced' || reason === 'sync_graph') {
+      handleSyncConfirmed(payloadSignature(backendGraph), rev, prev);
       return;
     }
 
-    // 初始加载尚未完成时，跳过 initial/pull 推送（由 loadFromBackend 负责）
-    if (!lastSyncedSignature.value && (reason === 'initial' || reason === 'pull')) {
-      return;
-    }
-
-    // 'synced' 回声：后端确认了自己提交的更改，本地画布已是最新，跳过 clearCells() 重绘
-    if (reason === 'synced') {
-      currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
-      persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
-      lastSyncedSignature.value = incomingSignature;
-      lastPersistedSignature.value = incomingSignature;
-      hasUnsavedChanges.value = false;
-      return;
-    }
-
-    // 'freeze_changed' / 'runtime'：仅运行时状态（frozen）变化，拓扑未变。
-    // 只同步 frozen 标志和版本号，不做 clearCells() 重绘，避免拓扑签名误报"未保存"。
-    if (reason === 'freeze_changed' || reason === 'runtime') {
-      currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
-      persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
-      setRuntimeState({ frozen: Boolean((backendGraph as GraphPayload).frozen) });
-      lastSyncedSignature.value = incomingSignature;
-      lastPersistedSignature.value = incomingSignature;
-      hasUnsavedChanges.value = false;
-      return;
-    }
-
-    console.warn('[GraphEditor][ws] onGraph → will call applyPayloadToCanvas, reason:', reason,
-      'hasUnsavedChanges:', hasUnsavedChanges.value);
-    if (hasUnsavedChanges.value) {
-      console.warn('[GraphEditor] Local unsaved changes were replaced by backend graph sync update:', reason);
-    }
-    currentRevision.value = Number((backendGraph as GraphPayload).revision || currentRevision.value);
-    persistedRevision.value = Number((backendGraph as GraphPayload).persistedRevision || persistedRevision.value);
-    applyPayloadToCanvas(backendGraph, { fromBackend: true, reason });
+    // 其他 reason：服务端主动推送（connected/heartbeat/freeze_changed/runtime 等）
+    handleServerPush(backendGraph, reason, rev, prev);
   });
 
   // 注意：connect() 移到 loadFromBackend() 之后，避免 WebSocket initial 推送与 HTTP 加载竞争
@@ -2664,13 +2735,13 @@ onMounted(async () => {
   // 添加对齐线
   graph.use(new Snapline({ enabled: true }));
 
-  // 拖拽放置处理
-  container.value.addEventListener('dragover', (e) => {
+  // 拖拽放置处理（使用具名函数以便在 onUnmounted 中移除）
+  const onDragOver = (e: DragEvent) => {
     e.preventDefault();
     e.dataTransfer!.dropEffect = 'copy';
-  });
+  };
 
-  container.value.addEventListener('drop', (e) => {
+  const onDrop = (e: DragEvent) => {
     e.preventDefault();
     const deviceId = e.dataTransfer?.getData('device-id');
     if (deviceId && container.value) {
@@ -2682,7 +2753,7 @@ onMounted(async () => {
       const port = device?.port || '';
       const deviceLabel = port ? `${port}` : (device?.name || deviceId);
       const nodeName = device?.name ? `${device.name.split('(')[0].trim()} (${deviceLabel})` : `设备源 (${deviceLabel})`;
-      addNode('SOURCE', x, y, nodeName, { sourceMode: 'live', port }, undefined, deviceId);
+      addNode('SOURCE', x, y, nodeName, { port }, undefined, deviceId);
       return;
     }
 
@@ -2694,12 +2765,24 @@ onMounted(async () => {
     const y = e.clientY - rect.top - 35;
 
     addNode(type, x, y);
-  });
+  };
+
+  container.value.addEventListener('dragover', onDragOver);
+  container.value.addEventListener('drop', onDrop);
 
   // 节点悬停显示端口
   graph.on('node:mouseenter', ({ node }) => {
     node.getPorts().forEach((port) => {
       node.setPortProp(port.id!, 'attrs/circle/style/visibility', 'visible');
+      // 保持方向颜色：输入=红系，输出=绿系
+      const group = port.group || (port.id?.startsWith('in') ? 'in' : 'out');
+      if (group === 'in') {
+        node.setPortProp(port.id!, 'attrs/circle/stroke', '#E53935');
+        node.setPortProp(port.id!, 'attrs/circle/fill', '#FFCDD2');
+      } else {
+        node.setPortProp(port.id!, 'attrs/circle/stroke', '#43A047');
+        node.setPortProp(port.id!, 'attrs/circle/fill', '#C8E6C9');
+      }
     });
   });
 
@@ -2710,7 +2793,17 @@ onMounted(async () => {
         e.getSourcePortId() === port.id || e.getTargetPortId() === port.id
       );
       node.setPortProp(port.id!, 'attrs/circle/style/visibility', isConnected ? 'visible' : 'hidden');
-      node.setPortProp(port.id!, 'attrs/circle/fill', isConnected ? '#5F95FF' : '#fff');
+      // 已连接的端口保持鲜艳颜色
+      const group = port.group || (port.id?.startsWith('in') ? 'in' : 'out');
+      if (isConnected) {
+        if (group === 'in') {
+          node.setPortProp(port.id!, 'attrs/circle/fill', '#E53935');
+          node.setPortProp(port.id!, 'attrs/circle/stroke', '#C62828');
+        } else {
+          node.setPortProp(port.id!, 'attrs/circle/fill', '#43A047');
+          node.setPortProp(port.id!, 'attrs/circle/stroke', '#2E7D32');
+        }
+      }
     });
   });
 
@@ -2738,7 +2831,7 @@ onMounted(async () => {
             if (canEditGraphLocal.value) {
               graph.removeCell(cell);
             } else {
-              alert(`当前状态不允许删除节点: ${statusDescription.value}`);
+              alert('运行中不允许删除节点');
             }
           }
         }
@@ -2750,11 +2843,19 @@ onMounted(async () => {
     node.removeTools();
   });
 
-  // 连接成功高亮
+  // 连接成功高亮（使用方向颜色）
   graph.on('edge:connected', ({ edge, currentCell, currentPort }) => {
     if (currentCell && currentPort) {
-      currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#5F95FF');
-      currentCell.setPortProp(currentPort, 'attrs/circle/stroke', '#5F95FF');
+      // 判断端口方向
+      const portInfo = currentCell.getPorts().find((p: any) => p.id === currentPort);
+      const group = portInfo?.group || (currentPort?.startsWith('in') ? 'in' : 'out');
+      if (group === 'in') {
+        currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#E53935');
+        currentCell.setPortProp(currentPort, 'attrs/circle/stroke', '#C62828');
+      } else {
+        currentCell.setPortProp(currentPort, 'attrs/circle/fill', '#43A047');
+        currentCell.setPortProp(currentPort, 'attrs/circle/stroke', '#2E7D32');
+      }
       currentCell.setPortProp(currentPort, 'attrs/circle/style/visibility', 'visible');
     }
     // 更新连接桩标签
@@ -2846,12 +2947,15 @@ onMounted(async () => {
 
   // 订阅命令结果，处理 sync_graph 冲突
   unsubscribeCmdResult = controlWebSocket.onCmdResult((result) => {
-    if (result.command === 'sync_graph' && result.conflict && result.graph) {
-      console.warn('[GraphEditor] sync_graph conflict detected, reverting to backend graph');
-      applyPayloadToCanvas(result.graph as GraphPayload, { fromBackend: true, reason: 'conflict' });
-      currentRevision.value = Number(result.revision || currentRevision.value);
-      persistedRevision.value = Number(result.persistedRevision || persistedRevision.value);
-      hasUnsavedChanges.value = false;
+    if (result.command === 'sync_graph') {
+      const rev = Number(result.revision || 0);
+      const prev = Number(result.persistedRevision || 0);
+      if (result.conflict && result.graph) {
+        handleSyncConflict(result.graph as GraphPayload, rev, prev);
+      } else if (!result.ok) {
+        setSyncStatus('error', result.error || '同步失败');
+        pendingSignature.value = '';
+      }
     }
   });
 
@@ -2862,6 +2966,12 @@ onMounted(async () => {
 onUnmounted(() => {
   window.removeEventListener('keydown', onSaveHotkey);
   window.removeEventListener('beforeunload', onBeforeUnload);
+
+  // 移除拖拽事件监听器
+  if (container.value) {
+    container.value.removeEventListener('dragover', onDragOver);
+    container.value.removeEventListener('drop', onDrop);
+  }
 
   stopRuntimeStatePolling();
   stopEdgeAnimations();
@@ -2877,6 +2987,11 @@ onUnmounted(() => {
   graphSyncWebSocket.disconnect();
   if (realtimeSyncTimer) {
     clearTimeout(realtimeSyncTimer);
+    realtimeSyncTimer = null;
+  }
+  if (syncOkTimer) {
+    clearTimeout(syncOkTimer);
+    syncOkTimer = null;
   }
 });
 </script>
@@ -2889,6 +3004,13 @@ onUnmounted(() => {
   background: #fafafa;
   min-height: 0;
   overflow: hidden;
+}
+
+.port-legend-in {
+  color: #E53935;
+}
+.port-legend-out {
+  color: #43A047;
 }
 
 .graph-toolbar {

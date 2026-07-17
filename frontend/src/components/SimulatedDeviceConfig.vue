@@ -153,7 +153,7 @@ watch(() => props.channelCount, () => {
 }, { immediate: true });
 
 // 监听配置变化并向上传递
-watch(config.value, (newConfig) => {
+watch(config, (newConfig) => {
   emit('update:modelValue', newConfig);
 }, { deep: true });
 

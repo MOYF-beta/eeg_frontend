@@ -168,16 +168,10 @@ class ControlConsumer(AsyncWebsocketConsumer):
     async def cmd_record(self, msg) -> Dict:
         from .data_recorder import stop_recording as stop_rec
         from .data_recorder import start_recording as start_rec
-        from .graph_store import get_graph
+        from .graph_store import get_output_nodes_for_recording
         action = msg.get('action', 'start')
-        graph = get_graph()
-        nodes = graph.get('nodes', []) or []
-        save_node_ids = []
-        for node in nodes:
-            nt = str(node.get('type') or '').upper()
-            params = node.get('params') or {}
-            if nt == 'OUTPUT' and bool(params.get('saveEnabled')):
-                save_node_ids.append(node.get('id'))
+        output_nodes = get_output_nodes_for_recording()
+        save_node_ids = [n.get('id') for n in output_nodes if n.get('id')]
         if action == 'stop':
             for nid in save_node_ids:
                 try:
@@ -186,12 +180,11 @@ class ControlConsumer(AsyncWebsocketConsumer):
                     pass
             return {'type': 'cmd_result', 'command': 'record', 'ok': True, 'action': 'stop'}
         else:
-            for nid in save_node_ids:
-                params = {}
-                for n in nodes:
-                    if n.get('id') == nid:
-                        params = n.get('params') or {}
-                        break
+            for node in output_nodes:
+                nid = node.get('id')
+                if not nid:
+                    continue
+                params = node.get('params') or {}
                 filename = params.get('filename') or params.get('filePath')
                 fmt = str(params.get('format', 'CSV')).upper()
                 start_rec(node_id=nid, filename=filename, format=fmt)
@@ -240,12 +233,34 @@ class ControlConsumer(AsyncWebsocketConsumer):
         except Exception as exc:
             logger.debug('[ControlWS] Push state failed: %s', exc)
 
+    # 广播节流：100ms 窗口内合并多次变更
+    _broadcast_throttle_ms = 100
+    _broadcast_pending_reason: Optional[str] = None
+    _broadcast_throttle_task: Optional[asyncio.Task] = None
+
     async def _broadcast_graph_change(self, reason: str):
-        """通过 group_send 广播图变更给所有控制客户端。"""
-        await self.channel_layer.group_send(CONTROL_GROUP, {
-            'type': 'control.broadcast',
-            'reason': reason,
-        })
+        """通过 group_send 广播图变更给所有控制客户端（带节流）。
+
+        高频调用（如拖拽节点时的 sync_graph）会在 100ms 窗口内合并。
+        """
+        self._broadcast_pending_reason = reason
+
+        if self._broadcast_throttle_task and not self._broadcast_throttle_task.done():
+            return  # 已有待处理的节流任务，更新 reason 后等待
+
+        async def _throttled_broadcast():
+            try:
+                await asyncio.sleep(self._broadcast_throttle_ms / 1000.0)
+                reason_to_send = self._broadcast_pending_reason or 'update'
+                self._broadcast_pending_reason = None
+                await self.channel_layer.group_send(CONTROL_GROUP, {
+                    'type': 'control.broadcast',
+                    'reason': reason_to_send,
+                })
+            except asyncio.CancelledError:
+                pass
+
+        self._broadcast_throttle_task = asyncio.create_task(_throttled_broadcast())
 
     # ------------------------------------------------------------------ #
     #  group_send handler — 其他 consumer/视图 触发的广播

@@ -220,7 +220,7 @@ watch(() => props.modelValue, (newValue) => {
 }, { immediate: true });
 
 // 监听信号变化并向上传递
-watch(signal.value, (newSignal) => {
+watch(signal, (newSignal) => {
   emit('update:modelValue', newSignal);
 }, { deep: true });
 

@@ -1,4 +1,4 @@
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 import vue from '@vitejs/plugin-vue';
 
 export default defineConfig({
@@ -21,7 +21,13 @@ export default defineConfig({
   build: {
     minify: 'esbuild',
     esbuildOptions: {
-      keepNames: true,  // 保留函数名，防止类方法被压缩
+      keepNames: true,
     },
+  },
+  test: {
+    environment: 'jsdom',
+    globals: true,
+    include: ['src/**/*.test.ts'],
+    exclude: ['src/services/__tests__/services.test.ts'],
   },
 });

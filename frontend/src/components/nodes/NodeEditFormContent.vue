@@ -2,32 +2,19 @@
   <div class="node-edit-form-content">
     <!-- 数据源专用表单 -->
     <template v-if="nodeType === 'SOURCE'">
-      <v-select
-        v-model="form.params.sourceMode"
-        :items="[{ title: '实时', value: 'live' }, { title: '回放', value: 'replay' }]"
-        item-title="title"
-        item-value="value"
-        label="输入模式"
-        density="compact"
-        variant="outlined"
-        class="mb-3"
-        :readonly="isReadOnly"
-        :disabled="isReadOnly"
-      />
-
       <!-- 设备选择器 -->
       <v-select
-        v-if="form.params.sourceMode !== 'replay'"
         :model-value="selectedDeviceId"
         :items="availableDevices"
         item-title="displayName"
         item-value="id"
-        label="选择设备"
+        label="绑定设备"
         density="compact"
         variant="outlined"
         class="mb-3"
         clearable
-        :hint="selectedDeviceId ? `已绑定设备: ${selectedDeviceId}` : '未绑定设备'"
+        :hint="selectedDeviceId ? `已绑定: ${selectedDeviceId}` : '未绑定设备'"
+
         persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
@@ -57,27 +44,6 @@
 
       <v-divider class="my-3" />
 
-      <template v-if="form.params.sourceMode === 'replay'">
-        <v-text-field
-          v-model="form.params.filePath"
-          label="回放文件名/路径"
-          density="compact"
-          variant="outlined"
-          class="mb-3"
-          :readonly="isReadOnly"
-          :disabled="isReadOnly"
-        />
-        <v-checkbox
-          v-model="form.params.loop"
-          label="循环播放"
-          density="compact"
-          hide-details
-          class="mb-3"
-          :readonly="isReadOnly"
-          :disabled="isReadOnly"
-        />
-      </template>
-      
       <v-text-field
         v-model.number="form.params.sampleRate"
         label="采样率 (Hz)"
@@ -85,10 +51,12 @@
         density="compact"
         variant="outlined"
         class="mb-3"
+        hint="设备实际采样率"
+        persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
-      
+
       <v-text-field
         v-model.number="form.params.channels"
         label="通道数"
@@ -96,16 +64,17 @@
         density="compact"
         variant="outlined"
         class="mb-3"
+        hint="采集通道数量"
+        persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
-      
+
       <!-- 通道名称编辑 -->
       <div class="mb-3">
         <div class="d-flex align-center justify-space-between mb-1">
           <span class="text-body-2">通道名称</span>
           <div class="d-flex align-center gap-2">
-            <!-- 10-20标准系统开关 -->
             <v-switch
               v-if="!isReadOnly && showTenTwentySwitch"
               v-model="tenTwentyMode"
@@ -128,7 +97,7 @@
         <div v-for="(name, index) in channelNames" :key="index" class="d-flex align-center mb-1">
           <v-text-field
             :model-value="channelNames[index]"
-            :label="`通道 ${index + 1}`"
+            :label="`CH${index + 1}`"
             density="compact"
             variant="outlined"
             hide-details
@@ -150,7 +119,6 @@
         </div>
       </div>
 
-      <!-- 10-20命名对话框 -->
       <TenTwentyChannelDialog
         v-model="tenTwentyDialogOpen"
         :devices="deviceListForDialog"
@@ -163,7 +131,12 @@
     <template v-else-if="nodeType === 'FILTER'">
       <v-select
         v-model="form.params.filterType"
-        :items="[{ title: '低通', value: 'lowpass' }, { title: '高通', value: 'highpass' }, { title: '带通', value: 'bandpass' }, { title: '带阻', value: 'notch' }]"
+        :items="[
+          { title: '低通 (去除高频)', value: 'lowpass' },
+          { title: '高通 (去除低频/直流)', value: 'highpass' },
+          { title: '带通 (保留特定频段)', value: 'bandpass' },
+          { title: '陷波 (去除工频干扰)', value: 'notch' }
+        ]"
         item-title="title"
         item-value="value"
         label="滤波器类型"
@@ -176,22 +149,26 @@
       
       <v-text-field
         v-model.number="form.params.cutoffFreq"
-        label="截止频率 (Hz)"
+        label="截止/中心频率 (Hz)"
         type="number"
         density="compact"
         variant="outlined"
         class="mb-3"
+        hint="低通/高通的截止频率，或带通/陷波的中心频率"
+        persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
       
       <v-text-field
         v-model.number="form.params.order"
-        label="阶数"
+        label="滤波器阶数"
         type="number"
         density="compact"
         variant="outlined"
         class="mb-3"
+        hint="阶数越高，衰减越陡峭（推荐 2-8）"
+        persistent-hint
         :readonly="isReadOnly"
         :disabled="isReadOnly"
       />
@@ -353,7 +330,7 @@
     <template v-else-if="nodeType === 'MERGE'">
       <v-select
         v-model="form.params.strategy"
-        :items="[{ title: '交错', value: 'interleave' }, { title: '拼接', value: 'concat' }]"
+        :items="[{ title: '拼接', value: 'concat' }, { title: '交错', value: 'interleave' }]"
         item-title="title"
         item-value="value"
         label="合并策略"
@@ -722,6 +699,55 @@
         </div>
         <div ref="codeEditorHost" class="code-editor-host" />
       </div>
+    </template>
+
+    <!-- 文件回放节点专用表单 -->
+    <template v-else-if="nodeType === 'REPLAY'">
+      <v-text-field
+        v-model="form.params.filePath"
+        label="回放文件路径"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+        hint="saved_data/ 目录下的 CSV 文件名"
+        persistent-hint
+        :readonly="isReadOnly"
+        :disabled="isReadOnly"
+      />
+
+      <v-switch
+        v-model="form.params.loop"
+        label="循环播放"
+        density="compact"
+        hide-details
+        class="mb-3"
+        :readonly="isReadOnly"
+        :disabled="isReadOnly"
+      />
+
+      <v-text-field
+        v-model.number="form.params.sampleRate"
+        label="采样率 (Hz)"
+        type="number"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+        hint="回放数据的原始采样率"
+        persistent-hint
+        :readonly="isReadOnly"
+        :disabled="isReadOnly"
+      />
+
+      <v-text-field
+        v-model.number="form.params.channels"
+        label="通道数"
+        type="number"
+        density="compact"
+        variant="outlined"
+        class="mb-3"
+        :readonly="isReadOnly"
+        :disabled="isReadOnly"
+      />
     </template>
 
     <!-- 其他节点通用参数 -->

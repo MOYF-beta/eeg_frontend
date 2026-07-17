@@ -14,7 +14,7 @@ urlpatterns = [
     path('saved-files/', views.saved_files),
     path('replayable-files/', views.replayable_files),
     
-    # 真实设备管理API
+    # 统一设备管理API（唯一数据源）
     path('real-devices/', real_device_views.real_devices),
     path('real-devices/scan-ports/', real_device_views.scan_ports),
     path('real-devices/connect/', real_device_views.connect_device),
@@ -28,5 +28,6 @@ urlpatterns = [
     path('real-devices/<path:port>/start-acquisition/', real_device_views.start_acquisition),
     path('real-devices/<path:port>/stop-acquisition/', real_device_views.stop_acquisition),
     path('real-devices/<path:port>/disconnect/', real_device_views.disconnect_device),
+    path('real-devices/<str:device_id>/', real_device_views.real_devices),
     path('graph/record/', views.graph_record),
 ]

@@ -127,7 +127,7 @@ watch(() => props.modelValue, (newValue) => {
 }, { immediate: true });
 
 // 监听噪声变化并向上传递
-watch(noise.value, (newNoise) => {
+watch(noise, (newNoise) => {
   if (newNoise.type === 'none' && newNoise.amplitude === 0) {
     emit('update:modelValue', undefined);
   } else {

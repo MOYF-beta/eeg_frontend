@@ -19,6 +19,9 @@ from .graph_engine import GraphExecutionManager
 class EegGraphConsumerV2(AsyncWebsocketConsumer):
     """Path-threaded graph consumer with UTC-ms packet timestamp support."""
 
+    # 缓存 FFT 窗口，避免每次计算都重新生成
+    _fft_window_cache: Dict[int, np.ndarray] = {}
+
     async def connect(self):
         await self.accept()
         self.subscribed_nodes: Set[str] = set()
@@ -37,6 +40,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
 
         self._spectrum_buffers_by_node: Dict[str, List[deque]] = {}
 
+        # 追踪 stream_data task 以在 disconnect 时正确取消
+        self._stream_task: Optional[asyncio.Task] = None
+
         from .graph_store import get_graph
 
         graph = get_graph()
@@ -44,12 +50,19 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
 
         self._sync_save_replay_nodes(graph)
         if self.graph_frozen:
-            asyncio.create_task(self.stream_data())
+            self._stream_task = asyncio.create_task(self.stream_data())
 
         logger.debug(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
 
     async def disconnect(self, code):
         self.running = False
+        if self._stream_task and not self._stream_task.done():
+            self._stream_task.cancel()
+            try:
+                await self._stream_task
+            except asyncio.CancelledError:
+                pass
+            self._stream_task = None
         self._engine.stop_all()
         self._stop_all_save_replay()
         logger.debug(f"[WebSocket] Client disconnected, code: {code}")
@@ -95,7 +108,9 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             channel_frames.append(arr)
 
         data = np.stack(channel_frames, axis=0)
-        window = np.hamming(fft_size)
+        if fft_size not in self._fft_window_cache:
+            self._fft_window_cache[fft_size] = np.hamming(fft_size)
+        window = self._fft_window_cache[fft_size]
         data = data * window
 
         fft = np.fft.rfft(data, axis=1)
@@ -129,10 +144,6 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
             for n in nodes
             if (
                 str(n.get('type')).upper() in {'REPLAY'}
-                or (
-                    str(n.get('type')).upper() == 'SOURCE'
-                    and str((n.get('params') or {}).get('sourceMode') or 'live').lower() == 'replay'
-                )
                 or (
                     str(n.get('type')).upper() == 'OUTPUT'
                     and bool((n.get('params') or {}).get('saveEnabled', False))
@@ -173,9 +184,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 else:
                     logger.debug(f"[WebSocket] SAVE node failed: {node_id} - {result.get('error')}")
 
-            is_replay_source = node_type == 'REPLAY' or (
-                node_type == 'SOURCE' and str(params.get('sourceMode') or 'live').lower() == 'replay'
-            )
+            is_replay_source = node_type == 'REPLAY'
             if is_replay_source:
                 filename = params.get('file') or params.get('filePath')
                 if isinstance(filename, list) and filename:
@@ -370,7 +379,7 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 try:
                     await self.send(text_data=json.dumps(payload))
                 except Exception as exc:
-                    logger.debug(f"[WebSocket] Send error: {exc}")
+                    logger.warning("[WebSocket] Send error for node %s: %s", node_id, exc)
                     self.running = False
                     break
 

@@ -15,6 +15,24 @@
 
     <!-- 通用底栏：性能监控 -->
     <StatusBar />
+
+    <!-- 全局 Toast 通知 -->
+    <div class="toast-container">
+      <v-slide-y-reverse-transition group>
+        <v-alert
+          v-for="msg in toast.toasts.value"
+          :key="msg.id"
+          :type="msg.type"
+          variant="tonal"
+          closable
+          density="compact"
+          class="toast-item"
+          @click:close="toast.dismiss(msg.id)"
+        >
+          {{ msg.text }}
+        </v-alert>
+      </v-slide-y-reverse-transition>
+    </div>
   </v-app>
 </template>
 
@@ -25,6 +43,9 @@ import StatusBar from './components/StatusBar.vue';
 import { sessionStore } from './services/sessionStore';
 import { graphRuntimeStore } from './services/graphRuntimeStore';
 import { controlWebSocket } from './services/controlWebSocket';
+import { useToast } from './composables/useToast';
+
+const toast = useToast();
 
 onMounted(() => {
   sessionStore.startGlobalPolling();
@@ -103,5 +124,23 @@ html, body {
   flex-direction: column;
   min-height: 0;
   width: 100%;
+}
+
+/* 全局 Toast 通知样式 */
+.toast-container {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+  max-width: 400px;
+}
+
+.toast-item {
+  pointer-events: auto;
+  margin-bottom: 0 !important;
 }
 </style>

@@ -222,14 +222,60 @@ class CustomPyFuncNode(GraphNode):
                 editable_code,
                 str(len(ordered_input_ports)),
                 str(len(ordered_output_ports)),
+                # 包含相关参数值，确保参数修改后缓存失效
+                f"ws={params.get('windowMode')}_{params.get('windowSeconds')}_{params.get('windowPoints')}",
+                f"hop={params.get('hopMode')}_{params.get('hopMs')}_{params.get('hopPoints')}_{params.get('outputSampleRate')}",
             ]
         )
 
         fn = context.node_state.get('compiledFn')
         if context.node_state.get('compiledKey') != compile_key or not callable(fn):
+            # 构建受限的执行环境
+            # WARNING: exec() 在 CPython 中没有完美的安全沙箱。
+            # 这里我们通过以下方式降低风险：
+            # 1. 只暴露 numpy 的单个函数，而非完整 np 模块（防止 np.sys / np.__class__ 逃逸）
+            # 2. 严格限制 __builtins__
+            # 生产环境建议使用子进程 + resource 限制（subprocess + setrlimit）
             safe_globals: Dict[str, Any] = {
-                'np': np,
-                '__builtins__': {'print': print, 'len': len, 'range': range, 'min': min, 'max': max, 'abs': abs, 'sum': sum},
+                # 暴露 numpy 函数而非 np 模块，阻断模块属性遍历逃逸
+                'asarray': np.asarray,
+                'array': np.array,
+                'zeros': np.zeros,
+                'ones': np.ones,
+                'empty': np.empty,
+                'copy': np.copy,
+                'concatenate': np.concatenate,
+                'stack': np.stack,
+                'hstack': np.hstack,
+                'vstack': np.vstack,
+                'reshape': np.reshape,
+                'transpose': np.transpose,
+                'mean': np.mean,
+                'sum': np.sum,
+                'max': np.max,
+                'min': np.min,
+                'abs': np.abs,
+                'sqrt': np.sqrt,
+                'square': np.square,
+                'clip': np.clip,
+                'fft': np.fft,
+                'float64': np.float64,
+                'float32': np.float32,
+                'int32': np.int32,
+                'int64': np.int64,
+                'ndarray': np.ndarray,
+                '__builtins__': {
+                    'print': print, 'len': len, 'range': range,
+                    'min': min, 'max': max, 'abs': abs, 'sum': sum,
+                    'int': int, 'float': float, 'list': list, 'tuple': tuple,
+                    'bool': bool, 'str': str, 'enumerate': enumerate,
+                    'zip': zip, 'map': map, 'filter': filter,
+                    'True': True, 'False': False, 'None': None,
+                    'isinstance': isinstance, 'hasattr': hasattr,
+                    'type': type, 'len': len, 'round': round,
+                    'ValueError': ValueError, 'TypeError': TypeError,
+                    'RuntimeError': RuntimeError, 'Exception': Exception,
+                },
             }
             local_ns: Dict[str, Any] = {}
             try:
@@ -240,7 +286,7 @@ class CustomPyFuncNode(GraphNode):
                 context.node_state['compiledFn'] = fn
                 context.node_state['compiledKey'] = compile_key
             except Exception as exc:
-                print(f'[CustomPyFuncNode] compile failed: {exc}')
+                logger.warning(f'[CustomPyFuncNode] compile failed: {exc}')
                 fn = None
 
         output_vectors: List[np.ndarray] = []

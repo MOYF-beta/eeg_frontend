@@ -262,7 +262,7 @@ const statusDescription = computed(() => {
 // 刷新设备列表
 async function refreshDevices() {
   try {
-    // 从后端API获取设备列表
+    // 从后端API获取设备列表（getDevices() 返回归一化的 camelCase 格式）
     const apiDevices = await deviceApi.getDevices();
     
     // 转换API设备格式为前端格式
@@ -270,13 +270,13 @@ async function refreshDevices() {
       const device: Device = {
         id: String(apiDevice.id || ''),
         name: String(apiDevice.name || apiDevice.id || ''),
-        status: 'online',
-        samplingRate: Number(apiDevice.sampling_rate || 1000),
-        channelCount: Number(apiDevice.channel_count || 8),
-        type: apiDevice.type === 'wearable_eeg' ? 'real' : 'simulated',
+        status: apiDevice.status === 'offline' ? 'offline' : 'online',
+        samplingRate: Number(apiDevice.samplingRate || 1000),
+        channelCount: Number(apiDevice.channelCount || 8),
+        type: apiDevice.type === 'real' ? 'real' : 'simulated',
         config: {
-          port: apiDevice.port || (apiDevice.config && apiDevice.config.port) || '',
-          baudrate: apiDevice.baudrate || (apiDevice.config && apiDevice.config.baudrate) || 460800,
+          port: apiDevice.config?.port || '',
+          baudrate: apiDevice.config?.baudrate || 460800,
         },
       };
       

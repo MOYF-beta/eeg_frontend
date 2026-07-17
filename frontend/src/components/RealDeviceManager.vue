@@ -396,8 +396,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { realDeviceApi, type SerialPort, type RealDeviceInfo } from '../services/realDeviceApi'
-import { deviceApi } from '../services/deviceApi'
+import { realDeviceApi, type SerialPort, type DeviceInfo as RealDeviceInfo } from '../services/realDeviceApi'
 
 // 状态
 const expandedPanels = ref([0, 1, 2])
