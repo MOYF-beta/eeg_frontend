@@ -284,8 +284,8 @@ onUnmounted(() => {
 .status-bar {
   flex: none;
   height: 32px !important;
-  border-top: 1px solid rgba(0, 0, 0, 0.08);
-  background: #fafafa;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
   display: flex;
   align-items: center;
   padding: 0 8px;
@@ -304,7 +304,7 @@ onUnmounted(() => {
 }
 
 .status-label {
-  color: #9e9e9e;
+  color: rgba(var(--v-theme-on-surface), 0.45);
   font-weight: 500;
   font-size: 10px;
   text-transform: uppercase;
@@ -319,7 +319,7 @@ onUnmounted(() => {
 }
 
 .status-unit {
-  color: #bdbdbd;
+  color: rgba(var(--v-theme-on-surface), 0.35);
   font-size: 10px;
 }
 

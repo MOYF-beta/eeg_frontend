@@ -136,6 +136,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useTheme } from 'vuetify';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
@@ -153,6 +154,25 @@ const emit = defineEmits<{
 const sampleRate = 1000;
 const bufferSize = 256;
 const channelCount = 8;
+
+// 画布配色跟随亮/暗主题
+const vTheme = useTheme();
+function hexToRgbaLocal(hex: string, alpha: number): string {
+  const m = hex.replace('#', '');
+  const full = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
+  const num = parseInt(full, 16);
+  return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+}
+const specThemeColors = computed(() => {
+  const c = vTheme.current.value.colors;
+  const onSurface = c['on-surface'] || '#1A2233';
+  return {
+    bg: c.surface || '#ffffff',
+    grid: hexToRgbaLocal(onSurface, 0.1),
+    label: hexToRgbaLocal(onSurface, 0.6),
+    legend: c['on-surface'] || '#1A2233',
+  };
+});
 
 // 状态
 const canvasRef = ref<HTMLCanvasElement | null>(null);
@@ -373,11 +393,11 @@ const drawSpectrum = () => {
 
   // 清空画布
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = '#ffffff';
+  ctx.fillStyle = specThemeColors.value.bg;
   ctx.fillRect(0, 0, width, height);
 
   // 绘制网格
-  ctx.strokeStyle = '#e0e0e0';
+  ctx.strokeStyle = specThemeColors.value.grid;
   ctx.lineWidth = 1;
   for (let i = 0; i <= 4; i++) {
     const y = topPad + (i / 4) * plotHeight;
@@ -409,7 +429,7 @@ const drawSpectrum = () => {
   }
 
   // 绘制坐标轴标签
-  ctx.fillStyle = '#546e7a';
+  ctx.fillStyle = specThemeColors.value.label;
   ctx.font = '12px sans-serif';
   ctx.textAlign = 'center';
   for (let i = 0; i <= 4; i++) {
@@ -441,7 +461,7 @@ const drawSpectrum = () => {
     selectedChannels.value.forEach(ch => {
       ctx.fillStyle = colors[ch % colors.length];
       ctx.fillRect(legendX, legendY, 12, 12);
-      ctx.fillStyle = '#333';
+      ctx.fillStyle = specThemeColors.value.legend;
       ctx.font = '11px sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText(`CH${ch + 1}`, legendX + 16, legendY + 10);
@@ -622,9 +642,9 @@ watch(selectedNodeId, (newId, oldId) => {
 .spec-canvas {
   width: 100%;
   height: 280px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
-  background: #fff;
+  background: rgb(var(--v-theme-surface));
   display: block;
 }
 .spec-canvas.disabled {

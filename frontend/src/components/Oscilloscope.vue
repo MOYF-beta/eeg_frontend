@@ -243,6 +243,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { useTheme } from 'vuetify';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
@@ -264,6 +265,19 @@ const route = useRoute();
 const channelCount = ref(8);
 const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 const colors = ['#e53935', '#1e88e5', '#43a047', '#fdd835', '#8e24aa', '#fb8c00', '#00acc1', '#3949ab'];
+
+// === 画布配色跟随亮/暗主题 ===
+const vTheme = useTheme();
+const oscThemeColors = computed(() => {
+  const c = vTheme.current.value.colors;
+  const onSurface = c['on-surface'] || '#1A2233';
+  return {
+    bg: c.surface || '#ffffff',
+    grid: hexToRgba(onSurface, 0.08),
+    label: hexToRgba(onSurface, 0.65),
+    tick: hexToRgba(onSurface, 0.5),
+  };
+});
 
 // === 扫描模式配置 ===
 const currentSampleRate = ref(1000);
@@ -705,10 +719,10 @@ const drawGrid = () => {
   gridCtx.clearRect(0, 0, width, height);
 
   gridCtx.save();
-  gridCtx.fillStyle = '#ffffff';
+  gridCtx.fillStyle = oscThemeColors.value.bg;
   gridCtx.fillRect(0, 0, width, height);
 
-  gridCtx.strokeStyle = '#f0f0f0';
+  gridCtx.strokeStyle = oscThemeColors.value.grid;
   gridCtx.lineWidth = 1;
 
   const verticalLines = 10;
@@ -730,7 +744,7 @@ const drawGrid = () => {
     gridCtx.stroke();
   }
 
-  gridCtx.fillStyle = '#666';
+  gridCtx.fillStyle = oscThemeColors.value.label;
   gridCtx.font = '12px sans-serif';
   gridCtx.textAlign = 'right';
   gridCtx.textBaseline = 'middle';
@@ -743,7 +757,7 @@ const drawGrid = () => {
 
   // X 轴刻度（底部）
   gridCtx.save();
-  gridCtx.fillStyle = '#777';
+  gridCtx.fillStyle = oscThemeColors.value.tick;
   gridCtx.font = '10px sans-serif';
   gridCtx.textAlign = 'center';
   gridCtx.textBaseline = 'top';
@@ -755,6 +769,11 @@ const drawGrid = () => {
   }
   gridCtx.restore();
 };
+
+// 主题切换时重绘网格
+watch(oscThemeColors, () => {
+  drawGrid();
+});
 
 // Scan line removed: overlay canvas retained for potential future overlays
 
@@ -1458,8 +1477,8 @@ const resetAllData = () => {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid #e6e6e6;
+  background: rgba(var(--v-theme-surface), 0.6);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   padding: 4px 6px;
 }
@@ -1583,9 +1602,9 @@ const resetAllData = () => {
   position: relative;
   height: 400px; /* Fixed height for card mode */
   min-height: 200px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
-  background: #fff;
+  background: rgb(var(--v-theme-surface));
   overflow: hidden;
   width: 100%;
 }
@@ -1640,8 +1659,8 @@ const resetAllData = () => {
   right: 0;
   bottom: 0;
   width: 220px;
-  border-left: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-on-surface), 0.03);
   padding: 6px 4px;
   box-sizing: border-box;
   transition: width 0.2s ease;
@@ -1659,8 +1678,8 @@ const resetAllData = () => {
   width: 24px;
   height: 24px;
   border-radius: 12px;
-  border: 1px solid #d0d0d0;
-  background: #fff;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1780,8 +1799,8 @@ const resetAllData = () => {
   width: 70px;
   padding: 6px 4px;
   box-sizing: border-box;
-  border-right: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-on-surface), 0.03);
 }
 
 .osc-left-axis-row {
@@ -1812,12 +1831,12 @@ const resetAllData = () => {
 
 .osc-left-axis-label {
   font-size: 10px;
-  color: #444;
+  color: rgba(var(--v-theme-on-surface), 0.75);
 }
 
 .osc-left-axis-values {
   font-size: 9px;
-  color: #666;
+  color: rgba(var(--v-theme-on-surface), 0.55);
   line-height: 1.1;
 }
 
@@ -1831,7 +1850,7 @@ const resetAllData = () => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(var(--v-theme-surface), 0.9);
   border-radius: 8px;
 }
 

@@ -44,10 +44,13 @@ import { sessionStore } from './services/sessionStore';
 import { graphRuntimeStore } from './services/graphRuntimeStore';
 import { controlWebSocket } from './services/controlWebSocket';
 import { useToast } from './composables/useToast';
+import { useAppTheme } from './composables/useAppTheme';
 
 const toast = useToast();
+const { initTheme } = useAppTheme();
 
 onMounted(() => {
+  initTheme();
   sessionStore.startGlobalPolling();
   // 初始化控制 WS（替代运行时状态轮询）
   controlWebSocket.connect();
@@ -142,5 +145,48 @@ html, body {
 .toast-item {
   pointer-events: auto;
   margin-bottom: 0 !important;
+}
+
+/* ===== 视觉打磨 ===== */
+
+/* 主题切换时的平滑过渡 */
+.v-application,
+.v-application .v-toolbar,
+.v-navigation-drawer,
+.status-bar,
+.palette,
+.palette-title,
+.palette-item,
+.group-title,
+.graph-wrapper,
+.fullscreen-graph-editor,
+.graph-toolbar,
+.graph-container {
+  transition: background-color 0.25s ease, border-color 0.25s ease, color 0.2s ease;
+}
+
+/* 细滚动条（WebKit） */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(var(--v-theme-on-surface), 0.18);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(var(--v-theme-on-surface), 0.32);
+}
+
+/* 细滚动条（Firefox） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(var(--v-theme-on-surface), 0.18) transparent;
 }
 </style>

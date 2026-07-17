@@ -275,6 +275,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { useTheme } from 'vuetify';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { sessionStore } from '../services/sessionStore';
 import type { GraphNode } from '../services/graph';
@@ -623,16 +624,36 @@ const updatePlotMetrics = () => {
   plotMetrics.value.height = Math.max(0, height - plotMetrics.value.top - plotMetrics.value.bottom);
 };
 
+// 画布配色跟随亮/暗主题
+const vTheme = useTheme();
+function hexToRgbaLocal(hex: string, alpha: number): string {
+  const m = hex.replace('#', '');
+  const full = m.length === 3 ? m.split('').map((c) => c + c).join('') : m;
+  const num = parseInt(full, 16);
+  return `rgba(${(num >> 16) & 255}, ${(num >> 8) & 255}, ${num & 255}, ${alpha})`;
+}
+const freqThemeColors = computed(() => {
+  const c = vTheme.current.value.colors;
+  const onSurface = c['on-surface'] || '#1A2233';
+  return {
+    bg: c.surface || '#ffffff',
+    grid: hexToRgbaLocal(onSurface, 0.08),
+    border: hexToRgbaLocal(onSurface, 0.18),
+    label: hexToRgbaLocal(onSurface, 0.6),
+    labelStrong: hexToRgbaLocal(onSurface, 0.75),
+  };
+});
+
 const drawGrid = () => {
   if (!gridCtx) return;
   const { width, height } = canvasSize.value;
   const { left, top, width: pW, height: pH } = plotMetrics.value;
 
   gridCtx.clearRect(0, 0, width, height);
-  gridCtx.fillStyle = '#fff';
+  gridCtx.fillStyle = freqThemeColors.value.bg;
   gridCtx.fillRect(0, 0, width, height);
 
-  gridCtx.strokeStyle = '#f1f1f1';
+  gridCtx.strokeStyle = freqThemeColors.value.grid;
   gridCtx.lineWidth = 1;
 
   if (displayMode.value === 'spectrogram') {
@@ -664,11 +685,11 @@ const drawGrid = () => {
       }
     }
 
-    gridCtx.strokeStyle = '#e0e0e0';
+    gridCtx.strokeStyle = freqThemeColors.value.border;
     gridCtx.strokeRect(left, top, pW, pH);
 
     if (regionCount > 1) {
-      gridCtx.strokeStyle = '#d7d7d7';
+      gridCtx.strokeStyle = freqThemeColors.value.border;
       for (let region = 1; region < regionCount; region += 1) {
         const dividerX = left + ((usableWidth / regionCount) * region) + regionGap * (region - 0.5);
         gridCtx.beginPath();
@@ -678,7 +699,7 @@ const drawGrid = () => {
       }
     }
 
-    gridCtx.fillStyle = '#666';
+    gridCtx.fillStyle = freqThemeColors.value.label;
     gridCtx.font = '10px sans-serif';
     gridCtx.textAlign = 'right';
     gridCtx.textBaseline = 'middle';
@@ -709,10 +730,10 @@ const drawGrid = () => {
         ? 'AVG'
         : (channelNames.value[channels[region]] || `CH${channels[region] + 1}`);
       gridCtx.textBaseline = 'bottom';
-      gridCtx.fillStyle = '#555';
+      gridCtx.fillStyle = freqThemeColors.value.labelStrong;
       gridCtx.fillText(label, regionLeft + regionWidth / 2, top - 2);
       gridCtx.textBaseline = 'top';
-      gridCtx.fillStyle = '#666';
+      gridCtx.fillStyle = freqThemeColors.value.label;
     }
     return;
   }
@@ -733,11 +754,11 @@ const drawGrid = () => {
     gridCtx.stroke();
   }
 
-  gridCtx.strokeStyle = '#e0e0e0';
+  gridCtx.strokeStyle = freqThemeColors.value.border;
   gridCtx.strokeRect(left, top, pW, pH);
 
   const [fMin, fMax] = freqRange.value;
-  gridCtx.fillStyle = '#666';
+  gridCtx.fillStyle = freqThemeColors.value.label;
   gridCtx.font = '10px sans-serif';
   gridCtx.textAlign = 'center';
   gridCtx.textBaseline = 'top';
@@ -747,6 +768,11 @@ const drawGrid = () => {
     gridCtx.fillText(`${hz}`, x, top + pH + 6);
   }
 };
+
+// 主题切换时重绘网格
+watch(freqThemeColors, () => {
+  drawGrid();
+});
 
 const computeSpectra = () => {
   const source = backendSpectra.value;
@@ -1621,9 +1647,9 @@ watch(isGraphFrozen, (frozen) => {
   position: relative;
   height: 320px; /* Fixed height for card mode */
   min-height: 200px;
-  border: 1px solid #e0e0e0;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
-  background: #fff;
+  background: rgb(var(--v-theme-surface));
   overflow: hidden;
   width: 100%;
 }
@@ -1682,21 +1708,21 @@ watch(isGraphFrozen, (frozen) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.9);
+  background: rgba(var(--v-theme-surface), 0.9);
   border-radius: 8px;
   z-index: 10;
 }
 
 .freq-datazoom-wrap {
-  border-top: 1px solid #f0f0f0;
-  background-color: #f9f9f9;
+  border-top: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background-color: rgba(var(--v-theme-on-surface), 0.02);
 }
 
 .freq-datazoom-inner {
   position: relative;
   height: 40px;
-  border: 1px solid #e0e0e0;
-  background: #fff;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
   cursor: crosshair;
 }
 

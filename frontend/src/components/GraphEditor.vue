@@ -494,6 +494,7 @@ import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { controlWebSocket } from '../services/controlWebSocket';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
+import { useTheme } from 'vuetify';
 import Oscilloscope from './Oscilloscope.vue';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
@@ -504,6 +505,14 @@ const SESSION_STORAGE_KEY = 'eeg_graph_editor_state';
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const hasNodes = ref(false);
+
+// 画布网格点颜色跟随亮/暗主题
+const vTheme = useTheme();
+function gridDotColor() {
+  return vTheme.global.current.value.dark
+    ? 'rgba(228, 233, 244, 0.22)'
+    : 'rgba(26, 34, 51, 0.20)';
+}
 
 // ======== 双图同步状态模型 ========
 // 编辑器签名 = 当前画布内容的 hash
@@ -1486,7 +1495,7 @@ function createNodeHtml(type: GraphNodeType, name: string) {
       <div style="
         width: 180px;
         height: 70px;
-        background: white;
+        background: rgb(var(--v-theme-surface));
         border: 2px solid ${config.color};
         border-radius: 8px;
         display: flex;
@@ -1510,8 +1519,8 @@ function createNodeHtml(type: GraphNodeType, name: string) {
           flex-shrink: 0;
         ">${config.icon}</div>
         <div style="flex: 1; min-width: 0; overflow: hidden;">
-          <div style="font-size: 14px; font-weight: 500; color: #333; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
-          <div style="font-size: 11px; color: #999; margin-top: 2px;">${type}</div>
+          <div style="font-size: 14px; font-weight: 500; color: rgb(var(--v-theme-on-surface)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
+          <div style="font-size: 11px; color: rgba(var(--v-theme-on-surface), 0.5); margin-top: 2px;">${type}</div>
         </div>
       </div>
     </div>
@@ -2667,8 +2676,13 @@ onMounted(async () => {
   // 创建画布
   const graph = new Graph({
     container: container.value,
-    grid: { size: 10, visible: true, type: 'dot' },
-    background: { color: '#fafafa' },
+    grid: {
+      size: 10,
+      visible: true,
+      type: 'dot',
+      args: [{ color: gridDotColor(), thickness: 1 }],
+    },
+    background: { color: 'rgb(var(--v-theme-background))' },
     panning: { enabled: true, eventTypes: ['leftMouseDown'] },
     mousewheel: { enabled: true, modifiers: ['ctrl', 'meta'] },
     connecting: {
@@ -2715,6 +2729,13 @@ onMounted(async () => {
   });
 
   graphRef.value = graph;
+
+  // 主题切换时重绘网格点（网格颜色烘焙在 data-URI 中，需显式重绘）
+  watch(() => vTheme.global.name.value, () => {
+    const g = graphRef.value;
+    if (!g) return;
+    g.drawGrid({ args: { color: gridDotColor(), thickness: 1 } });
+  });
 
   unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
     const rev = Number((backendGraph as GraphPayload).revision || 0);
@@ -3001,7 +3022,7 @@ onUnmounted(() => {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background: #fafafa;
+  background: rgb(var(--v-theme-background));
   min-height: 0;
   overflow: hidden;
 }
@@ -3015,8 +3036,8 @@ onUnmounted(() => {
 
 .graph-toolbar {
   flex-shrink: 0;
-  border-bottom: 1px solid #e0e0e0;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
 }
 
 .palette-empty {
@@ -3037,11 +3058,11 @@ onUnmounted(() => {
   display: flex;
   flex: 1;
   min-height: 0; /* 确保flex容器可以收缩 */
-  border: 1px solid #e0e0e0;
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 8px;
   overflow: hidden;
-  background: #fff;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  background: rgb(var(--v-theme-surface));
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   position: relative;
 }
 
@@ -3050,8 +3071,8 @@ onUnmounted(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-right: 1px solid #e0e0e0;
-  background: #fff;
+  border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
   overflow: hidden;
   min-height: 0;
 }
@@ -3067,19 +3088,19 @@ onUnmounted(() => {
   padding: 16px;
   font-weight: 600;
   font-size: 14px;
-  color: #333;
-  border-bottom: 1px solid #e0e0e0;
+  color: rgb(var(--v-theme-on-surface));
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .palette-group {
-  border-bottom: 1px solid #e0e0e0;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
 .group-title {
   padding: 12px 16px;
   font-size: 12px;
-  color: #666;
-  background: #fafafa;
+  color: rgba(var(--v-theme-on-surface), 0.6);
+  background: rgba(var(--v-theme-on-surface), 0.03);
   font-weight: 500;
 }
 
@@ -3090,11 +3111,11 @@ onUnmounted(() => {
   gap: 12px;
   cursor: grab;
   transition: background 0.2s;
-  border-bottom: 1px solid #f0f0f0;
+  border-bottom: 1px solid rgba(var(--v-border-color), calc(var(--v-border-opacity) * 0.6));
 }
 
 .palette-item:hover {
-  background: #f5f5f5;
+  background: rgba(var(--v-theme-on-surface), 0.05);
 }
 
 .palette-item:active {
@@ -3104,11 +3125,11 @@ onUnmounted(() => {
 .palette-item-disabled {
   opacity: 0.5;
   cursor: not-allowed !important;
-  background: #f9f9f9 !important;
+  background: rgba(var(--v-theme-on-surface), 0.02) !important;
 }
 
 .palette-item-disabled:hover {
-  background: #f9f9f9 !important;
+  background: rgba(var(--v-theme-on-surface), 0.02) !important;
 }
 
 .item-icon {
@@ -3125,7 +3146,7 @@ onUnmounted(() => {
 
 .item-name {
   font-size: 14px;
-  color: #333;
+  color: rgb(var(--v-theme-on-surface));
 }
 
 .graph-container {
@@ -3133,7 +3154,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0;
-  background: #fafafa;
+  background: rgb(var(--v-theme-background));
   position: relative;
   overflow: hidden;
 }
@@ -3144,14 +3165,14 @@ onUnmounted(() => {
   left: 50%;
   transform: translate(-50%, -50%);
   text-align: center;
-  color: #90a4ae;
+  color: rgba(var(--v-theme-on-surface), 0.35);
   pointer-events: none;
 }
 
 .hint-text {
   font-size: 16px;
   margin-top: 8px;
-  color: #607d8b;
+  color: rgba(var(--v-theme-on-surface), 0.5);
 }
 
 .hint-sub {
@@ -3165,8 +3186,8 @@ onUnmounted(() => {
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  border-left: 1px solid #e0e0e0;
-  background: #fff;
+  border-left: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgb(var(--v-theme-surface));
   transition: width 0.3s ease;
   overflow: hidden;
   min-height: 0;
@@ -3181,8 +3202,8 @@ onUnmounted(() => {
   align-items: center;
   justify-content: space-between;
   padding: 10px 12px;
-  border-bottom: 1px solid #e0e0e0;
-  background: #fafafa;
+  border-bottom: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
+  background: rgba(var(--v-theme-on-surface), 0.03);
   min-height: 56px;
 }
 
@@ -3200,7 +3221,7 @@ onUnmounted(() => {
 .sidebar-title {
   font-weight: 600;
   font-size: 14px;
-  color: #333;
+  color: rgb(var(--v-theme-on-surface));
   display: flex;
   align-items: center;
   white-space: nowrap;
@@ -3210,7 +3231,7 @@ onUnmounted(() => {
 
 .sidebar-subtitle {
   font-size: 11px;
-  color: #888;
+  color: rgba(var(--v-theme-on-surface), 0.5);
   margin-top: 2px;
   white-space: nowrap;
   overflow: hidden;
@@ -3223,7 +3244,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  color: #9e9e9e;
+  color: rgba(var(--v-theme-on-surface), 0.4);
   text-align: center;
   padding: 24px;
 }
@@ -3283,7 +3304,7 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   min-height: 0; /* 确保flex容器可以收缩 */
-  background: #fafafa;
+  background: rgb(var(--v-theme-background));
   position: relative;
   overflow: hidden; /* 隐藏溢出，避免残影 */
 }
