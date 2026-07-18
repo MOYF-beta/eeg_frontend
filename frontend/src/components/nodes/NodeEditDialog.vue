@@ -10,23 +10,26 @@
           <v-icon>mdi-close</v-icon>
         </v-btn>
       </v-card-title>
-      
+
       <v-divider />
-      
+
       <v-card-text class="pt-4">
         <!-- 节点编辑内容 -->
         <div class="node-edit-content">
           <!-- 通用字段：名称 -->
-          <v-text-field
-            v-model="form.name"
-            label="节点名称"
-            density="compact"
-            variant="outlined"
-            class="mb-4"
-            :readonly="isReadOnly"
-            :disabled="isReadOnly"
-          />
-          
+          <div class="field-block">
+            <div class="field-caption">节点名称</div>
+            <v-text-field
+              v-model="form.name"
+              label="节点名称"
+              density="compact"
+              variant="outlined"
+              hide-details
+              :readonly="isReadOnly"
+              :disabled="isReadOnly"
+            />
+          </div>
+
           <!-- 动态表单内容 -->
           <NodeEditFormContent
             :node-type="nodeType"
@@ -43,6 +46,9 @@
             :kernel-text="kernelText"
             :params-json="paramsJson"
             :json-error="jsonError"
+            :available-channels="availableChannels"
+            :python-header-code="pythonHeaderCode"
+            :python-footer-code="pythonFooterCode"
             @update:selected-device-id="selectedDeviceId = $event"
             @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
             @update:channel-names="channelNames = $event"
@@ -61,13 +67,13 @@
             @remove-split-output="removeSplitOutput"
             @add-merge-input="addMergeInput"
             @remove-merge-input="removeMergeInput"
-            @import-python-file="importPythonFile"
+            @import-python-file="triggerPythonImport"
           />
         </div>
       </v-card-text>
-      
+
       <v-divider />
-      
+
       <v-card-actions>
         <v-spacer />
         <v-btn variant="text" @click="close">{{ isReadOnly ? '关闭' : '取消' }}</v-btn>
@@ -82,16 +88,19 @@
         <!-- 节点编辑内容 -->
         <div class="node-edit-content">
           <!-- 通用字段：名称 -->
-          <v-text-field
-            v-model="form.name"
-            label="节点名称"
-            density="compact"
-            variant="outlined"
-            class="mb-4"
-            :readonly="isReadOnly"
-            :disabled="isReadOnly"
-          />
-          
+          <div class="field-block">
+            <div class="field-caption">节点名称</div>
+            <v-text-field
+              v-model="form.name"
+              label="节点名称"
+              density="compact"
+              variant="outlined"
+              hide-details
+              :readonly="isReadOnly"
+              :disabled="isReadOnly"
+            />
+          </div>
+
           <!-- 动态表单内容 -->
           <NodeEditFormContent
           :node-type="nodeType"
@@ -108,6 +117,9 @@
           :kernel-text="kernelText"
           :params-json="paramsJson"
           :json-error="jsonError"
+          :available-channels="availableChannels"
+          :python-header-code="pythonHeaderCode"
+          :python-footer-code="pythonFooterCode"
           @update:selected-device-id="selectedDeviceId = $event"
           @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
           @update:channel-names="channelNames = $event"
@@ -126,14 +138,23 @@
           @remove-split-output="removeSplitOutput"
           @add-merge-input="addMergeInput"
           @remove-merge-input="removeMergeInput"
-          @import-python-file="importPythonFile"
+          @import-python-file="triggerPythonImport"
         />
         </div><!-- /node-edit-content -->
       </div><!-- /sidebar-content -->
     </div><!-- /sidebar-body -->
-    
+
     <!-- 自动保存，无需保存按钮 -->
   </div>
+
+  <!-- 隐藏的 Python 文件导入输入框 -->
+  <input
+    ref="pythonFileInput"
+    type="file"
+    accept=".py,.txt"
+    style="display: none"
+    @change="importPythonFile"
+  />
 </template>
 
 <script setup lang="ts">
@@ -705,11 +726,16 @@ function removeSplitOutput(index: number) {
   splitOutputs.value.splice(index, 1);
 }
 
+// paramsJson 的更新若来自节点切换（而非用户编辑 JSON），跳过回写，
+// 避免覆盖 ensureVisualParamDefaults 补充的前端专用键（filterType/cutoffFreq 等）
+let paramsJsonFromNode = false;
+
 watch(() => props.nodeData, (data) => {
   if (data) {
     form.value.name = data.name || '';
     form.value.params = { ...data.params };
     ensureVisualParamDefaults(data.type, form.value.params);
+    paramsJsonFromNode = true;
     paramsJson.value = JSON.stringify(data.params || {}, null, 2);
     jsonError.value = '';
     
@@ -841,6 +867,10 @@ watch(selectedDeviceId, () => {
 });
 
 watch(paramsJson, (val) => {
+  if (paramsJsonFromNode) {
+    paramsJsonFromNode = false;
+    return;
+  }
   try {
     form.value.params = JSON.parse(val);
     jsonError.value = '';
@@ -1000,5 +1030,22 @@ onUnmounted(() => {
 
 :deep(.cm-editor) {
   min-height: 260px;
+}
+
+/* 字段标题（替代被裁切的浮动标签） */
+.field-caption {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(var(--v-theme-on-surface), 0.65);
+  margin-bottom: 2px;
+}
+
+.field-block {
+  margin-bottom: 12px;
+}
+
+/* 隐藏 Vuetify 浮动标签（当前版本渲染被裁切），label 属性保留以保证可访问性与测试定位 */
+.node-edit-content :deep(.v-field-label) {
+  display: none !important;
 }
 </style>

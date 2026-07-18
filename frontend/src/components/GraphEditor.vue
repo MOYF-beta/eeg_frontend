@@ -104,7 +104,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -122,7 +122,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -140,7 +140,7 @@
               :class="{ 'palette-item-disabled': !canEditGraphLocal }"
               :draggable="canEditGraphLocal"
               @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `添加 ${node.name} 节点`"
+              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
             >
               <span class="item-icon" :style="{ background: node.bg, color: node.color }">
                 {{ node.icon }}
@@ -936,7 +936,9 @@ const sidebarTitle = computed(() => {
   if (!editingNode.value) return '节点属性';
   const meta = nodeMetaMap[editingNode.value.type];
   const typeName = meta?.name || editingNode.value.type;
-  return `${typeName} · ${editingNode.value.name || '未命名'}`;
+  const nodeName = editingNode.value.name || '未命名';
+  // 名称与类型相同时不重复显示
+  return nodeName === typeName ? nodeName : `${typeName} · ${nodeName}`;
 });
 
 const sidebarSubtitle = computed(() => {
@@ -1368,23 +1370,23 @@ const nodeMetaMap: Record<string, { name: string; icon: string; color: string }>
 };
 
 const sourceNodes = [
-  { type: 'REPLAY' as GraphNodeType, name: '文件回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD' },
+  { type: 'REPLAY' as GraphNodeType, name: '文件回放', icon: 'RPL', color: '#1976D2', bg: '#E3F2FD', desc: '回放 saved_data 中已录制的 CSV 数据' },
 ];
 
 const processNodes = [
-  { type: 'FILTER' as GraphNodeType, name: '滤波器', icon: 'FIL', color: '#388E3C', bg: '#E8F5E9' },
-  { type: 'DOWNSAMPLE' as GraphNodeType, name: '降采样', icon: 'DS', color: '#6D4C41', bg: '#EFEBE9' },
-  { type: 'UPSAMPLE' as GraphNodeType, name: '升采样', icon: 'US', color: '#455A64', bg: '#ECEFF1' },
-  { type: 'SUM' as GraphNodeType, name: '求和器', icon: 'SUM', color: '#7B1FA2', bg: '#F3E5F5' },
-  { type: 'AVERAGE' as GraphNodeType, name: '平均器', icon: 'AVG', color: '#6A1B9A', bg: '#F3E5F5' },
-  { type: 'SPLIT' as GraphNodeType, name: '分离器', icon: 'SPT', color: '#F9A825', bg: '#FFF8E1' },
-  { type: 'MERGE' as GraphNodeType, name: '合并器', icon: 'MRG', color: '#EF6C00', bg: '#FFF3E0' },
-  { type: 'CUSTOM_PYFUNC' as GraphNodeType, name: 'Python函数', icon: 'PY', color: '#5E35B1', bg: '#EDE7F6' },
-  { type: 'CUSTOM_CONV' as GraphNodeType, name: '卷积节点', icon: 'CNV', color: '#00897B', bg: '#E0F2F1' },
+  { type: 'FILTER' as GraphNodeType, name: '滤波器', icon: 'FIL', color: '#388E3C', bg: '#E8F5E9', desc: '按频率筛选信号：去漂移、去工频干扰或提取脑电节律' },
+  { type: 'DOWNSAMPLE' as GraphNodeType, name: '降采样', icon: 'DS', color: '#6D4C41', bg: '#EFEBE9', desc: '降低采样率，减小数据量' },
+  { type: 'UPSAMPLE' as GraphNodeType, name: '升采样', icon: 'US', color: '#455A64', bg: '#ECEFF1', desc: '插值提高采样率' },
+  { type: 'SUM' as GraphNodeType, name: '求和器', icon: 'SUM', color: '#7B1FA2', bg: '#F3E5F5', desc: '多路信号按权重逐通道相加' },
+  { type: 'AVERAGE' as GraphNodeType, name: '平均器', icon: 'AVG', color: '#6A1B9A', bg: '#F3E5F5', desc: '多路信号按权重逐通道平均' },
+  { type: 'SPLIT' as GraphNodeType, name: '分离器', icon: 'SPT', color: '#F9A825', bg: '#FFF8E1', desc: '把部分通道拆分成独立输出（如按脑区）' },
+  { type: 'MERGE' as GraphNodeType, name: '合并器', icon: 'MRG', color: '#EF6C00', bg: '#FFF3E0', desc: '把多路信号合并为一路多通道信号' },
+  { type: 'CUSTOM_PYFUNC' as GraphNodeType, name: 'Python函数', icon: 'PY', color: '#5E35B1', bg: '#EDE7F6', desc: '用 Python 编写自定义处理逻辑' },
+  { type: 'CUSTOM_CONV' as GraphNodeType, name: '卷积节点', icon: 'CNV', color: '#00897B', bg: '#E0F2F1', desc: '自定义卷积核做滑动滤波（如平滑）' },
 ];
 
 const outputNodes = [
-  { type: 'OUTPUT' as GraphNodeType, name: '显示与录制', icon: 'OUT', color: '#00796B', bg: '#E0F2F1' },
+  { type: 'OUTPUT' as GraphNodeType, name: '显示与录制', icon: 'OUT', color: '#00796B', bg: '#E0F2F1', desc: '连接示波器查看波形/频谱，并可录制到文件' },
 ];
 
 // 选择节点并在右侧边栏显示
