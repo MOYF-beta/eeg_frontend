@@ -240,6 +240,24 @@ import NodeEditDialog from './nodes/NodeEditDialog.vue';
 // 会话存储键名
 const SESSION_STORAGE_KEY = 'eeg_graph_editor_state';
 
+// 注册带自定义 markup 的节点类型，使 banner/badge/typeLabel/wave 等 selector 生效
+const EEG_NODE_SHAPE = 'eeg-node';
+Graph.registerNode(EEG_NODE_SHAPE, {
+  inherit: 'rect',
+  markup: [
+    { tagName: 'rect', selector: 'body' },
+    { tagName: 'rect', selector: 'banner' },
+    { tagName: 'rect', selector: 'badge' },
+    { tagName: 'text', selector: 'badgeText' },
+    { tagName: 'text', selector: 'label' },
+    { tagName: 'text', selector: 'typeLabel' },
+    { tagName: 'rect', selector: 'waveBg' },
+    { tagName: 'rect', selector: 'waveZero' },
+    { tagName: 'path', selector: 'wavePath' },
+    { tagName: 'text', selector: 'waveStatus' },
+  ],
+}, true); // force: 允许 HMR 重复注册
+
 const container = ref<HTMLDivElement | null>(null);
 const graphRef = ref<Graph | null>(null);
 const hasNodes = ref(false);
@@ -764,6 +782,146 @@ function stopEdgeAnimations() {
   edgeAnimationStates.value.clear();
 }
 
+// ==================== OUTPUT 节点实时波形预览 ====================
+// 每个 OUTPUT 节点维护一个轻量环形缓冲（首通道），通过 eegWebSocket.onData 广播更新，
+// 以约 12fps 的节流节奏重绘 SVG path，避免高频重排。
+type WaveState = { samples: number[]; dirty: boolean; lastTs: number };
+const waveStates = new Map<string, WaveState>();
+const WAVE_MAX_POINTS = 90;   // 约 90 个抽样点，足够看出波形趋势
+const WAVE_DECIMATE = 4;      // 抽样间隔（每 4 个样本取 1 个）
+const WAVE_RENDER_MS = 80;    // 重绘节流 ~12fps
+let waveRenderTimer: number | null = null;
+let unsubscribeEegData: (() => void) | null = null;
+
+// 后端仅向已 wire-subscribe 的节点推数据，为 OUTPUT 节点补订阅
+function wireSubscribeOutputNodes() {
+  const graph = graphRef.value;
+  if (!graph || !eegWebSocket.isConnected()) return;
+  const ids = graph.getNodes()
+    .filter((n) => (n.getData() as GraphNode)?.type === 'OUTPUT')
+    .map((n) => n.id);
+  if (ids.length > 0) eegWebSocket.subscribe(ids);
+}
+
+function ensureWaveState(nodeId: string): WaveState {
+  let s = waveStates.get(nodeId);
+  if (!s) {
+    s = { samples: [], dirty: false, lastTs: 0 };
+    waveStates.set(nodeId, s);
+  }
+  return s;
+}
+
+function handleWavePacket(packet: import('../services/websocket').EegDataPacket) {
+  if (packet.nodeType !== 'OUTPUT') return;
+  const graph = graphRef.value;
+  if (!graph) return;
+  const cell = graph.getCellById(packet.nodeId);
+  if (!cell || !cell.isNode()) return;
+  const state = ensureWaveState(packet.nodeId);
+  // 取首通道：samples 为 [样本][通道] 或退化为 channels 单帧
+  if (Array.isArray(packet.samples) && packet.samples.length > 0) {
+    for (let i = 0; i < packet.samples.length; i += WAVE_DECIMATE) {
+      const row = packet.samples[i];
+      if (Array.isArray(row) && row.length > 0) state.samples.push(Number(row[0]));
+    }
+  } else if (Array.isArray(packet.channels) && packet.channels.length > 0) {
+    state.samples.push(Number(packet.channels[0]));
+  }
+  if (state.samples.length > WAVE_MAX_POINTS) {
+    state.samples.splice(0, state.samples.length - WAVE_MAX_POINTS);
+  }
+  state.dirty = true;
+  // 更新状态行：采样率 + 通道数
+  const sr = Number(packet.sampleRate || 0);
+  const nCh = Array.isArray(packet.channelNames) && packet.channelNames.length > 0
+    ? packet.channelNames.length
+    : (Array.isArray(packet.channels) ? packet.channels.length : 0);
+  const statusText = sr > 0 ? `${sr}Hz · ${nCh}ch` : '';
+  if (statusText) (cell as import('@antv/x6').Node).attr('waveStatus/text', statusText);
+}
+
+function renderWaveOnNode(nodeId: string) {
+  const graph = graphRef.value;
+  if (!graph) return;
+  const cell = graph.getCellById(nodeId);
+  if (!cell || !cell.isNode()) return;
+  const state = waveStates.get(nodeId);
+  const node = cell as import('@antv/x6').Node;
+  if (!state || state.samples.length < 2) {
+    node.attr('wavePath/d', '');
+    return;
+  }
+  const w = 184;
+  const h = 56;
+  const ox = 8;   // waveBg 内边距
+  const oy = 50;
+  const n = state.samples.length;
+  let min = Infinity;
+  let max = -Infinity;
+  for (const v of state.samples) {
+    if (v < min) min = v;
+    if (v > max) max = v;
+  }
+  const range = max - min || 1;
+  // 留 8% 上下边距
+  const pad = h * 0.08;
+  const innerH = h - pad * 2;
+  const step = n > 1 ? w / (n - 1) : 0;
+  let d = '';
+  for (let i = 0; i < n; i++) {
+    const x = ox + i * step;
+    const y = oy + h - pad - ((state.samples[i] - min) / range) * innerH;
+    d += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1);
+  }
+  node.attr('wavePath/d', d);
+}
+
+function startWavePreview() {
+  if (unsubscribeEegData) return;
+  // onData 返回取消函数（内部为 Set.delete，忽略其返回值）
+  const off = eegWebSocket.onData(handleWavePacket);
+  unsubscribeEegData = () => { off(); };
+  // WS 已连接时立即为已有 OUTPUT 节点订阅
+  wireSubscribeOutputNodes();
+  // WS 重连/新连后重新订阅
+  eegWebSocket.onStatusChange((s) => { if (s === 'connected') wireSubscribeOutputNodes(); });
+  waveRenderTimer = window.setInterval(() => {
+    const now = performance.now();
+    waveStates.forEach((state, nodeId) => {
+      if (!state.dirty) return;
+      if (now - state.lastTs < WAVE_RENDER_MS) return;
+      renderWaveOnNode(nodeId);
+      state.dirty = false;
+      state.lastTs = now;
+    });
+  }, WAVE_RENDER_MS);
+}
+
+function stopWavePreview() {
+  if (unsubscribeEegData) {
+    unsubscribeEegData();
+    unsubscribeEegData = null;
+  }
+  if (waveRenderTimer !== null) {
+    clearInterval(waveRenderTimer);
+    waveRenderTimer = null;
+  }
+  // 清空所有波形显示并取消订阅
+  const graph = graphRef.value;
+  if (graph) {
+    const ids: string[] = [];
+    waveStates.forEach((_s, nodeId) => {
+      ids.push(nodeId);
+      const cell = graph.getCellById(nodeId);
+      if (cell && cell.isNode()) (cell as import('@antv/x6').Node).attr('wavePath/d', '');
+    });
+    if (ids.length > 0 && eegWebSocket.isConnected()) eegWebSocket.unsubscribe(ids);
+  }
+  waveStates.clear();
+}
+// ==================== OUTPUT 节点实时波形预览 END ====================
+
 function applyLiveEdgeAnimation(edge: import('@antv/x6').Edge, progress: number) {
   // Live模式：快速流动动画效果
   const strokeDasharray = '10, 5';
@@ -1139,7 +1297,7 @@ async function handleNodeSave({ name, params, deviceId }: { name: string; params
   updateAllEdgeLabels();
 
   // 更新节点标签显示
-  const labelText = generateNodeLabel(data.type, data.name, data.params, editingNode.value?.id);
+  const labelText = buildNodeLabelText(data.type, data.name, data.params, editingNode.value?.id);
   node.attr('label/text', labelText);
 
   syncUnsavedState();
@@ -1718,16 +1876,16 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
   // 合并传入的参数
   const nodeParams = normalizeNodeParams(type, { ...defaultParams, ...params });
 
-  // 生成带属性的标签文本
-  const labelText = generateNodeLabel(type, name || config.name, nodeParams, nodeId);
+  const dims = getNodeDims(type);
+  const labelText = buildNodeLabelText(type, name || config.name, nodeParams, nodeId);
 
   const node = graph.addNode({
     id: nodeId,
-    shape: 'rect',
+    shape: EEG_NODE_SHAPE,
     x,
     y,
-    width: 180,
-    height: 70,
+    width: dims.width,
+    height: dims.height,
     attrs: {
       body: {
         fill: '#fff',
@@ -1736,14 +1894,103 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
         rx: 8,
         ry: 8,
       },
+      // 顶部色条（跟随节点主题色，无边框）
+      banner: {
+        refWidth: '100%',
+        height: 4,
+        fill: config.color,
+        stroke: 'none',
+        rx: 4,
+        ry: 4,
+      },
+      // 图标徽章（左上角类型缩写）
+      badge: {
+        refX: 10,
+        refY: 12,
+        width: 26,
+        height: 26,
+        rx: 6,
+        ry: 6,
+        fill: config.bg,
+        stroke: config.color,
+        strokeWidth: 1,
+      },
+      badgeText: {
+        refX: 23,
+        refY: 25,
+        text: config.icon,
+        fontSize: 10,
+        fontWeight: 700,
+        fill: config.color,
+        textAnchor: 'middle',
+        textVerticalAnchor: 'middle',
+      },
+      // 名称 + 属性（多行）
       label: {
         text: labelText,
         fill: '#333',
         fontSize: 12,
         fontWeight: 500,
-        refY: 0.5,
+        refX: 44,
+        refY: 14,
+        textAnchor: 'start',
+        textVerticalAnchor: 'top',
+        lineHeight: 17,
+      },
+      // 类型副标题（右下角小字，OUTPUT 节点放在波形区上方）
+      typeLabel: {
+        text: config.name,
+        fontSize: 9,
+        fill: '#90A4AE',
+        refX: type === 'OUTPUT' ? 192 : 192,
+        refY: type === 'OUTPUT' ? 40 : 76,
+        textAnchor: 'end',
         textVerticalAnchor: 'middle',
       },
+      // OUTPUT 节点：波形预览区背景（非 OUTPUT 隐藏）
+      ...(type === 'OUTPUT' ? {
+        waveBg: {
+          x: 8,
+          y: 50,
+          width: 184,
+          height: 56,
+          rx: 4,
+          ry: 4,
+          fill: '#0d1b2a',
+          stroke: '#1b3a52',
+          strokeWidth: 1,
+        },
+        waveZero: {
+          x: 8,
+          y: 78,
+          width: 184,
+          height: 1,
+          fill: '#1b3a52',
+          stroke: 'none',
+        },
+        wavePath: {
+          d: '',
+          fill: 'none',
+          stroke: '#4FC3F7',
+          strokeWidth: 1.5,
+          'stroke-linejoin': 'round',
+          'stroke-linecap': 'round',
+        },
+        waveStatus: {
+          refX: 100,
+          refY: 118,
+          text: '',
+          fontSize: 9,
+          fill: '#78909C',
+          textAnchor: 'middle',
+          textVerticalAnchor: 'middle',
+        },
+      } : {
+        waveBg: { display: 'none' },
+        waveZero: { display: 'none' },
+        wavePath: { display: 'none' },
+        waveStatus: { display: 'none' },
+      }),
     },
     ports: createPorts(type, nodeParams),
     data: { type, name: name || config.name, params: nodeParams, deviceId: boundDeviceId },
@@ -1753,85 +2000,112 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
   return node;
 }
 
-// 生成节点标签（显示名称+关键属性+绑定状态）
-function generateNodeLabel(type: GraphNodeType, name: string, params: Record<string, unknown>, nodeId?: string): string {
-  const keyParam = getKeyParamDisplay(type, params);
-  // 检查节点是否被示波器视图绑定
-  const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
-  const boundIndicator = isBound ? '🔗 ' : '';
-  
-  if (keyParam) {
-    return `${boundIndicator}${name}\n${keyParam}`;
-  }
-  return `${boundIndicator}${name}`;
-}
-
-// 获取节点关键属性显示文本
-function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>): string {
+// 获取节点属性徽章列表（结构化显示，最多 3 行）
+function getNodeBadges(type: GraphNodeType, params: Record<string, unknown>): string[] {
+  const badges: string[] = [];
   switch (type) {
-    case 'FILTER':
-      const filterType = params['type'] || 'lowpass';
-      const cutoff = params['cutoff'] || 50;
-      return `${filterType} ${cutoff}Hz`;
+    case 'SOURCE': {
+      const sr = Number(params['sampleRate'] || 1000);
+      const ch = Number(params['channels'] || 8);
+      const port = params['port'] ? String(params['port']) : '';
+      const devId = params['deviceId'] ? String(params['deviceId']) : '';
+      badges.push(`${sr}Hz · ${ch}ch`);
+      if (port) badges.push(`端口 ${port}`);
+      else if (devId) badges.push(`设备 ${devId.slice(0, 10)}`);
+      else badges.push('仿真信号');
+      break;
+    }
+    case 'REPLAY': {
+      const fp = String(params['filePath'] || '');
+      const fname = fp ? fp.split(/[\\/]/).pop() || fp : '';
+      badges.push(fname ? fname.slice(0, 18) : '未选文件');
+      if (params['loop']) badges.push('循环');
+      break;
+    }
+    case 'FILTER': {
+      const ft = String(params['type'] || 'lowpass');
+      const cutoff = Number(params['cutoff'] || 50);
+      const order = Number(params['order'] || 4);
+      const ftMap: Record<string, string> = { lowpass: '低通', highpass: '高通', bandpass: '带通', notch: '陷波' };
+      badges.push(`${ftMap[ft] || ft} ${cutoff}Hz`);
+      badges.push(`${order}阶`);
+      break;
+    }
     case 'DOWNSAMPLE': {
       const mode = String(params['mode'] || 'targetRate');
-      if (mode === 'factor') return `/${Math.max(1, Number(params['factor'] || 2))}`;
-      return `→${Math.max(1, Number(params['targetRate'] || 250))}Hz`;
+      if (mode === 'factor') badges.push(`÷${Math.max(1, Number(params['factor'] || 2))}`);
+      else badges.push(`→${Math.max(1, Number(params['targetRate'] || 250))}Hz`);
+      break;
     }
     case 'UPSAMPLE': {
       const mode = String(params['mode'] || 'targetRate');
-      if (mode === 'factor') return `x${Math.max(1, Number(params['factor'] || 2))}`;
-      return `→${Math.max(1, Number(params['targetRate'] || 1000))}Hz`;
+      if (mode === 'factor') badges.push(`×${Math.max(1, Number(params['factor'] || 2))}`);
+      else badges.push(`→${Math.max(1, Number(params['targetRate'] || 1000))}Hz`);
+      break;
     }
-    case 'OUTPUT': {
-      const fft = params['fftSize']
-        ? `FFT${params['fftSize']} `
-        : '';
-      const save = params['saveEnabled'] ? '📝' : '';
-      return `${fft}${save}`.trim() || '显示';
-    }
-    case 'SOURCE': {
-      const sampleRate = params['sampleRate'] || 1000;
-      const channels = params['channels'] || 8;
-      const port = params['port'];
-      const portDesc = port ? ` ${port}` : '';
-      return `${sampleRate}Hz ${channels}ch${portDesc}`;
-    }
-    case 'SUM': {
-      const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
-      return `${inputs.length || 0}路输入`;
-    }
+    case 'SUM':
     case 'AVERAGE': {
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
-      return `${inputs.length || 0}路输入`;
+      badges.push(`${inputs.length || 0}路输入`);
+      break;
     }
     case 'SPLIT': {
       const outputs = Array.isArray(params['outputs']) ? params['outputs'] : [];
-      return `${outputs.length || 0}路输出`;
+      badges.push(`${outputs.length || 0}路输出`);
+      break;
     }
     case 'MERGE': {
       const inputs = Array.isArray(params['inputs']) ? params['inputs'] : [];
-      const strategy = params['strategy'] || 'concat';
-      return `${inputs.length || 0}→1 ${strategy}`;
+      const strategy = String(params['strategy'] || 'concat');
+      badges.push(`${inputs.length || 0}→1`);
+      badges.push(strategy === 'interleave' ? '交错' : '拼接');
+      break;
+    }
+    case 'OUTPUT': {
+      const fft = Number(params['fftSize'] || 512);
+      badges.push(`FFT ${fft}`);
+      if (params['saveEnabled']) badges.push(`📝 ${String(params['format'] || 'CSV')}`);
+      break;
     }
     case 'CUSTOM_PYFUNC': {
-      const mode = params['portMode'] || 'fixed';
-      const inputCount = Number(params['inputCount'] || 2);
-      const outputCount = Number(params['outputCount'] || 1);
+      const mode = String(params['portMode'] || 'fixed');
+      if (mode === 'adaptive') { badges.push('I/O 自适应'); break; }
+      badges.push(`${Number(params['inputCount'] || 2)}→${Number(params['outputCount'] || 1)}`);
       const hopMode = String(params['hopMode'] || 'points');
-      const hopDesc = hopMode === 'targetRate'
-        ? `${Math.max(1, Number(params['outputSampleRate'] || 100))}Hz`
-        : (hopMode === 'milliseconds' ? `${Math.max(1, Number(params['hopMs'] || 10))}ms` : `${Math.max(1, Number(params['hopPoints'] || 1))}pt`);
-      if (String(mode) === 'adaptive') return 'I/O 自适应';
-      return `${inputCount}→${outputCount} @${hopDesc}`;
+      if (hopMode === 'targetRate') badges.push(`${Math.max(1, Number(params['outputSampleRate'] || 100))}Hz`);
+      else if (hopMode === 'milliseconds') badges.push(`${Math.max(1, Number(params['hopMs'] || 10))}ms`);
+      else badges.push(`${Math.max(1, Number(params['hopPoints'] || 1))}pt`);
+      break;
     }
     case 'CUSTOM_CONV': {
       const kernel = Array.isArray(params['kernel']) ? params['kernel'] : [];
-      return `kernel=${kernel.length || 0}`;
+      badges.push(`kernel=${kernel.length || 0}`);
+      break;
     }
-    default:
-      return '';
   }
+  return badges.slice(0, 3);
+}
+
+// 获取节点关键属性显示文本（单行，供兼容场景使用）
+function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>): string {
+  return getNodeBadges(type, params).join(' ');
+}
+
+// 计算节点尺寸：OUTPUT 节点需要容纳波形预览
+type NodeDims = { width: number; height: number };
+function getNodeDims(type: GraphNodeType): NodeDims {
+  if (type === 'OUTPUT') return { width: 200, height: 150 };
+  return { width: 200, height: 88 };
+}
+
+// 生成节点富文本标签：名称 + 类型 + 属性徽章（多行）
+function buildNodeLabelText(type: GraphNodeType, name: string, params: Record<string, unknown>, nodeId?: string): string {
+  const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
+  const boundMark = isBound ? '🔗 ' : '';
+  const badges = getNodeBadges(type, params);
+  const lines = [boundMark + name];
+  if (badges.length > 0) lines.push(badges.join('  '));
+  return lines.join('\n');
 }
 
 // 从后端加载数据
@@ -2505,11 +2779,21 @@ onMounted(async () => {
     }, 300);
   });
 
-  graph.on('node:added', () => {
+  graph.on('node:added', ({ node }) => {
+    // 运行中新增 OUTPUT 节点时为其订阅数据
+    const d = node.getData() as GraphNode;
+    if (d?.type === 'OUTPUT' && eegWebSocket.isConnected()) {
+      eegWebSocket.subscribe([node.id]);
+    }
     syncUnsavedState();
   });
 
-  graph.on('node:removed', () => {
+  graph.on('node:removed', ({ node }) => {
+    // 清理波形状态与订阅
+    if (waveStates.has(node.id)) {
+      waveStates.delete(node.id);
+      if (eegWebSocket.isConnected()) eegWebSocket.unsubscribe([node.id]);
+    }
     hasNodes.value = graph.getNodes().length > 0;
     syncUnsavedState();
   });
@@ -2546,7 +2830,7 @@ onMounted(async () => {
     graph.getNodes().forEach((node) => {
       const data = node.getData() as GraphNode;
       if (data && data.type === 'OUTPUT') {
-        const labelText = generateNodeLabel(data.type, data.name, data.params, node.id);
+        const labelText = buildNodeLabelText(data.type, data.name, data.params, node.id);
         node.attr('label/text', labelText);
       }
     });
@@ -2576,9 +2860,13 @@ onMounted(async () => {
 
   // 启动运行时状态轮询
   startRuntimeStatePolling();
+
+  // 启动 OUTPUT 节点波形预览（数据来自 eegWebSocket 广播，无需额外套接字）
+  startWavePreview();
 });
 
 onUnmounted(() => {
+  stopWavePreview();
   window.removeEventListener('keydown', onSaveHotkey);
   window.removeEventListener('beforeunload', onBeforeUnload);
 

@@ -1,0 +1,137 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - navigation [ref=e5]:
+      - generic [ref=e7]:
+        - generic "EEG 工作台" [ref=e8]:
+          - generic [ref=e9]: 󰧑
+        - list [ref=e10]:
+          - link [ref=e11] [cursor=pointer]:
+            - /url: /cpgraph
+            - generic [ref=e13]: 󱁊
+          - link [ref=e14] [cursor=pointer]:
+            - /url: /visualization
+            - generic [ref=e16]: 󰄪
+          - link [ref=e17] [cursor=pointer]:
+            - /url: /devices
+            - generic [ref=e19]: 󰾰
+          - link [ref=e20] [cursor=pointer]:
+            - /url: /dev
+            - generic [ref=e22]: 󱧼
+        - generic [ref=e23]:
+          - separator [ref=e24]
+          - generic [ref=e25]:
+            - generic:
+              - generic:
+                - generic: 󰐊
+              - generic:
+                - generic: 运行
+            - generic:
+              - generic:
+                - generic: 󰻂
+              - generic:
+                - generic: 录制
+        - generic [ref=e27]:
+          - separator [ref=e28]
+          - generic [ref=e29] [cursor=pointer]:
+            - generic [ref=e31]: 󰖔
+            - generic [ref=e33]: 切换到深色模式
+    - main [ref=e34]:
+      - generic [ref=e37]:
+        - generic [ref=e38]:
+          - heading "波形可视化" [level=1] [ref=e39]
+          - generic [ref=e40]:
+            - generic [ref=e41]: "布局网格:"
+            - generic [ref=e42]:
+              - button "1x1" [ref=e43] [cursor=pointer]:
+                - generic [ref=e44]: 1x1
+              - button "2x2" [ref=e45] [cursor=pointer]:
+                - generic [ref=e46]: 2x2
+              - button "3x3" [ref=e47] [cursor=pointer]:
+                - generic [ref=e48]: 3x3
+              - button "4x4" [ref=e49] [cursor=pointer]:
+                - generic [ref=e50]: 4x4
+            - button "添加示波器" [disabled]:
+              - generic:
+                - generic: 󰐕
+              - generic: 添加示波器
+            - button "添加频谱" [disabled]:
+              - generic:
+                - generic: 󰐕
+              - generic: 添加频谱
+            - button "添加10-20可视化" [disabled]:
+              - generic:
+                - generic: 󰐕
+              - generic: 添加10-20可视化
+        - alert [ref=e51]:
+          - generic [ref=e53]: 󰋼
+          - generic [ref=e54]:
+            - text: 计算图中没有示波器或频谱节点。
+            - link "前往计算图编辑器添加 →" [ref=e55] [cursor=pointer]:
+              - /url: /cpgraph
+        - generic [ref=e56]:
+          - generic [ref=e57]: 󱑽
+          - generic [ref=e58]: 暂无可视化组件
+          - generic [ref=e59]: 点击上方按钮添加示波器或频谱分析组件
+    - banner [ref=e60]:
+      - generic [ref=e61]:
+        - generic [ref=e62]:
+          - generic [ref=e63]: 管道
+          - generic [ref=e64]: "0"
+          - generic [ref=e65]: µs
+        - separator [ref=e66]
+        - generic [ref=e67]:
+          - generic [ref=e68]: 源
+          - generic [ref=e69]: "0"
+        - generic [ref=e70]:
+          - generic [ref=e71]: 节点
+          - generic [ref=e72]: "0"
+        - generic [ref=e73]:
+          - generic [ref=e74]: WS
+          - generic [ref=e75]: "0"
+        - separator [ref=e76]
+        - generic [ref=e77]:
+          - generic [ref=e78]: 吞吐
+          - generic [ref=e79]: "0"
+          - generic [ref=e80]: /s
+        - separator [ref=e81]
+        - generic [ref=e82]:
+          - generic [ref=e83]: CPU
+          - generic [ref=e84]: 0%
+        - generic [ref=e85]:
+          - generic [ref=e86]: RAM
+          - generic [ref=e87]: 0M
+          - generic [ref=e88]: /0M
+        - separator [ref=e89]
+        - generic [ref=e90]:
+          - generic [ref=e91]: 磁盘
+          - generic [ref=e92]: 0%
+          - generic [ref=e93]: 0/0G
+        - generic [ref=e94]:
+          - generic [ref=e95]: 线程
+          - generic [ref=e96]: "0"
+        - separator [ref=e97]
+        - generic [ref=e98]:
+          - generic [ref=e99]: 进程
+          - generic [ref=e100]: 0M
+        - separator [ref=e101]
+        - generic [ref=e102]:
+          - generic [ref=e103]: 󱁊
+          - generic [ref=e104]: —
+        - generic [ref=e105]:
+          - generic [ref=e106]: 󰝥
+          - generic [ref=e107]: 断开
+        - generic [ref=e108]:
+          - generic [ref=e109]: 󰀦
+          - generic [ref=e110]: 错误
+  - generic:
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+```

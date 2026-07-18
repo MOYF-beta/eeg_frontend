@@ -1,0 +1,134 @@
+# Page snapshot
+
+```yaml
+- generic [active] [ref=e1]:
+  - generic [ref=e4]:
+    - navigation [ref=e5]:
+      - generic [ref=e7]:
+        - generic "EEG 工作台" [ref=e8]:
+          - generic [ref=e9]: 󰧑
+        - list [ref=e10]:
+          - link [ref=e11] [cursor=pointer]:
+            - /url: /cpgraph
+            - generic [ref=e13]: 󱁊
+          - link [ref=e14] [cursor=pointer]:
+            - /url: /visualization
+            - generic [ref=e16]: 󰄪
+          - link [ref=e17] [cursor=pointer]:
+            - /url: /devices
+            - generic [ref=e19]: 󰾰
+          - link [ref=e20] [cursor=pointer]:
+            - /url: /dev
+            - generic [ref=e22]: 󱧼
+        - generic [ref=e23]:
+          - separator [ref=e24]
+          - generic [ref=e25]:
+            - generic:
+              - generic:
+                - generic: 󰐊
+              - generic:
+                - generic: 运行
+            - generic:
+              - generic:
+                - generic: 󰻂
+              - generic:
+                - generic: 录制
+        - generic [ref=e27]:
+          - separator [ref=e28]
+          - generic [ref=e29] [cursor=pointer]:
+            - generic [ref=e31]: 󰖔
+            - generic [ref=e33]: 切换到深色模式
+    - main [ref=e34]:
+      - generic [ref=e37]:
+        - heading "设备管理" [level=1] [ref=e38]
+        - generic [ref=e39]:
+          - generic [ref=e40]:
+            - generic [ref=e41]:
+              - generic [ref=e42]: 󰾰
+              - text: 设备管理
+              - generic [ref=e44]: 0 台设备
+              - generic [ref=e46]: 0 个驱动
+            - button "刷新" [ref=e48] [cursor=pointer]:
+              - generic [ref=e49]:
+                - generic [ref=e50]: 󰑐
+                - text: 刷新
+          - separator [ref=e51]
+          - alert [ref=e52]:
+            - generic [ref=e54]: 󰅙
+            - generic [ref=e56]:
+              - generic [ref=e57]: 󰀦
+              - generic [ref=e58]: "HTTP error! status: 500"
+            - button "Close" [ref=e60] [cursor=pointer]:
+              - generic [ref=e62]: 󰅖
+          - generic [ref=e63]:
+            - button "已加载驱动 0" [ref=e67] [cursor=pointer]:
+              - generic [ref=e69]:
+                - generic [ref=e70]: 󰒔
+                - generic [ref=e71]: 已加载驱动
+                - generic [ref=e73]: "0"
+              - generic [ref=e75]: 󰅀
+            - alert [ref=e76]:
+              - generic [ref=e78]: 󰋼
+              - generic [ref=e80]:
+                - generic [ref=e81]: 󰋼
+                - generic [ref=e82]: 未发现任何设备。请确保驱动已正确加载，且对应物理设备或虚拟服务可用。
+    - banner [ref=e83]:
+      - generic [ref=e84]:
+        - generic [ref=e85]:
+          - generic [ref=e86]: 管道
+          - generic [ref=e87]: "0"
+          - generic [ref=e88]: µs
+        - separator [ref=e89]
+        - generic [ref=e90]:
+          - generic [ref=e91]: 源
+          - generic [ref=e92]: "0"
+        - generic [ref=e93]:
+          - generic [ref=e94]: 节点
+          - generic [ref=e95]: "0"
+        - generic [ref=e96]:
+          - generic [ref=e97]: WS
+          - generic [ref=e98]: "0"
+        - separator [ref=e99]
+        - generic [ref=e100]:
+          - generic [ref=e101]: 吞吐
+          - generic [ref=e102]: "0"
+          - generic [ref=e103]: /s
+        - separator [ref=e104]
+        - generic [ref=e105]:
+          - generic [ref=e106]: CPU
+          - generic [ref=e107]: 0%
+        - generic [ref=e108]:
+          - generic [ref=e109]: RAM
+          - generic [ref=e110]: 0M
+          - generic [ref=e111]: /0M
+        - separator [ref=e112]
+        - generic [ref=e113]:
+          - generic [ref=e114]: 磁盘
+          - generic [ref=e115]: 0%
+          - generic [ref=e116]: 0/0G
+        - generic [ref=e117]:
+          - generic [ref=e118]: 线程
+          - generic [ref=e119]: "0"
+        - separator [ref=e120]
+        - generic [ref=e121]:
+          - generic [ref=e122]: 进程
+          - generic [ref=e123]: 0M
+        - separator [ref=e124]
+        - generic [ref=e125]:
+          - generic [ref=e126]: 󱁊
+          - generic [ref=e127]: —
+        - generic [ref=e128]:
+          - generic [ref=e129]: 󰝥
+          - generic [ref=e130]: 断开
+        - generic [ref=e131]:
+          - generic [ref=e132]: 󰀦
+          - generic [ref=e133]: 错误
+  - generic:
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+```
