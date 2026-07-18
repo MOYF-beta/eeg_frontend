@@ -1,155 +1,32 @@
 <template>
   <div class="fullscreen-graph-editor">
-    <v-toolbar density="compact" color="surface" class="graph-toolbar">
-      <v-toolbar-title>计算图编辑器</v-toolbar-title>
-      <v-spacer />
-      <div class="d-flex align-center ga-2">
-        <!-- 运行/冻结状态 -->
-        <v-chip v-if="isRunning || frozen" size="small" :color="isRunning ? 'warning' : 'info'">
-          <v-icon size="small" class="mr-1">
-            {{ isRunning ? 'mdi-play' : 'mdi-lock' }}
-          </v-icon>
-          {{ isRunning ? '运行中' : '已冻结' }}
-        </v-chip>
-
-        <!-- 同步状态 -->
-        <v-chip
-          size="small"
-          :color="syncStatusChip.color"
-          :variant="syncStatus === 'error' ? 'tonal' : 'flat'"
-          :class="{ 'cursor-pointer': syncStatus === 'error' }"
-          @click="syncStatus === 'error' ? retrySync() : undefined"
-        >
-          <v-icon size="small" class="mr-1">{{ syncStatusChip.icon }}</v-icon>
-          {{ syncStatusChip.text }}
-        </v-chip>
-
-        <v-btn size="small" variant="tonal" @click="exportGraph">导出</v-btn>
-        
-        <div class="d-flex align-center ga-1 ml-2">
-          <span class="text-caption port-legend-in">● 输入</span>
-          <span class="text-caption port-legend-out">● 输出</span>
-        </div>
-        <v-btn 
-          size="small" 
-          variant="tonal" 
-          @click="triggerFileLoad"
-          :disabled="!canEditGraphLocal"
-                    :title="!canEditGraphLocal ? '运行中不允许加载计算图' : '从文件加载计算图'"
-        >
-          加载
-        </v-btn>
-        <v-btn 
-          size="small" 
-          color="info" 
-          @click="clear"
-          :disabled="!canEditGraphLocal"
-                    :title="!canEditGraphLocal ? '运行中不允许清空计算图' : '清空计算图'"
-        >
-          清空
-        </v-btn>
-
-        <v-divider vertical class="mx-1" />
-
-        <v-btn
-          size="small"
-          variant="tonal"
-          @click="openDeviceManager"
-          title="管理所有设备"
-        >
-          <v-icon size="small" class="mr-1">mdi-devices</v-icon>
-          设备管理
-        </v-btn>
-      </div>
-    </v-toolbar>
+    <GraphToolbar
+      :is-running="isRunning"
+      :frozen="frozen"
+      :can-edit="canEditGraphLocal"
+      :sync-status="syncStatus"
+      :sync-error="syncError"
+      @freeze="onFreeze"
+      @save="saveGraph"
+      @export="exportGraph"
+      @load="triggerFileLoad"
+      @clear="clear"
+      @open-device-manager="openDeviceManager"
+      @retry-sync="retrySync"
+    />
 
     <div class="graph-content">
 
       <div class="graph-wrapper">
         <!-- 左侧节点库 -->
-        <div class="palette">
-          <div class="palette-title">节点库</div>
-
-          <div class="palette-body">
-          <div class="palette-group">
-            <div class="group-title d-flex align-center justify-space-between">
-              <span>设备集合</span>
-              <v-btn size="x-small" variant="text" @click="openCreateDeviceDialog" :disabled="!canEditGraphLocal">
-                新建设备
-              </v-btn>
-            </div>
-            <div
-              v-for="device in runningDevices"
-              :key="device.id"
-              class="palette-item"
-              :class="{ 'palette-item-disabled': !canEditGraphLocal }"
-              :draggable="canEditGraphLocal"
-              @dragstart="onDragStartDevice($event, device.id)"
-                            :title="!canEditGraphLocal ? '运行中不允许拖拽设备' : `拖拽 ${device.port || device.name} 作为数据源节点`"
-            >
-              <span class="item-icon" style="background: #e3f2fd; color: #1976d2;">DEV</span>
-              <span class="item-name">{{ device.port || device.name }}</span>
-            </div>
-            <div v-if="runningDevices.length === 0" class="palette-empty">
-              暂无可用设备（请启动虚拟设备服务器）
-            </div>
-          </div>
-
-          <div class="palette-group">
-            <div class="group-title">数据回放</div>
-            <div
-              v-for="node in sourceNodes"
-              :key="node.type"
-              class="palette-item"
-              :class="{ 'palette-item-disabled': !canEditGraphLocal }"
-              :draggable="canEditGraphLocal"
-              @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
-            >
-              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
-                {{ node.icon }}
-              </span>
-              <span class="item-name">{{ node.name }}</span>
-            </div>
-          </div>
-
-          <div class="palette-group">
-            <div class="group-title">处理节点</div>
-            <div
-              v-for="node in processNodes"
-              :key="node.type"
-              class="palette-item"
-              :class="{ 'palette-item-disabled': !canEditGraphLocal }"
-              :draggable="canEditGraphLocal"
-              @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
-            >
-              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
-                {{ node.icon }}
-              </span>
-              <span class="item-name">{{ node.name }}</span>
-            </div>
-          </div>
-
-          <div class="palette-group">
-            <div class="group-title">显示与保存</div>
-            <div
-              v-for="node in outputNodes"
-              :key="node.type"
-              class="palette-item"
-              :class="{ 'palette-item-disabled': !canEditGraphLocal }"
-              :draggable="canEditGraphLocal"
-              @dragstart="onDragStart($event, node.type)"
-              :title="!canEditGraphLocal ? `运行中不允许添加节点` : `${node.name} — ${node.desc}\n拖拽到画布添加`"
-            >
-              <span class="item-icon" :style="{ background: node.bg, color: node.color }">
-                {{ node.icon }}
-              </span>
-              <span class="item-name">{{ node.name }}</span>
-            </div>
-          </div>
-          </div><!-- /palette-body -->
-        </div>
+        <GraphPalette
+          :devices="runningDevices"
+          :source-nodes="sourceNodes"
+          :process-nodes="processNodes"
+          :output-nodes="outputNodes"
+          :can-edit="canEditGraphLocal"
+          @create-device="openCreateDeviceDialog"
+        />
 
         <!-- 右侧画布 -->
         <div ref="container" class="graph-container">
@@ -224,109 +101,6 @@
     </div>
   </div>
 
-  <!-- 节点编辑对话框 -->
-  <v-dialog v-model="editDialog.open" max-width="500">
-    <v-card>
-      <v-card-title class="d-flex align-center">
-        <v-icon class="mr-2" :color="editDialog.config?.color">mdi-cog</v-icon>
-        {{ frozen ? '查看节点' : '编辑节点' }}: {{ editDialog.nodeName }}
-      </v-card-title>
-      <v-divider />
-      <v-card-text class="pt-4">
-        <!-- 节点名称 -->
-        <v-text-field
-          v-model="editDialog.nodeName"
-          label="节点名称"
-          variant="outlined"
-          density="compact"
-          class="mb-4"
-          :readonly="frozen"
-          :disabled="frozen"
-        />
-
-        <!-- 动态参数表单 -->
-        <div v-for="field in editDialog.fields" :key="field.key" class="mb-3">
-          <!-- 数字输入 -->
-          <v-text-field
-            v-if="field.type === 'number'"
-            v-model.number="editDialog.params[field.key]"
-            :label="field.label"
-            :hint="field.hint"
-            type="number"
-            variant="outlined"
-            density="compact"
-            persistent-hint
-            :readonly="frozen"
-            :disabled="frozen"
-          />
-
-          <!-- 文本输入 -->
-          <v-text-field
-            v-else-if="field.type === 'text'"
-            v-model="editDialog.params[field.key]"
-            :label="field.label"
-            :hint="field.hint"
-            variant="outlined"
-            density="compact"
-            persistent-hint
-            :readonly="frozen"
-            :disabled="frozen"
-          />
-
-          <!-- 选择器 -->
-          <v-select
-            v-else-if="field.type === 'select'"
-            v-model="editDialog.params[field.key]"
-            :label="field.label"
-            :items="field.options"
-            :hint="field.hint"
-            variant="outlined"
-            density="compact"
-            persistent-hint
-            :readonly="frozen"
-            :disabled="frozen"
-          />
-
-          <!-- 滑块 -->
-          <div v-else-if="field.type === 'slider'">
-            <div class="d-flex align-center justify-space-between mb-1">
-              <span class="text-body-2">{{ field.label }}</span>
-              <span class="text-caption text-grey">{{ editDialog.params[field.key] }}</span>
-            </div>
-            <v-slider
-              v-model.number="editDialog.params[field.key]"
-              :min="field.min"
-              :max="field.max"
-              :step="field.step || 1"
-              density="compact"
-              hide-details
-              :readonly="frozen"
-              :disabled="frozen"
-            />
-            <div class="text-caption text-grey mt-1">{{ field.hint }}</div>
-          </div>
-
-          <!-- 开关 -->
-          <v-switch
-            v-else-if="field.type === 'boolean'"
-            v-model="editDialog.params[field.key]"
-            :label="field.label"
-            :hint="field.hint"
-            density="compact"
-            hide-details
-            :readonly="frozen"
-            :disabled="frozen"
-          />
-        </div>
-      </v-card-text>
-      <v-divider />
-      <v-card-actions>
-        <v-spacer />
-        <v-btn variant="text" @click="editDialog.open = false">{{ frozen ? '关闭' : '取消' }}</v-btn>
-      </v-card-actions>
-    </v-card>
-  </v-dialog>
-
   <!-- 隐藏的文件输入用于加载计算图 -->
   <input
     id="graph-file-input"
@@ -356,43 +130,6 @@
         <v-btn variant="text" @click="createDeviceDialogOpen = false">取消</v-btn>
         <v-btn color="primary" @click="createDeviceFromGraphEditor">创建并加入设备集合</v-btn>
       </v-card-actions>
-    </v-card>
-  </v-dialog>
-
-  <v-dialog v-model="pinnedNodePanel" max-width="880">
-    <v-card>
-      <v-card-title class="d-flex align-center">
-        <span>节点固定面板</span>
-        <v-spacer />
-        <v-btn icon size="small" variant="text" @click="pinnedNodePanel = false"><v-icon>mdi-close</v-icon></v-btn>
-      </v-card-title>
-      <v-divider />
-      <v-card-text>
-        <v-tabs v-model="pinnedTab" density="compact" class="mb-3">
-          <v-tab value="edit">编辑</v-tab>
-          <v-tab value="preview">预览</v-tab>
-        </v-tabs>
-        <v-window v-model="pinnedTab">
-          <v-window-item value="edit">
-            <NodeEditDialog
-              v-model="nodeEditDialogOpen"
-              :node-data="editingNode"
-              :all-nodes="allNodes"
-              :all-edges="allEdges"
-              mode="sidebar"
-              @save="handleNodeSave"
-              @bindOscilloscope="handleBindOscilloscope"
-            />
-          </v-window-item>
-          <v-window-item value="preview">
-            <Oscilloscope
-              v-if="editingNode && editingNode.type === 'OUTPUT'"
-              :initial-node-id="editingNode.id"
-            />
-            <v-alert v-else type="info" variant="tonal">当前节点暂无预览视图</v-alert>
-          </v-window-item>
-        </v-window>
-      </v-card-text>
     </v-card>
   </v-dialog>
 
@@ -495,7 +232,8 @@ import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { controlWebSocket } from '../services/controlWebSocket';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
 import { useTheme } from 'vuetify';
-import Oscilloscope from './Oscilloscope.vue';
+import GraphToolbar from './GraphToolbar.vue';
+import GraphPalette from './GraphPalette.vue';
 
 import NodeEditDialog from './nodes/NodeEditDialog.vue';
 
@@ -551,9 +289,6 @@ const newDeviceForm = ref({
   sampling_rate: 1000,
   channel_count: 8,
 });
-
-const pinnedNodePanel = ref(false);
-const pinnedTab = ref<'edit' | 'preview'>('edit');
 
 function sortValueDeep(value: unknown): unknown {
   if (Array.isArray(value)) {
@@ -687,7 +422,7 @@ function handleServerPush(payload: GraphPayload, reason: string, rev: number, pe
   }
 
   // 运行时状态变化（拓扑未变），只同步 frozen 和版本号
-  if (reason === 'freeze_changed' || reason === 'runtime') {
+  if (reason === 'freeze_changed' || reason === 'freeze' || reason === 'runtime') {
     currentRevision.value = rev;
     persistedRevision.value = persistedRev;
     setRuntimeState({ frozen: Boolean(payload.frozen) });
@@ -876,15 +611,14 @@ const {
   canRunGraph
 } = graphRuntimeStore;
 
-// 同步状态芯片
-const syncStatusChip = computed(() => {
-  switch (syncStatus.value) {
-    case 'saving': return { icon: 'mdi-cloud-upload', text: '同步中…', color: 'primary' };
-    case 'ok': return { icon: 'mdi-check-circle', text: '已同步', color: 'success' };
-    case 'error': return { icon: 'mdi-alert-circle', text: syncError.value || '同步失败，点击重试', color: 'error' };
-    default: return { icon: 'mdi-pencil', text: '编辑中', color: 'default' };
-  }
-});
+function onFreeze(value: boolean) {
+  graphRuntimeStore.setFreeze(value);
+}
+
+function saveGraph() {
+  controlWebSocket.saveGraph();
+  useToast().show('计算图已保存', 'success');
+}
 
 // 监听冻结状态变化，启动/停止自动扫描
 watch(frozen, (isFrozen) => {
@@ -1183,22 +917,10 @@ const editingNode = ref<GraphNode | null>(null);
 const allNodes = ref<GraphNode[]>([]);
 const allEdges = ref<Array<{id: string; source: string; target: string; sourcePort?: string; targetPort?: string}>>([]);
 
-// 节点编辑对话框状态
-const editDialog = ref({
-  open: false,
-  nodeId: '',
-  nodeName: '',
-  nodeType: '' as GraphNodeType | '',
-  params: {} as Record<string, unknown>,
-  config: null as { color: string; bg: string } | null,
-  fields: [] as ParamField[],
-});
-
 // 监听冻结状态变化
 let isInitializing = true;
 watch(frozen, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    
     // 初始化时不自动触发冻结操作
     if (!isInitializing) {
       applyFrozen();
@@ -1213,58 +935,6 @@ onMounted(() => {
     isInitializing = false;
   }, 1000);
 });
-
-// 保存节点编辑（旧版，保留兼容性）
-function saveNodeEdit() {
-  // 冻结状态下禁止编辑
-  if (frozen.value) {
-    return;
-  }
-  
-  const graph = graphRef.value;
-  if (!graph || !editDialog.value.nodeId) return;
-
-  const node = graph.getCellById(editDialog.value.nodeId);
-  if (!node || !node.isNode()) return;
-
-  // 更新节点数据
-  const data = node.getData() as GraphNode;
-  data.name = editDialog.value.nodeName;
-  data.params = { ...editDialog.value.params };
-  node.setData(data);
-
-  // 更新节点标签显示
-  const labelText = generateNodeLabel(data.type, data.name, data.params, editDialog.value.nodeId);
-  node.attr('label/text', labelText);
-
-  editDialog.value.open = false;
-}
-
-// 防抖保存函数（用于旧版对话框）
-let debounceSaveTimeout: number | null = null;
-const debouncedSaveNodeEdit = () => {
-  if (debounceSaveTimeout) {
-    clearTimeout(debounceSaveTimeout);
-  }
-  debounceSaveTimeout = setTimeout(() => {
-    if (editDialog.value.open && editDialog.value.nodeId && !frozen.value) {
-      saveNodeEdit();
-    }
-  }, 500); // 500ms防抖
-};
-
-// 监听编辑对话框变化，自动保存
-watch(() => editDialog.value, (newVal, oldVal) => {
-  if (!newVal.open || frozen.value) return;
-  
-  // 检查是否有实际变化
-  const hasNameChanged = newVal.nodeName !== oldVal?.nodeName;
-  const hasParamsChanged = JSON.stringify(newVal.params) !== JSON.stringify(oldVal?.params);
-  
-  if (hasNameChanged || hasParamsChanged) {
-    debouncedSaveNodeEdit();
-  }
-}, { deep: true });
 
 // 参数字段定义
 interface ParamField {
@@ -1487,46 +1157,6 @@ function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: stri
   } else {
     sessionStore.unbindOutputNode(nodeId);
   }
-}
-
-// 创建节点 HTML - 使用 X6 HTML 节点需要的特殊结构
-function createNodeHtml(type: GraphNodeType, name: string) {
-  const config = nodeTypes[type];
-  return `
-    <div class="x6-node" style="width: 100%; height: 100%;">
-      <div style="
-        width: 180px;
-        height: 70px;
-        background: rgb(var(--v-theme-surface));
-        border: 2px solid ${config.color};
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        padding: 12px;
-        gap: 12px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-        box-sizing: border-box;
-      ">
-        <div style="
-          width: 36px;
-          height: 36px;
-          background: ${config.bg};
-          color: ${config.color};
-          border-radius: 6px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          font-size: 12px;
-          font-weight: 600;
-          flex-shrink: 0;
-        ">${config.icon}</div>
-        <div style="flex: 1; min-width: 0; overflow: hidden;">
-          <div style="font-size: 14px; font-weight: 500; color: rgb(var(--v-theme-on-surface)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${name}</div>
-          <div style="font-size: 11px; color: rgba(var(--v-theme-on-surface), 0.5); margin-top: 2px;">${type}</div>
-        </div>
-      </div>
-    </div>
-  `;
 }
 
 function parseLegacyNumberList(raw: unknown): number[] {
@@ -2204,28 +1834,6 @@ function getKeyParamDisplay(type: GraphNodeType, params: Record<string, unknown>
   }
 }
 
-// 拖拽开始
-function onDragStart(e: DragEvent, type: GraphNodeType) {
-  // 检查编辑权限
-  if (!canEditGraphLocal.value) {
-    e.preventDefault();
-    useToast().show('运行中不允许添加节点', 'warning');
-    return;
-  }
-  
-  e.dataTransfer?.setData('node-type', type);
-  e.dataTransfer!.effectAllowed = 'copy';
-}
-
-function onDragStartDevice(e: DragEvent, deviceId: string) {
-  if (!canEditGraphLocal.value) {
-    e.preventDefault();
-    return;
-  }
-  e.dataTransfer?.setData('device-id', deviceId);
-  e.dataTransfer!.effectAllowed = 'copy';
-}
-
 // 从后端加载数据
 async function loadFromBackend() {
   try {
@@ -2325,26 +1933,10 @@ async function applyFrozen() {
     return;
   }
 
-
   // 更新图形编辑权限：只有在未冻结且未运行时才允许编辑
+  // WebSocket 生命周期已由 graphRuntimeStore 统一管理，此处只处理画布交互
   const canEdit = !frozen.value && !isRunning.value;
-  if (graph) {
-    setGraphInteracting(graph, canEdit);
-  }
-  
-  if (frozen.value) {
-    
-    // 如果计算图正在运行，自动建立WebSocket连接
-    if (isRunning.value) {
-      await connectWebSocket();
-    }
-  } else {
-    
-    // 如果计算图未运行，断开WebSocket连接
-    if (!isRunning.value) {
-      disconnectWebSocket();
-    }
-  }
+  setGraphInteracting(graph, canEdit);
 }
 
 function buildPayload(): GraphPayload {

@@ -3,12 +3,12 @@
     <v-card>
       <v-card-title class="d-flex align-center ga-3">
         <v-icon>mdi-console-line</v-icon>
-        串口调试输出
+        设备调试输出
         <v-spacer />
         <v-select
           v-model="selectedPort"
           :items="portOptions"
-          label="端口"
+          label="设备"
           variant="outlined"
           density="compact"
           style="max-width: 280px"
@@ -58,13 +58,15 @@
           <v-expansion-panel v-for="portOutput in outputs" :key="portOutput.port">
             <v-expansion-panel-title>
               <div class="d-flex align-center ga-2">
-                <v-icon>mdi-serial-port</v-icon>
+                <v-icon :color="driverColor(portOutput.port)">{{ driverIcon(portOutput.port) }}</v-icon>
                 <strong>{{ portOutput.port }}</strong>
+                <v-chip size="small" color="secondary">{{ driverLabel(portOutput.port) }}</v-chip>
                 <v-chip size="small" color="primary">{{ portOutput.count }} 帧</v-chip>
                 <v-chip size="small" color="deep-purple">{{ portOutput.raw_input_count || 0 }} 原始块</v-chip>
               </div>
             </v-expansion-panel-title>
             <v-expansion-panel-text>
+              <div class="text-subtitle-2 mb-1">数据帧</div>
               <v-table density="compact">
                 <thead>
                   <tr>
@@ -79,32 +81,37 @@
                     <td>{{ sample.channels.slice(0, 4).join(', ') }}</td>
                     <td class="mono">{{ (sample.raw_hex || '').slice(0, 64) }}</td>
                   </tr>
+                  <tr v-if="portOutput.samples.length === 0">
+                    <td colspan="3" class="text-center text-grey">暂无数据帧</td>
+                  </tr>
                 </tbody>
               </v-table>
 
-              <div class="mt-4 text-subtitle-2">原始输入（串口读取块）</div>
-              <v-table density="compact" class="mt-2">
-                <thead>
-                  <tr>
-                    <th>时间</th>
-                    <th>RAW HEX(前128)</th>
-                    <th>解码文本(前128)</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(raw, rIdx) in (portOutput.raw_inputs || [])" :key="`${portOutput.port}-raw-${rIdx}-${raw.timestamp}`">
-                    <td>{{ formatTs(raw.timestamp) }}</td>
-                    <td class="mono">{{ (raw.raw_hex || '').slice(0, 128) }}</td>
-                    <td class="mono">{{ decodeRawText(raw.raw_hex || '').slice(0, 128) }}</td>
-                  </tr>
-                </tbody>
-              </v-table>
+              <template v-if="(portOutput.raw_inputs || []).length > 0">
+                <div class="mt-4 text-subtitle-2">原始输入（驱动读取块）</div>
+                <v-table density="compact" class="mt-2">
+                  <thead>
+                    <tr>
+                      <th>时间</th>
+                      <th>RAW HEX(前128)</th>
+                      <th>解码文本(前128)</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="(raw, rIdx) in (portOutput.raw_inputs || [])" :key="`${portOutput.port}-raw-${rIdx}-${raw.timestamp}`">
+                      <td>{{ formatTs(raw.timestamp) }}</td>
+                      <td class="mono">{{ (raw.raw_hex || '').slice(0, 128) }}</td>
+                      <td class="mono">{{ decodeRawText(raw.raw_hex || '').slice(0, 128) }}</td>
+                    </tr>
+                  </tbody>
+                </v-table>
+              </template>
             </v-expansion-panel-text>
           </v-expansion-panel>
         </v-expansion-panels>
 
         <v-alert v-if="outputs.length === 0" type="info" variant="tonal" class="mt-3">
-          当前没有可显示的串口输出。请先连接设备并开始采集。
+          当前没有可显示的调试输出。请先连接设备并开始采集。
         </v-alert>
       </v-card-text>
     </v-card>
@@ -131,17 +138,39 @@ const encodingOptions = [
   { title: 'Latin-1', value: 'latin1' },
 ]
 
+// device_id → driver_type 映射
+const deviceDriverMap = computed(() => {
+  const m = new Map<string, string>()
+  realDeviceApi.devices.value.forEach(d => {
+    m.set(d.device_id, d.type)
+  })
+  return m
+})
+
 const portOptions = computed(() => {
   const ports = new Set<string>()
-  // 从设备列表中获取已连接的真实设备端口
   realDeviceApi.devices.value.forEach(device => {
-    if (device.type === 'wearable_eeg' && device.config.connected && device.config.port) {
-      ports.add(device.config.port)
+    if (device.config.connected && device.device_id) {
+      ports.add(device.device_id)
     }
   })
   outputs.value.forEach(p => ports.add(p.port))
-  return [{ title: '全部端口', value: null as unknown as string }, ...Array.from(ports).map(p => ({ title: p, value: p }))]
+  return [{ title: '全部设备', value: null as unknown as string }, ...Array.from(ports).map(p => ({ title: p, value: p }))]
 })
+
+const driverLabel = (port: string) => deviceDriverMap.value.get(port) || 'unknown'
+const driverIcon = (port: string) => {
+  const t = deviceDriverMap.value.get(port)
+  if (t === 'simulated') return 'mdi-ghost'
+  if (t === 'wearable_eeg') return 'mdi-serial-port'
+  return 'mdi-chip'
+}
+const driverColor = (port: string) => {
+  const t = deviceDriverMap.value.get(port)
+  if (t === 'simulated') return 'purple'
+  if (t === 'wearable_eeg') return 'blue'
+  return 'grey'
+}
 
 const formatTs = (ts: number) => new Date(ts * 1000).toLocaleTimeString()
 

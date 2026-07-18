@@ -16,6 +16,7 @@ urlpatterns = [
     
     # 统一设备管理API（唯一数据源）
     path('real-devices/', real_device_views.real_devices),
+    path('real-devices/drivers/', real_device_views.list_drivers),
     path('real-devices/scan-ports/', real_device_views.scan_ports),
     path('real-devices/connect/', real_device_views.connect_device),
     path('real-devices/status/', real_device_views.device_status),

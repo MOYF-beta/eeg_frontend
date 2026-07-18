@@ -378,7 +378,7 @@ def _delete_device(request, device_id):
 
 @csrf_exempt
 def debug_output(request):
-    """获取设备调试输出（最近数据帧）
+    """获取设备调试输出（最近数据帧 + 原始输入块）
 
     GET /api/real-devices/debug-output/?port=/dev/ttyUSB0&count=200
     """
@@ -391,24 +391,34 @@ def debug_output(request):
         count = int(request.GET.get('count', '200'))
         count = max(1, min(2000, count))
 
-        if port:
-            device_id = _extract_device_id(port)
+        def _build_port_output(device_id: str) -> dict:
             frames = manager.read_data(device_id, count=count)
+            raw_inputs = manager.read_raw_inputs(device_id, count=count)
             samples = [
-                {'seq': f.seq, 'timestamp': f.timestamp, 'channels': f.channels, 'port': device_id}
+                {
+                    'seq': f.seq,
+                    'timestamp': f.timestamp,
+                    'channels': f.channels,
+                    'port': device_id,
+                    'raw_hex': f.extra.get('raw_hex', ''),
+                }
                 for f in frames
             ]
+            return {
+                'port': device_id,
+                'samples': samples,
+                'count': len(samples),
+                'raw_inputs': raw_inputs,
+                'raw_input_count': len(raw_inputs),
+            }
+
+        if port:
+            device_id = _extract_device_id(port)
             return JsonResponse({
                 'ok': True,
                 'data': {
-                    'ports': [{
-                        'port': device_id,
-                        'samples': samples,
-                        'count': len(samples),
-                        'raw_inputs': [],
-                        'raw_input_count': 0,
-                    }],
-                    'total_samples': len(samples),
+                    'ports': [_build_port_output(device_id)],
+                    'total_samples': len(manager.read_data(device_id, count=0)),
                 }
             })
         else:
@@ -416,25 +426,33 @@ def debug_output(request):
             result_ports = []
             total = 0
             for meta in devices:
-                frames = manager.read_data(meta.device_id, count=count)
-                samples = [
-                    {'seq': f.seq, 'timestamp': f.timestamp, 'channels': f.channels, 'port': meta.device_id}
-                    for f in frames
-                ]
-                total += len(samples)
-                result_ports.append({
-                    'port': meta.device_id,
-                    'samples': samples,
-                    'count': len(samples),
-                    'raw_inputs': [],
-                    'raw_input_count': 0,
-                })
+                po = _build_port_output(meta.device_id)
+                total += po['count']
+                result_ports.append(po)
             return JsonResponse({
                 'ok': True,
                 'data': {'ports': result_ports, 'total_samples': total}
             })
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to get debug output: {str(e)}'}, status=500)
+
+
+@csrf_exempt
+def list_drivers(request):
+    """列出所有已加载驱动及其元信息。
+
+    GET /api/real-devices/drivers/
+    """
+    if request.method != 'GET':
+        return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
+
+    try:
+        manager = get_device_manager()
+        manager.load_all()
+        infos = manager.get_driver_infos()
+        return JsonResponse({'ok': True, 'data': {'drivers': infos, 'count': len(infos)}})
+    except Exception as e:
+        return JsonResponse({'ok': False, 'error': f'Failed to list drivers: {str(e)}'}, status=500)
 
 
 # ====================================================================== #

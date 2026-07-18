@@ -110,6 +110,11 @@ class _BCIAsyncProtocol(asyncio.Protocol):
             self._raw_dump_count += 1
             logger.debug('[BCI] RAW #%d  %d bytes  hex=%s', self._raw_dump_count, len(data), data[:60].hex())
 
+        self.conn.raw_input_queue.append({
+            'timestamp': time.time(),
+            'raw_hex': data.hex(),
+            'raw_text': data.decode('latin-1', errors='replace'),
+        })
         self.buffer += data
         while FRAME_TAIL in self.buffer:
             line, self.buffer = self.buffer.split(FRAME_TAIL, 1)
@@ -348,6 +353,14 @@ class Ch340EegDriver(DeviceDriver):
         with self._lock:
             conn = self._connections.get(device_id)
             return len(conn.data_queue) if conn else 0
+
+    def read_raw_inputs(self, device_id: str, count: int = 100) -> List[Dict[str, Any]]:
+        with self._lock:
+            conn = self._connections.get(device_id)
+            if not conn:
+                return []
+            items = list(conn.raw_input_queue)
+        return items[-max(1, int(count)):]
 
     # ------------------------------------------------------------------ #
     #  异常处理

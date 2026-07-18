@@ -23,7 +23,18 @@
 
       <!-- 计算图未冻结提示 -->
       <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
-        计算图未冻结。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"冻结"按钮启动数据流。
+        <span>计算图未冻结。冻结后即可启动数据流。</span>
+        <template #append>
+          <v-btn
+            size="small"
+            color="primary"
+            variant="flat"
+            class="ml-2"
+            @click="freezeGraph"
+          >
+            立即冻结
+          </v-btn>
+        </template>
       </v-alert>
 
       <div class="osc-root">
@@ -245,6 +256,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { useTheme } from 'vuetify';
 import { sessionStore } from '../services/sessionStore';
+import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
 import type { GraphNode } from '../services/graph';
@@ -373,6 +385,9 @@ let statsPrevRunning: RunningChannelStats = createEmptyRunningStats();
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
 const isGraphFrozen = ref(false);
+const freezeGraph = () => {
+  graphRuntimeStore.setFreeze(true);
+};
 const packetCount = ref(0);
 const processingDelayMs = ref(0);
 const isNonRealtime = ref(false);

@@ -129,6 +129,7 @@ const isRecording = ref(false);
 const navItems = [
   { title: '计算图工作台', path: '/cpgraph', icon: 'mdi-graph-outline' },
   { title: '可视化', path: '/visualization', icon: 'mdi-chart-line' },
+  { title: '设备管理', path: '/devices', icon: 'mdi-devices' },
   { title: '开发目录', path: '/dev', icon: 'mdi-folder-wrench' },
 ];
 

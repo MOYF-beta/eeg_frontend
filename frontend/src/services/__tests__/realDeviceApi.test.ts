@@ -83,9 +83,46 @@ describe('realDeviceApi', () => {
   });
 
   describe('getDebugOutput', () => {
-    it('应返回调试数据', async () => {
-      mockOk({ device_id: 'sim_alpha', frames: [{ seq: 1, channels: [1.0] }] });
-      expect(await realDeviceApi.getDebugOutput('sim_alpha')).not.toBeNull();
+    it('应返回调试数据（含 raw_inputs）', async () => {
+      mockOk({
+        ports: [{
+          port: 'sim_alpha',
+          samples: [{ seq: 1, timestamp: 1.0, channels: [1.0], port: 'sim_alpha', raw_hex: '' }],
+          count: 1,
+          raw_inputs: [{ timestamp: 1.0, raw_hex: 'aabb', raw_text: '' }],
+          raw_input_count: 1,
+        }],
+        total_samples: 1,
+      });
+      const out = await realDeviceApi.getDebugOutput('sim_alpha');
+      expect(out.ports).toHaveLength(1);
+      expect(out.ports[0].raw_input_count).toBe(1);
+      expect(out.ports[0].raw_inputs![0].raw_hex).toBe('aabb');
+    });
+  });
+
+  describe('getDrivers', () => {
+    it('应返回已加载驱动列表并更新 reactive state', async () => {
+      const drivers = [
+        { driver_type: 'wearable_eeg', driver_name: 'CH340', driver_description: '', device_count: 0, module: 'm', class_name: 'Ch340EegDriver' },
+        { driver_type: 'simulated', driver_name: '模拟', driver_description: 'd', device_count: 5, module: 'm2', class_name: 'SimulatorDriver' },
+      ];
+      mockOk({ drivers, count: 2 });
+      const result = await realDeviceApi.getDrivers();
+      expect(result).toHaveLength(2);
+      expect(result[0].driver_type).toBe('wearable_eeg');
+      expect(realDeviceApi.drivers.value).toHaveLength(2);
+    });
+    it('网络错误应返回空列表', async () => {
+      (globalThis.fetch as any).mockRejectedValue(new Error('err'));
+      expect(await realDeviceApi.getDrivers()).toEqual([]);
+    });
+    it('应请求正确端点', async () => {
+      mockOk({ drivers: [], count: 0 });
+      await realDeviceApi.getDrivers();
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('/api/real-devices/drivers/'),
+      );
     });
   });
 

@@ -4,7 +4,7 @@
       <h1 class="text-h4 mb-4">开发工具目录</h1>
       <v-list class="border rounded" lines="two">
         <v-list-item to="/devices" prepend-icon="mdi-devices" title="设备管理" subtitle="模拟与真实设备管理" />
-        <v-list-item to="/dev/serial-debug" prepend-icon="mdi-console-line" title="串口调试" subtitle="真实设备串口调试与状态诊断" />
+        <v-list-item to="/dev/serial-debug" prepend-icon="mdi-console-line" title="设备调试" subtitle="任意驱动的原始输出与数据帧诊断" />
       </v-list>
     </v-container>
   </ViewContainer>

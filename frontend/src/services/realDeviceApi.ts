@@ -13,6 +13,19 @@ export interface SerialPort {
   hwid: string
   is_ch340: boolean
   is_available: boolean
+  driver_type?: string
+  channel_count?: number
+  sample_rate?: number
+}
+
+// 驱动信息
+export interface DriverInfo {
+  driver_type: string
+  driver_name: string
+  driver_description: string
+  device_count: number
+  module: string
+  class_name: string
 }
 
 // 设备连接状态
@@ -29,8 +42,9 @@ export interface DeviceConnectionStatus {
 // 统一设备信息接口
 export interface DeviceInfo {
   id: string
+  device_id: string                 // 驱动层 device_id（如端口号、'sim_alpha'）
   name: string
-  type: 'simulated' | 'wearable_eeg'
+  type: string                      // driver_type，如 'wearable_eeg' / 'simulated'
   sampling_rate: number
   channel_count: number
   config: {
@@ -100,6 +114,7 @@ class RealDeviceApi {
   // 状态管理 - 统一设备列表
   public ports = ref<SerialPort[]>([])
   public devices = ref<DeviceInfo[]>([])
+  public drivers = ref<DriverInfo[]>([])
   public isLoading = ref(false)
   public error = ref<string | null>(null)
 
@@ -365,6 +380,28 @@ class RealDeviceApi {
       
     } catch (err) {
       console.error('Failed to get device status:', err)
+      return []
+    }
+  }
+
+  /**
+   * 获取已加载驱动列表（同步更新 reactive state）
+   */
+  async getDrivers(): Promise<DriverInfo[]> {
+    try {
+      const response = await fetch(`${this.baseUrl}/drivers/`)
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`)
+      }
+      const result: ApiResponse<{ drivers: DriverInfo[]; count: number }> = await response.json()
+      if (!result.ok) {
+        throw new Error(result.error || 'Failed to fetch drivers')
+      }
+      this.drivers.value = result.data!.drivers
+      return this.drivers.value
+    } catch (err) {
+      this.error.value = err instanceof Error ? err.message : 'Unknown error'
+      console.error('Failed to get drivers:', err)
       return []
     }
   }

@@ -1,38 +1,33 @@
 {
   "nodes": [
     {
-      "id": "e2e-source-1",
+      "id": "ws-test-src",
       "type": "SOURCE",
-      "name": "E2E 数据源",
-      "x": 120,
-      "y": 140,
-      "deviceId": "sim_alpha",
+      "name": "WS测试源",
+      "x": 100,
+      "y": 100,
       "params": {
-        "sourceMode": "live",
         "sampleRate": 250,
-        "channels": 4,
-        "deviceId": "sim_alpha"
+        "channels": 4
       }
     },
     {
-      "id": "e2e-output-1",
+      "id": "ws-test-out",
       "type": "OUTPUT",
-      "name": "E2E 示波器",
-      "x": 460,
-      "y": 140,
+      "name": "WS测试输出",
+      "x": 400,
+      "y": 100,
       "params": {
-        "timeWindow": 5,
-        "mode": "scroll",
-        "saveEnabled": false
+        "timeWindow": 5
       }
     }
   ],
   "edges": [
     {
-      "id": "e2e-edge-1",
-      "source": "e2e-source-1",
+      "id": "ws-test-edge",
+      "source": "ws-test-src",
       "sourcePort": "out",
-      "target": "e2e-output-1",
+      "target": "ws-test-out",
       "targetPort": "in"
     }
   ],

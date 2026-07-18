@@ -93,7 +93,7 @@ html, body {
   overflow: auto; /* 普通页面启用滚动 */
 }
 
-/* cpgraph: 精确占据剩余高度，不可滚动 */
+/* 计算图编辑器：精确占据剩余视口高度，内部由 GraphEditor 自行布局 */
 .full-height-content {
   height: calc(100vh - 32px) !important;
   overflow: hidden !important;
@@ -105,22 +105,7 @@ html, body {
   overflow: hidden;
 }
 
-/* 让 cpgraph 路由下 flex 容器链正确继承高度 */
-.full-height-content .view-container,
-.full-height-content .fullscreen-graph-editor,
-.full-height-content .graph-content,
-.full-height-content .graph-wrapper {
-  height: 100% !important;
-  min-height: 0 !important;
-}
-
-.full-height-content .palette,
-.full-height-content .graph-container,
-.full-height-content .sidebar {
-  height: 100% !important;
-}
-
-/* 确保所有视图组件都能充分利用空间 */
+/* 通用视图容器 */
 .view-container {
   flex: 1;
   display: flex;

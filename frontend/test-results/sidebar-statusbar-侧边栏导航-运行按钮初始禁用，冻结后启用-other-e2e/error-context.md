@@ -4,170 +4,212 @@
 - generic [active] [ref=e1]:
   - generic [ref=e4]:
     - navigation [ref=e5]:
-      - generic [ref=e6]:
-        - list [ref=e7]:
-          - link [ref=e8] [cursor=pointer]:
-            - /url: /cpgraph
-            - generic [ref=e10]: 󱁊
+      - generic [ref=e7]:
+        - generic "EEG 工作台" [ref=e8]:
+          - generic [ref=e9]: 󰧑
+        - list [ref=e10]:
           - link [ref=e11] [cursor=pointer]:
-            - /url: /visualization
-            - generic [ref=e13]: 󰄪
+            - /url: /cpgraph
+            - generic [ref=e13]: 󱁊
           - link [ref=e14] [cursor=pointer]:
+            - /url: /visualization
+            - generic [ref=e16]: 󰄪
+          - link [ref=e17] [cursor=pointer]:
+            - /url: /devices
+            - generic [ref=e19]: 󰾰
+          - link [ref=e20] [cursor=pointer]:
             - /url: /dev
-            - generic [ref=e16]: 󱧼
-        - generic [ref=e17]:
-          - separator [ref=e18]
-          - generic [ref=e19]:
-            - generic [ref=e20] [cursor=pointer]:
-              - generic [ref=e22]: 󰐊
-              - generic [ref=e24]: 运行
+            - generic [ref=e22]: 󱧼
+        - generic [ref=e23]:
+          - separator [ref=e24]
+          - generic [ref=e25]:
+            - generic [ref=e26] [cursor=pointer]:
+              - generic [ref=e28]: 󰐊
+              - generic [ref=e30]: 运行
             - generic:
               - generic:
                 - generic: 󰻂
               - generic:
                 - generic: 录制
-    - main [ref=e25]:
-      - generic [ref=e28]:
-        - generic [ref=e30]:
-          - generic [ref=e32]: 计算图编辑器
-          - generic [ref=e33]:
-            - generic [ref=e35] [cursor=pointer]:
-              - generic [ref=e36]: 󰏫
+        - generic [ref=e32]:
+          - separator [ref=e33]
+          - generic [ref=e34] [cursor=pointer]:
+            - generic [ref=e36]: 󰖔
+            - generic [ref=e38]: 切换到深色模式
+    - main [ref=e39]:
+      - generic [ref=e42]:
+        - generic [ref=e44]:
+          - generic [ref=e46]: 计算图编辑器
+          - generic [ref=e47]:
+            - generic [ref=e50]:
+              - checkbox "编辑中" [ref=e54] [cursor=pointer]
+              - generic [ref=e55] [cursor=pointer]: 编辑中
+            - generic [ref=e57] [cursor=pointer]:
+              - generic [ref=e58]: 󰏫
               - text: 编辑中
-            - button "导出" [ref=e37] [cursor=pointer]:
-              - generic [ref=e38]: 导出
-            - generic [ref=e39]:
-              - generic [ref=e40]: ● 输入
-              - generic [ref=e41]: ● 输出
-            - button "加载" [ref=e42] [cursor=pointer]:
-              - generic [ref=e43]: 加载
-            - button "清空" [ref=e44] [cursor=pointer]:
-              - generic [ref=e45]: 清空
-            - separator [ref=e46]
-            - button "设备管理" [ref=e47] [cursor=pointer]:
-              - generic [ref=e48]:
-                - generic [ref=e49]: 󰾰
-                - text: 设备管理
-        - generic [ref=e51]:
-          - generic [ref=e52]:
-            - generic [ref=e53]: 节点库
-            - generic [ref=e54]:
-              - generic [ref=e55]:
-                - generic [ref=e56]:
-                  - generic [ref=e57]: 设备集合
-                  - button "新建设备" [ref=e58] [cursor=pointer]:
-                    - generic [ref=e59]: 新建设备
-                - generic "拖拽 simulated:sim_alpha 作为数据源节点" [ref=e60]:
-                  - generic [ref=e61]: DEV
-                  - generic [ref=e62]: simulated:sim_alpha
-                - generic "拖拽 simulated:sim_beta 作为数据源节点" [ref=e63]:
-                  - generic [ref=e64]: DEV
-                  - generic [ref=e65]: simulated:sim_beta
-                - generic "拖拽 simulated:sim_theta 作为数据源节点" [ref=e66]:
-                  - generic [ref=e67]: DEV
-                  - generic [ref=e68]: simulated:sim_theta
-                - generic "拖拽 simulated:sim_gamma 作为数据源节点" [ref=e69]:
-                  - generic [ref=e70]: DEV
-                  - generic [ref=e71]: simulated:sim_gamma
-                - generic "拖拽 simulated:sim_multi 作为数据源节点" [ref=e72]:
-                  - generic [ref=e73]: DEV
-                  - generic [ref=e74]: simulated:sim_multi
-              - generic [ref=e75]:
-                - generic [ref=e76]: 数据回放
-                - generic "添加 文件回放 节点" [ref=e77]:
-                  - generic [ref=e78]: RPL
-                  - generic [ref=e79]: 文件回放
-              - generic [ref=e80]:
-                - generic [ref=e81]: 处理节点
-                - generic "添加 滤波器 节点" [ref=e82]:
-                  - generic [ref=e83]: FIL
-                  - generic [ref=e84]: 滤波器
-                - generic "添加 降采样 节点" [ref=e85]:
-                  - generic [ref=e86]: DS
-                  - generic [ref=e87]: 降采样
-                - generic "添加 升采样 节点" [ref=e88]:
-                  - generic [ref=e89]: US
-                  - generic [ref=e90]: 升采样
-                - generic "添加 求和器 节点" [ref=e91]:
-                  - generic [ref=e92]: SUM
-                  - generic [ref=e93]: 求和器
-                - generic "添加 平均器 节点" [ref=e94]:
-                  - generic [ref=e95]: AVG
-                  - generic [ref=e96]: 平均器
-                - generic "添加 分离器 节点" [ref=e97]:
-                  - generic [ref=e98]: SPT
-                  - generic [ref=e99]: 分离器
-                - generic "添加 合并器 节点" [ref=e100]:
-                  - generic [ref=e101]: MRG
-                  - generic [ref=e102]: 合并器
-                - generic "添加 Python函数 节点" [ref=e103]:
-                  - generic [ref=e104]: PY
-                  - generic [ref=e105]: Python函数
-                - generic "添加 卷积节点 节点" [ref=e106]:
-                  - generic [ref=e107]: CNV
-                  - generic [ref=e108]: 卷积节点
-              - generic [ref=e109]:
-                - generic [ref=e110]: 显示与保存
-                - generic "添加 显示与录制 节点" [ref=e111]:
-                  - generic [ref=e112]: OUT
-                  - generic [ref=e113]: 显示与录制
-          - img [ref=e117]:
-            - generic [ref=e119]:
-              - generic [ref=e122]: E2E 数据源250Hz 4ch
-              - generic [ref=e126]: E2E 示波器FFT512
-              - generic [ref=e130]:
+            - separator [ref=e59]
+            - button "保存" [ref=e60] [cursor=pointer]:
+              - generic [ref=e62]: 󰆓
+              - generic [ref=e63]: 保存
+            - button "导出" [ref=e64] [cursor=pointer]:
+              - generic [ref=e66]: 󰇚
+              - generic [ref=e67]: 导出
+            - button "加载" [ref=e68] [cursor=pointer]:
+              - generic [ref=e70]: 󰕒
+              - generic [ref=e71]: 加载
+            - button "清空" [ref=e72] [cursor=pointer]:
+              - generic [ref=e74]: 󰇾
+              - generic [ref=e75]: 清空
+            - separator [ref=e76]
+            - generic [ref=e77]:
+              - generic [ref=e78]: ● 输入
+              - generic [ref=e79]: ● 输出
+            - button "设备管理" [ref=e80] [cursor=pointer]:
+              - generic [ref=e82]: 󰾰
+              - generic [ref=e83]: 设备管理
+        - generic [ref=e85]:
+          - generic [ref=e86]:
+            - generic [ref=e87]: 节点库
+            - generic [ref=e88]:
+              - generic [ref=e91]:
+                - generic [ref=e93]: 󰍉
+                - generic [ref=e94]:
+                  - generic: 搜索节点或设备
+                  - textbox "搜索节点或设备" [ref=e95]
+                - text: 󰅙
+              - generic [ref=e96]:
+                - generic [ref=e97]:
+                  - button "设备集合 新建设备" [expanded] [ref=e98] [cursor=pointer]:
+                    - generic [ref=e100]: 设备集合
+                    - button "新建设备" [ref=e101]:
+                      - generic [ref=e102]: 新建设备
+                    - generic [ref=e104]: 󰅃
+                  - generic [ref=e106]:
+                    - generic "拖拽 simulated:sim_alpha 作为数据源节点" [ref=e107]:
+                      - generic [ref=e108]: DEV
+                      - generic [ref=e109]: simulated:sim_alpha
+                    - generic "拖拽 simulated:sim_beta 作为数据源节点" [ref=e110]:
+                      - generic [ref=e111]: DEV
+                      - generic [ref=e112]: simulated:sim_beta
+                    - generic "拖拽 simulated:sim_theta 作为数据源节点" [ref=e113]:
+                      - generic [ref=e114]: DEV
+                      - generic [ref=e115]: simulated:sim_theta
+                    - generic "拖拽 simulated:sim_gamma 作为数据源节点" [ref=e116]:
+                      - generic [ref=e117]: DEV
+                      - generic [ref=e118]: simulated:sim_gamma
+                    - generic "拖拽 simulated:sim_multi 作为数据源节点" [ref=e119]:
+                      - generic [ref=e120]: DEV
+                      - generic [ref=e121]: simulated:sim_multi
+                - generic [ref=e122]:
+                  - button "数据回放" [expanded] [ref=e123] [cursor=pointer]:
+                    - text: 数据回放
+                    - generic [ref=e126]: 󰅃
+                  - generic "文件回放 — 回放 saved_data 中已录制的 CSV 数据" [ref=e129]:
+                    - generic [ref=e130]: RPL
+                    - generic [ref=e131]: 文件回放
+                - generic [ref=e132]:
+                  - button "处理节点" [expanded] [ref=e133] [cursor=pointer]:
+                    - text: 处理节点
+                    - generic [ref=e136]: 󰅃
+                  - generic [ref=e138]:
+                    - generic "滤波器 — 按频率筛选信号：去漂移、去工频干扰或提取脑电节律" [ref=e139]:
+                      - generic [ref=e140]: FIL
+                      - generic [ref=e141]: 滤波器
+                    - generic "降采样 — 降低采样率，减小数据量" [ref=e142]:
+                      - generic [ref=e143]: DS
+                      - generic [ref=e144]: 降采样
+                    - generic "升采样 — 插值提高采样率" [ref=e145]:
+                      - generic [ref=e146]: US
+                      - generic [ref=e147]: 升采样
+                    - generic "求和器 — 多路信号按权重逐通道相加" [ref=e148]:
+                      - generic [ref=e149]: SUM
+                      - generic [ref=e150]: 求和器
+                    - generic "平均器 — 多路信号按权重逐通道平均" [ref=e151]:
+                      - generic [ref=e152]: AVG
+                      - generic [ref=e153]: 平均器
+                    - generic "分离器 — 把部分通道拆分成独立输出（如按脑区）" [ref=e154]:
+                      - generic [ref=e155]: SPT
+                      - generic [ref=e156]: 分离器
+                    - generic "合并器 — 把多路信号合并为一路多通道信号" [ref=e157]:
+                      - generic [ref=e158]: MRG
+                      - generic [ref=e159]: 合并器
+                    - generic "Python函数 — 用 Python 编写自定义处理逻辑" [ref=e160]:
+                      - generic [ref=e161]: PY
+                      - generic [ref=e162]: Python函数
+                    - generic "卷积节点 — 自定义卷积核做滑动滤波（如平滑）" [ref=e163]:
+                      - generic [ref=e164]: CNV
+                      - generic [ref=e165]: 卷积节点
+                - generic [ref=e166]:
+                  - button "显示与保存" [expanded] [ref=e167] [cursor=pointer]:
+                    - text: 显示与保存
+                    - generic [ref=e170]: 󰅃
+                  - generic "显示与录制 — 连接示波器查看波形/频谱，并可录制到文件" [ref=e173]:
+                    - generic [ref=e174]: OUT
+                    - generic [ref=e175]: 显示与录制
+          - img [ref=e179]:
+            - generic [ref=e181]:
+              - generic [ref=e184]: 旅程数据源250Hz 4ch
+              - generic [ref=e188]: 旅程示波器FFT512 📝
+              - generic [ref=e192]:
                 - generic: 4ch250 sps
-          - button [ref=e134] [cursor=pointer]:
-            - generic [ref=e136]: 󰅁
-    - banner [ref=e137]:
-      - generic [ref=e138]:
-        - generic [ref=e139]:
-          - generic [ref=e140]: 管道
-          - generic [ref=e141]: "2"
-          - generic [ref=e142]: µs
-        - separator [ref=e143]
-        - generic [ref=e144]:
-          - generic [ref=e145]: 源
-          - generic [ref=e146]: 0µs
-        - generic [ref=e147]:
-          - generic [ref=e148]: 节点
-          - generic [ref=e149]: 0µs
-        - generic [ref=e150]:
-          - generic [ref=e151]: WS
-          - generic [ref=e152]: 2µs
-        - separator [ref=e153]
-        - generic [ref=e154]:
-          - generic [ref=e155]: 吞吐
-          - generic [ref=e156]: "41.3"
-          - generic [ref=e157]: /s
-        - separator [ref=e158]
-        - generic [ref=e159]:
-          - generic [ref=e160]: CPU
-          - generic [ref=e161]: 11.4%
-        - generic [ref=e162]:
-          - generic [ref=e163]: RAM
-          - generic [ref=e164]: 12821.5M
-          - generic [ref=e165]: /128614.7M
-        - separator [ref=e166]
-        - generic [ref=e167]:
-          - generic [ref=e168]: 磁盘
-          - generic [ref=e169]: 77.7%
-          - generic [ref=e170]: 738.3/952.9G
-        - generic [ref=e171]:
-          - generic [ref=e172]: 线程
-          - generic [ref=e173]: "22"
-        - separator [ref=e174]
-        - generic [ref=e175]:
-          - generic [ref=e176]: 进程
-          - generic [ref=e177]: 102.8M
-        - separator [ref=e178]
-        - generic [ref=e179]:
-          - generic [ref=e180]: 󱁊
-          - generic [ref=e181]: —
-        - generic [ref=e182]:
-          - generic [ref=e183]: 󰝥
-          - generic [ref=e184]: 断开
+          - button [ref=e196] [cursor=pointer]:
+            - generic [ref=e198]: 󰅁
+    - banner [ref=e199]:
+      - generic [ref=e200]:
+        - generic [ref=e201]:
+          - generic [ref=e202]: 管道
+          - generic [ref=e203]: "2"
+          - generic [ref=e204]: µs
+        - separator [ref=e205]
+        - generic [ref=e206]:
+          - generic [ref=e207]: 源
+          - generic [ref=e208]: 0µs
+        - generic [ref=e209]:
+          - generic [ref=e210]: 节点
+          - generic [ref=e211]: 0µs
+        - generic [ref=e212]:
+          - generic [ref=e213]: WS
+          - generic [ref=e214]: 2µs
+        - separator [ref=e215]
+        - generic [ref=e216]:
+          - generic [ref=e217]: 吞吐
+          - generic [ref=e218]: "0.2"
+          - generic [ref=e219]: /s
+        - separator [ref=e220]
+        - generic [ref=e221]:
+          - generic [ref=e222]: CPU
+          - generic [ref=e223]: 6.6%
+        - generic [ref=e224]:
+          - generic [ref=e225]: RAM
+          - generic [ref=e226]: 14048.4M
+          - generic [ref=e227]: /128614.7M
+        - separator [ref=e228]
+        - generic [ref=e229]:
+          - generic [ref=e230]: 磁盘
+          - generic [ref=e231]: 77.9%
+          - generic [ref=e232]: 740.2/952.9G
+        - generic [ref=e233]:
+          - generic [ref=e234]: 线程
+          - generic [ref=e235]: "23"
+        - separator [ref=e236]
+        - generic [ref=e237]:
+          - generic [ref=e238]: 进程
+          - generic [ref=e239]: 113.4M
+        - separator [ref=e240]
+        - generic [ref=e241]:
+          - generic [ref=e242]: 󱁊
+          - generic [ref=e243]: —
+        - generic [ref=e244]:
+          - generic [ref=e245]: 󰝥
+          - generic [ref=e246]: 断开
   - generic:
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
+    - tooltip
     - tooltip
     - tooltip
     - tooltip

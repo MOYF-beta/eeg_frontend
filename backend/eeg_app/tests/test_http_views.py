@@ -275,3 +275,41 @@ class TestDebugOutputEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert 'data' in body
+
+    def test_debug_output_port_entries_have_raw_fields(self, client):
+        resp = client.get('/api/real-devices/debug-output/?count=5')
+        body = resp.json()
+        assert body['ok'] is True
+        for port in body['data']['ports']:
+            assert 'samples' in port
+            assert 'count' in port
+            assert 'raw_inputs' in port
+            assert 'raw_input_count' in port
+            assert isinstance(port['raw_inputs'], list)
+            assert port['raw_input_count'] == len(port['raw_inputs'])
+
+
+class TestListDriversEndpoint:
+    def test_list_drivers_returns_structure(self, client):
+        resp = client.get('/api/real-devices/drivers/')
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body['ok'] is True
+        assert 'drivers' in body['data']
+        assert 'count' in body['data']
+        assert body['data']['count'] == len(body['data']['drivers'])
+
+    def test_list_drivers_entries_have_required_fields(self, client):
+        resp = client.get('/api/real-devices/drivers/')
+        body = resp.json()
+        for drv in body['data']['drivers']:
+            for key in ('driver_type', 'driver_name', 'driver_description',
+                        'device_count', 'module', 'class_name'):
+                assert key in drv, f'missing key: {key}'
+
+    def test_list_drivers_includes_builtin_drivers(self, client):
+        resp = client.get('/api/real-devices/drivers/')
+        body = resp.json()
+        types = {d['driver_type'] for d in body['data']['drivers']}
+        assert 'wearable_eeg' in types
+        assert 'simulated' in types

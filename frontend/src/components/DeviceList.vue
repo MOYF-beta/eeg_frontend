@@ -149,7 +149,9 @@
           density="compact"
           variant="outlined"
           class="mb-3"
-          :disabled="!canEditDevices || editingDevice"
+          :disabled="!canEditDevices || !!editingDevice"
+          :hint="editingDevice ? '设备类型由驱动决定，不可修改' : ''"
+          persistent-hint
         />
         <v-text-field
           v-model="deviceForm.address"
@@ -158,7 +160,9 @@
           variant="outlined"
           class="mb-3"
           placeholder="如: COM3 或 192.168.1.100:8080"
-          :disabled="!canEditDevices"
+          :disabled="!canEditDevices || !!editingDevice"
+          :hint="editingDevice ? '地址由驱动发现时确定，不可修改' : ''"
+          persistent-hint
         />
         <v-text-field
           v-model.number="deviceForm.sampleRate"
@@ -167,7 +171,9 @@
           density="compact"
           variant="outlined"
           class="mb-3"
-          :disabled="!canEditDevices"
+          :disabled="!canEditDevices || !!editingDevice"
+          :hint="editingDevice ? '采样率由驱动定义，不可修改' : ''"
+          persistent-hint
         />
         <v-text-field
           v-model.number="deviceForm.channels"
@@ -176,8 +182,8 @@
           density="compact"
           variant="outlined"
           class="mb-3"
-          :disabled="!canEditDevices || editingDevice"
-          :hint="editingDevice ? '设备创建后通道数量不可修改' : ''"
+          :disabled="!canEditDevices || !!editingDevice"
+          :hint="editingDevice ? '通道数由驱动定义，不可修改' : ''"
           persistent-hint
         />
 
@@ -388,13 +394,10 @@ async function saveDevice() {
   
   try {
     if (editingDevice.value) {
-      // 编辑现有设备
+      // 编辑现有设备 — 仅允许修改名称；采样率/通道数/地址/类型由驱动定义
       const updates = {
         name: deviceForm.value.name,
-        sampling_rate: deviceForm.value.sampleRate,
-        // 注意：channel_count 在编辑时不应该发送，后端会拒绝修改
-        address: deviceForm.value.address,
-        config: deviceForm.value.type === 'simulated' ? 
+        config: deviceForm.value.type === 'simulated' ?
           deviceApi.convertToApiConfig(deviceForm.value.simulatedConfig) : undefined
       };
       

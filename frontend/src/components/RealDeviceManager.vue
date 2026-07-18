@@ -2,38 +2,31 @@
   <v-card class="mb-4" variant="tonal">
     <v-card-title class="d-flex align-center justify-space-between">
       <div class="d-flex align-center">
-        <v-icon class="mr-2">mdi-usb</v-icon>
-        真实设备管理
+        <v-icon class="mr-2">mdi-devices</v-icon>
+        设备管理
+        <v-chip size="small" class="ml-2" color="primary">{{ realDeviceApi.devices.value.length }} 台设备</v-chip>
+        <v-chip size="small" class="ml-1" color="secondary">{{ realDeviceApi.drivers.value.length }} 个驱动</v-chip>
       </div>
       <div class="d-flex align-center ga-2">
-        <v-btn 
-          color="primary" 
-          size="small" 
-          @click="scanPorts"
+        <v-btn
+          color="primary"
+          size="small"
+          @click="refreshAll"
           :loading="realDeviceApi.isLoading.value"
         >
-          <v-icon left>mdi-magnify-scan</v-icon>
-          一键扫描
-        </v-btn>
-        <v-btn 
-          color="secondary" 
-          size="small" 
-          @click="showAddDeviceDialog = true"
-        >
-          <v-icon left>mdi-plus</v-icon>
-          添加设备
+          <v-icon left>mdi-refresh</v-icon>
+          刷新
         </v-btn>
       </div>
     </v-card-title>
-    
+
     <v-divider />
-    
-    <!-- 错误提示 -->
-    <v-alert 
-      v-if="realDeviceApi.error.value" 
-      type="error" 
-      density="compact" 
-      variant="tonal" 
+
+    <v-alert
+      v-if="realDeviceApi.error.value"
+      type="error"
+      density="compact"
+      variant="tonal"
       class="ma-2"
       closable
       @click:close="realDeviceApi.error.value = null"
@@ -43,346 +36,187 @@
         <span>{{ realDeviceApi.error.value }}</span>
       </div>
     </v-alert>
-    
-    <v-card-text>
-      <!-- 串口设备列表 -->
-      <v-expansion-panels v-model="expandedPanels" multiple class="mb-4">
+
+    <v-card-text class="pa-2">
+      <!-- 已加载驱动（可折叠） -->
+      <v-expansion-panels v-model="driverPanelOpen" class="mb-2">
         <v-expansion-panel>
-          <v-expansion-panel-title>
-            <div class="d-flex align-center">
-              <v-icon class="mr-2">mdi-serial-port</v-icon>
-              可用串口设备 ({{ realDeviceApi.ports.value.length }})
+          <v-expansion-panel-title class="py-2">
+            <div class="d-flex align-center ga-2">
+              <v-icon size="small">mdi-cog-box</v-icon>
+              <span class="text-body-2">已加载驱动</span>
+              <v-chip size="x-small" color="secondary">{{ realDeviceApi.drivers.value.length }}</v-chip>
             </div>
           </v-expansion-panel-title>
           <v-expansion-panel-text>
-            <v-list density="compact">
-              <v-list-item
-                v-for="port in realDeviceApi.ports.value"
-                :key="port.port"
-                :class="{ 'bg-green-lighten-5': port.is_ch340 }"
-              >
-                <template v-slot:prepend>
-                  <v-icon :color="port.is_ch340 ? 'green' : 'grey'">
-                    {{ port.is_ch340 ? 'mdi-chip' : 'mdi-usb-port' }}
-                  </v-icon>
-                </template>
-                
-                <v-list-item-title>
-                  <strong>{{ port.port }}</strong>
-                  <v-chip size="x-small" class="ml-2" :color="port.is_available ? 'success' : 'warning'">
-                    {{ port.is_available ? '可用' : '不可用' }}
-                  </v-chip>
-                  <v-chip v-if="port.is_ch340" size="x-small" color="green" class="ml-1">
-                    CH340
-                  </v-chip>
-                </v-list-item-title>
-                
-                <v-list-item-subtitle>
-                  {{ port.description || '未知设备' }}
-                  <span v-if="port.manufacturer"> - {{ port.manufacturer }}</span>
-                  <span v-if="port.product"> - {{ port.product }}</span>
-                </v-list-item-subtitle>
-                
-                <template v-slot:append>
-                  <v-btn
-                    size="small"
-                    color="primary"
-                    :disabled="!port.is_available"
-                    @click="connectToPort(port)"
-                  >
-                    <v-icon left>mdi-link</v-icon>
-                    连接
-                  </v-btn>
-                </template>
-              </v-list-item>
-              
-              <v-list-item v-if="realDeviceApi.ports.value.length === 0">
-                <v-list-item-title class="text-grey">
-                  未检测到串口设备
-                </v-list-item-title>
-                <v-list-item-subtitle>
-                  请确保设备已连接并安装了正确的驱动程序
-                </v-list-item-subtitle>
-              </v-list-item>
-            </v-list>
+            <v-table density="compact">
+              <thead>
+                <tr>
+                  <th>类型标识</th>
+                  <th>名称</th>
+                  <th>描述</th>
+                  <th>设备数</th>
+                  <th>实现类</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="d in realDeviceApi.drivers.value" :key="d.driver_type">
+                  <td><code>{{ d.driver_type }}</code></td>
+                  <td>{{ d.driver_name }}</td>
+                  <td class="text-caption">{{ d.driver_description || '—' }}</td>
+                  <td>
+                    <v-chip size="x-small" :color="d.device_count > 0 ? 'success' : 'grey'">
+                      {{ d.device_count >= 0 ? d.device_count : '?' }}
+                    </v-chip>
+                  </td>
+                  <td class="text-caption mono">{{ d.class_name }}</td>
+                </tr>
+                <tr v-if="realDeviceApi.drivers.value.length === 0">
+                  <td colspan="5" class="text-center text-grey">暂无已加载驱动</td>
+                </tr>
+              </tbody>
+            </v-table>
           </v-expansion-panel-text>
         </v-expansion-panel>
-        
-        <v-expansion-panel>
-          <v-expansion-panel-title>
-            <div class="d-flex align-center">
-              <v-icon class="mr-2">mdi-connection</v-icon>
-              已连接设备 ({{ connectedDevices.length }})
+      </v-expansion-panels>
+
+      <!-- 按驱动分组设备（可折叠） -->
+      <v-expansion-panels v-model="openGroups" multiple>
+        <v-expansion-panel
+          v-for="group in devicesByDriver"
+          :key="group.driverType"
+          :value="group.driverType"
+        >
+          <v-expansion-panel-title class="py-2">
+            <div class="d-flex align-center ga-2">
+              <v-icon size="small" :color="groupColor(group.driverType)">
+                {{ groupIcon(group.driverType) }}
+              </v-icon>
+              <span class="text-body-2 font-weight-medium">{{ group.driverName }}</span>
+              <v-chip size="x-small" color="primary">{{ group.devices.length }}</v-chip>
+              <code class="text-caption text-grey">{{ group.driverType }}</code>
+              <v-chip
+                v-if="groupActiveCount(group) > 0"
+                size="x-small"
+                color="success"
+              >
+                {{ groupActiveCount(group) }} 采集中
+              </v-chip>
             </div>
           </v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <v-list density="compact">
+
+          <v-expansion-panel-text class="pa-0">
+            <v-list density="compact" class="pa-0">
               <v-list-item
-                v-for="device in connectedDevices"
+                v-for="device in group.devices"
                 :key="device.id"
+                class="device-row px-3"
+                :class="{ 'device-active': isAcquiring(device) }"
               >
                 <template v-slot:prepend>
-                  <v-icon :color="realDeviceApi.getStatusColor(device.status)">
-                    {{ realDeviceApi.getStatusIcon(device.status) }}
+                  <v-icon :color="statusColor(device)" size="small">
+                    {{ statusIcon(device) }}
                   </v-icon>
                 </template>
-                
-                <v-list-item-title>
-                  <strong>{{ device.port }}</strong>
-                  <v-chip 
-                    size="x-small" 
-                    class="ml-2" 
-                    :color="realDeviceApi.getStatusColor(device.status)"
-                  >
-                    {{ realDeviceApi.getStatusText(device.status) }}
+
+                <v-list-item-title class="d-flex align-center ga-2">
+                  <span>{{ device.name }}</span>
+                  <code class="text-caption text-grey">{{ device.device_id }}</code>
+                  <v-chip size="x-small" :color="statusColor(device)">
+                    {{ statusText(device) }}
                   </v-chip>
                 </v-list-item-title>
-                
-                <v-list-item-subtitle>
-                  波特率: {{ device.baudrate }}
-                  <span v-if="device.connected_at">
-                    | 连接时间: {{ formatTime(device.connected_at) }}
-                  </span>
-                  <span v-if="device.data_count > 0">
-                    | 数据包: {{ device.data_count }}
-                  </span>
-                  <span v-if="device.last_error" class="text-red">
-                    | 错误: {{ device.last_error }}
+
+                <v-list-item-subtitle class="text-caption">
+                  {{ device.sampling_rate }} Hz · {{ device.channel_count }} ch
+                  <span v-if="device.connection_status?.pending_count">
+                    · 缓冲 {{ device.connection_status.pending_count }} 帧
                   </span>
                 </v-list-item-subtitle>
-                
+
                 <template v-slot:append>
                   <div class="d-flex ga-1">
                     <v-btn
-                      v-if="device.status === 'connected'"
-                      size="small"
-                      color="green"
-                      @click="startAcquisition(device.port)"
-                    >
-                      <v-icon left>mdi-play</v-icon>
-                      开始采集
-                    </v-btn>
-                    
-                    <v-btn
-                      v-if="device.status === 'acquiring'"
-                      size="small"
-                      color="orange"
-                      @click="stopAcquisition(device.port)"
-                    >
-                      <v-icon left>mdi-stop</v-icon>
-                      停止采集
-                    </v-btn>
-                    
-                    <v-btn
-                      size="small"
-                      color="red"
-                      @click="disconnectDevice(device.port)"
-                    >
-                      <v-icon left>mdi-link-off</v-icon>
-                      断开
-                    </v-btn>
-                  </div>
-                </template>
-              </v-list-item>
-              
-              <v-list-item v-if="connectedDevices.length === 0">
-                <v-list-item-title class="text-grey">
-                  没有已连接的设备
-                </v-list-item-title>
-                <v-list-item-subtitle>
-                  请先扫描并连接串口设备
-                </v-list-item-subtitle>
-              </v-list-item>
-            </v-list>
-          </v-expansion-panel-text>
-        </v-expansion-panel>
-        
-        <v-expansion-panel>
-          <v-expansion-panel-title>
-            <div class="d-flex align-center">
-              <v-icon class="mr-2">mdi-devices</v-icon>
-              真实EEG设备 ({{ realDevices.length }})
-            </div>
-          </v-expansion-panel-title>
-          <v-expansion-panel-text>
-            <v-list density="compact">
-              <v-list-item
-                v-for="device in realDevices"
-                :key="device.id"
-              >
-                <template v-slot:prepend>
-                  <v-icon color="blue">mdi-brain</v-icon>
-                </template>
-                
-                <v-list-item-title>
-                  <strong>{{ device.name }}</strong>
-                  <v-chip size="x-small" class="ml-2" color="blue">
-                    可穿戴EEG
-                  </v-chip>
-                </v-list-item-title>
-                
-                <v-list-item-subtitle>
-                  采样率: {{ device.sampling_rate }} Hz | 通道数: {{ device.channel_count }}
-                  <span v-if="device.config.port">
-                    | 端口: {{ device.config.port }}
-                  </span>
-                  <span v-if="device.connection_status">
-                    | 状态: {{ realDeviceApi.getStatusText(device.connection_status.status) }}
-                  </span>
-                </v-list-item-subtitle>
-                
-                <template v-slot:append>
-                  <div class="d-flex ga-1">
-                    <v-btn
-                      v-if="device.config.port && device.connection_status?.status === 'disconnected'"
-                      size="small"
+                      v-if="canConnect(device)"
+                      size="x-small"
                       color="primary"
+                      variant="tonal"
+                      icon="mdi-link"
                       @click="connectDevice(device)"
-                    >
-                      <v-icon left>mdi-link</v-icon>
-                      连接
-                    </v-btn>
-                    
+                    />
                     <v-btn
-                      v-if="device.config.port && device.connection_status?.status === 'connected'"
-                      size="small"
-                      color="green"
-                      @click="startDeviceAcquisition(device)"
-                    >
-                      <v-icon left>mdi-play</v-icon>
-                      开始采集
-                    </v-btn>
-                    
+                      v-if="canStart(device)"
+                      size="x-small"
+                      color="success"
+                      variant="tonal"
+                      icon="mdi-play"
+                      @click="startAcquisition(device)"
+                    />
                     <v-btn
-                      v-if="device.config.port && device.connection_status?.status === 'acquiring'"
-                      size="small"
-                      color="orange"
-                      @click="stopDeviceAcquisition(device)"
-                    >
-                      <v-icon left>mdi-stop</v-icon>
-                      停止采集
-                    </v-btn>
+                      v-if="canStop(device)"
+                      size="x-small"
+                      color="warning"
+                      variant="tonal"
+                      icon="mdi-stop"
+                      @click="stopAcquisition(device)"
+                    />
+                    <v-btn
+                      v-if="canDisconnect(device)"
+                      size="x-small"
+                      color="error"
+                      variant="tonal"
+                      icon="mdi-link-off"
+                      @click="disconnectDevice(device)"
+                    />
                   </div>
                 </template>
               </v-list-item>
-              
-              <v-list-item v-if="realDevices.length === 0">
-                <v-list-item-title class="text-grey">
-                  没有配置的真实设备
+
+              <v-list-item v-if="group.devices.length === 0">
+                <v-list-item-title class="text-grey text-caption">
+                  该驱动当前未发现设备
                 </v-list-item-title>
-                <v-list-item-subtitle>
-                  请先添加可穿戴EEG设备
-                </v-list-item-subtitle>
               </v-list-item>
             </v-list>
           </v-expansion-panel-text>
         </v-expansion-panel>
       </v-expansion-panels>
+
+      <!-- 无设备总空态 -->
+      <v-alert
+        v-if="realDeviceApi.devices.value.length === 0"
+        type="info"
+        variant="tonal"
+        density="compact"
+        class="mt-2"
+      >
+        <div class="d-flex align-center">
+          <v-icon class="mr-2">mdi-information</v-icon>
+          <span>未发现任何设备。请确保驱动已正确加载，且对应物理设备或虚拟服务可用。</span>
+        </div>
+      </v-alert>
     </v-card-text>
-    
-    <!-- 添加设备对话框 -->
-    <v-dialog v-model="showAddDeviceDialog" max-width="500">
-      <v-card>
-        <v-card-title>添加可穿戴EEG设备</v-card-title>
-        <v-card-text>
-          <v-form v-model="addDeviceFormValid" @submit.prevent="addRealDevice">
-            <v-text-field
-              v-model="newDevice.name"
-              label="设备名称"
-              :rules="[v => !!v || '设备名称不能为空']"
-              required
-              class="mb-3"
-            />
-            
-            <v-select
-              v-model="newDevice.port"
-              :items="portOptions"
-              label="串口端口"
-              :rules="[v => !!v || '请选择串口端口']"
-              required
-              class="mb-3"
-            >
-              <template v-slot:item="{ props, item }">
-                <v-list-item v-bind="props">
-                  <template v-slot:prepend>
-                    <v-icon :color="item.raw.is_ch340 ? 'green' : 'grey'">
-                      {{ item.raw.is_ch340 ? 'mdi-chip' : 'mdi-usb-port' }}
-                    </v-icon>
-                  </template>
-                  <v-list-item-title>
-                    {{ item.raw.port }}
-                    <v-chip v-if="item.raw.is_ch340" size="x-small" color="green" class="ml-1">
-                      CH340
-                    </v-chip>
-                  </v-list-item-title>
-                  <v-list-item-subtitle>{{ item.raw.description }}</v-list-item-subtitle>
-                </v-list-item>
-              </template>
-            </v-select>
-            
-            <v-select
-              v-model="newDevice.baudrate"
-              :items="baudrateOptions"
-              label="波特率"
-              :rules="[v => !!v || '请选择波特率']"
-              required
-              class="mb-3"
-            />
-            
-            <v-text-field
-              v-model="newDevice.sampling_rate"
-              label="采样率 (Hz)"
-              type="number"
-              :rules="[v => !!v || '采样率不能为空', v => v > 0 || '采样率必须大于0']"
-              required
-              class="mb-3"
-            />
-            
-            <v-text-field
-              v-model="newDevice.channel_count"
-              label="通道数"
-              type="number"
-              :rules="[v => !!v || '通道数不能为空', v => v > 0 || '通道数必须大于0']"
-              required
-              class="mb-3"
-            />
-          </v-form>
-        </v-card-text>
-        <v-card-actions>
-          <v-spacer />
-          <v-btn @click="showAddDeviceDialog = false">取消</v-btn>
-          <v-btn 
-            color="primary" 
-            @click="addRealDevice"
-            :disabled="!addDeviceFormValid"
-          >
-            添加设备
-          </v-btn>
-        </v-card-actions>
-      </v-card>
-    </v-dialog>
-    
-    <!-- 连接设备对话框 -->
+
+    <!-- 连接参数对话框（仅串口类驱动需要波特率） -->
     <v-dialog v-model="showConnectDialog" max-width="400">
       <v-card>
         <v-card-title>连接设备</v-card-title>
         <v-card-text>
-          <p>连接到端口: <strong>{{ selectedPort?.port }}</strong></p>
-          <p v-if="selectedPort?.description">设备描述: {{ selectedPort.description }}</p>
-          
+          <p>设备: <strong>{{ selectedDevice?.name }}</strong></p>
+          <p class="text-caption text-grey">{{ selectedDevice?.device_id }}</p>
           <v-select
+            v-if="isSerialDriver(selectedDevice?.type)"
             v-model="connectBaudrate"
             :items="baudrateOptions"
             label="波特率"
-            required
-            class="mt-4"
+            class="mt-3"
           />
         </v-card-text>
         <v-card-actions>
           <v-spacer />
           <v-btn @click="showConnectDialog = false">取消</v-btn>
-          <v-btn 
-            color="primary" 
+          <v-btn
+            color="primary"
             @click="confirmConnect"
             :loading="realDeviceApi.isLoading.value"
           >
@@ -396,193 +230,136 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { realDeviceApi, type SerialPort, type DeviceInfo as RealDeviceInfo } from '../services/realDeviceApi'
+import { realDeviceApi, type DeviceInfo, type DriverInfo } from '../services/realDeviceApi'
 
-// 状态
-const expandedPanels = ref([0, 1, 2])
-const showAddDeviceDialog = ref(false)
 const showConnectDialog = ref(false)
-const addDeviceFormValid = ref(false)
-const selectedPort = ref<SerialPort | null>(null)
-
-// 新设备表单
-const newDevice = ref({
-  name: '可穿戴EEG设备',
-  port: '',
-  baudrate: 460800,
-  sampling_rate: 1000,
-  channel_count: 8
-})
-
-// 连接参数
+const selectedDevice = ref<DeviceInfo | null>(null)
 const connectBaudrate = ref(460800)
 
-// 计算属性
-const portOptions = computed(() => {
-  return realDeviceApi.ports.value.map(port => ({
-    title: `${port.port}${port.is_ch340 ? ' (CH340)' : ''}`,
-    value: port.port,
-    ...port
-  }))
-})
+// 面板展开状态：驱动详情默认收起，设备组默认全部展开
+const driverPanelOpen = ref<number[]>([])
+const openGroups = ref<string[]>([])
 
-const baudrateOptions = computed(() => {
-  return realDeviceApi.getBaudrateOptions().map(rate => ({
-    title: rate.toString(),
-    value: rate
-  }))
-})
+interface DriverGroup {
+  driverType: string
+  driverName: string
+  driverDescription: string
+  devices: DeviceInfo[]
+}
 
-// 统一设备列表过滤
-const allDevices = computed(() => {
-  return realDeviceApi.devices.value
-})
-
-const realDevices = computed(() => {
-  return realDeviceApi.devices.value.filter(device => device.type === 'wearable_eeg')
-})
-
-const connectedDevices = computed(() => {
-  return realDeviceApi.devices.value.filter(device => 
-    device.type === 'wearable_eeg' && 
-    device.config.connected === true
+// 按驱动分组
+const devicesByDriver = computed<DriverGroup[]>(() => {
+  const map = new Map<string, DeviceInfo[]>()
+  for (const d of realDeviceApi.devices.value) {
+    const t = d.type || 'unknown'
+    if (!map.has(t)) map.set(t, [])
+    map.get(t)!.push(d)
+  }
+  const driverMeta = new Map<string, DriverInfo>(
+    realDeviceApi.drivers.value.map(d => [d.driver_type, d])
   )
+  const groups: DriverGroup[] = []
+  for (const [driverType, devices] of map) {
+    const meta = driverMeta.get(driverType)
+    groups.push({
+      driverType,
+      driverName: meta?.driver_name || driverType,
+      driverDescription: meta?.driver_description || '',
+      devices,
+    })
+  }
+  groups.sort((a, b) => a.driverType.localeCompare(b.driverType))
+  // 初始化时全部展开
+  if (openGroups.value.length === 0) {
+    openGroups.value = groups.map(g => g.driverType)
+  }
+  return groups
 })
 
-const simulatedDevices = computed(() => {
-  return realDeviceApi.devices.value.filter(device => device.type === 'simulated')
-})
+const baudrateOptions = computed(() =>
+  realDeviceApi.getBaudrateOptions().map(rate => ({ title: String(rate), value: rate }))
+)
 
-// 方法
-const scanPorts = async () => {
-  await realDeviceApi.scanPorts()
+// ---- 状态判断 ----
+const deviceStatus = (d: DeviceInfo) => d.connection_status?.status || 'disconnected'
+const isConnected = (d: DeviceInfo) => ['connected', 'acquiring'].includes(deviceStatus(d))
+const isAcquiring = (d: DeviceInfo) => deviceStatus(d) === 'acquiring'
+const isDisconnected = (d: DeviceInfo) => deviceStatus(d) === 'disconnected'
+const isSerialDriver = (driverType?: string) => driverType === 'wearable_eeg'
+
+const canConnect = (d: DeviceInfo) => isDisconnected(d) || deviceStatus(d) === 'error'
+const canStart = (d: DeviceInfo) => deviceStatus(d) === 'connected'
+const canStop = (d: DeviceInfo) => isAcquiring(d)
+const canDisconnect = (d: DeviceInfo) => isConnected(d)
+
+// ---- 显示辅助 ----
+const statusColor = (d: DeviceInfo) => realDeviceApi.getStatusColor(deviceStatus(d))
+const statusIcon = (d: DeviceInfo) => realDeviceApi.getStatusIcon(deviceStatus(d))
+const statusText = (d: DeviceInfo) => realDeviceApi.getStatusText(deviceStatus(d))
+
+const groupActiveCount = (g: DriverGroup) =>
+  g.devices.filter(d => isAcquiring(d)).length
+
+const groupIcon = (driverType: string) => {
+  if (driverType === 'simulated') return 'mdi-ghost'
+  if (driverType === 'wearable_eeg') return 'mdi-serial-port'
+  return 'mdi-chip'
+}
+const groupColor = (driverType: string) => {
+  if (driverType === 'simulated') return 'purple'
+  if (driverType === 'wearable_eeg') return 'blue'
+  return 'grey'
 }
 
-const connectToPort = (port: SerialPort) => {
-  selectedPort.value = port
-  connectBaudrate.value = realDeviceApi.detectBestBaudrate(port)
-  showConnectDialog.value = true
-}
-
-const confirmConnect = async () => {
-  if (!selectedPort.value) return
-  
-  const result = await realDeviceApi.connectDevice(
-    selectedPort.value.port,
-    connectBaudrate.value
-  )
-  
-  if (result) {
-    showConnectDialog.value = false
-    // 刷新设备列表
-    await realDeviceApi.getDevices()
-  }
-}
-
-const startAcquisition = async (port: string) => {
-  await realDeviceApi.startAcquisition(port)
-}
-
-const stopAcquisition = async (port: string) => {
-  await realDeviceApi.stopAcquisition(port)
-}
-
-const disconnectDevice = async (port: string) => {
-  await realDeviceApi.disconnectDevice(port)
-}
-
-const addRealDevice = async () => {
-  if (!addDeviceFormValid.value) return
-  
-  try {
-    // 创建设备
-    const deviceData = {
-      name: newDevice.value.name,
-      type: 'wearable_eeg' as const,
-      sampling_rate: Number(newDevice.value.sampling_rate),
-      channel_count: Number(newDevice.value.channel_count),
-      config: {
-        port: newDevice.value.port,
-        baudrate: newDevice.value.baudrate,
-        connected: false,
-        acquiring: false
-      }
-    }
-    
-    const result = await deviceApi.createDevice(deviceData)
-    
-    if (result) {
-      // 刷新设备列表
-      await realDeviceApi.getDevices()
-      showAddDeviceDialog.value = false
-      
-      // 重置表单
-      newDevice.value = {
-        name: '可穿戴EEG设备',
-        port: '',
-        baudrate: 460800,
-        sampling_rate: 1000,
-        channel_count: 8
-      }
-    }
-  } catch (error) {
-    console.error('Failed to add real device:', error)
-  }
-}
-
-const connectDevice = async (device: RealDeviceInfo) => {
-  if (!device.config.port) return
-  
-  const result = await realDeviceApi.connectDevice(
-    device.config.port,
-    device.config.baudrate || 460800,
-    device.id
-  )
-  
-  if (result) {
-    await realDeviceApi.getDevices()
-  }
-}
-
-const startDeviceAcquisition = async (device: RealDeviceInfo) => {
-  if (!device.config.port) return
-  
-  const success = await realDeviceApi.startAcquisition(device.config.port)
-  if (success) {
-    await realDeviceApi.getDevices()
-  }
-}
-
-const stopDeviceAcquisition = async (device: RealDeviceInfo) => {
-  if (!device.config.port) return
-  
-  const success = await realDeviceApi.stopAcquisition(device.config.port)
-  if (success) {
-    await realDeviceApi.getDevices()
-  }
-}
-
-const formatTime = (timestamp: number) => {
-  const date = new Date(timestamp * 1000)
-  return date.toLocaleTimeString()
-}
-
-// 生命周期
-onMounted(async () => {
-  // 初始化时加载数据
+// ---- 操作 ----
+const refreshAll = async () => {
   await Promise.all([
+    realDeviceApi.getDrivers(),
+    realDeviceApi.getDevices(),
     realDeviceApi.scanPorts(),
-    realDeviceApi.getDevices()
   ])
-})
+}
+
+const connectDevice = (device: DeviceInfo) => {
+  selectedDevice.value = device
+  if (isSerialDriver(device.type)) {
+    showConnectDialog.value = true
+  } else {
+    doConnect(device)
+  }
+}
+
+const confirmConnect = () => {
+  if (!selectedDevice.value) return
+  doConnect(selectedDevice.value, connectBaudrate.value)
+  showConnectDialog.value = false
+}
+
+const doConnect = async (device: DeviceInfo, baudrate?: number) => {
+  await realDeviceApi.connectDevice(device.device_id, baudrate ?? 460800)
+}
+
+const startAcquisition = (device: DeviceInfo) =>
+  realDeviceApi.startAcquisition(device.device_id)
+const stopAcquisition = (device: DeviceInfo) =>
+  realDeviceApi.stopAcquisition(device.device_id)
+const disconnectDevice = (device: DeviceInfo) =>
+  realDeviceApi.disconnectDevice(device.device_id)
+
+onMounted(refreshAll)
 </script>
 
 <style scoped>
-.border-primary {
-  border-color: var(--v-primary-base) !important;
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+  font-size: 12px;
 }
-
-.bg-green-lighten-5 {
-  background-color: rgba(76, 175, 80, 0.1) !important;
+.device-row {
+  border-left: 3px solid transparent;
+  min-height: 48px !important;
+}
+.device-active {
+  border-left-color: rgb(var(--v-theme-success));
+  background: rgba(var(--v-theme-success), 0.06);
 }
 </style>

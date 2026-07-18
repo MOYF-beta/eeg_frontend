@@ -190,6 +190,16 @@ class DeviceDriverManager:
         except Exception:
             return 0
 
+    def read_raw_inputs(self, device_id: str, count: int = 100) -> List[Dict[str, Any]]:
+        """读取设备最近的原始输入块（若驱动支持）。"""
+        driver = self._route(device_id)
+        if not driver:
+            return []
+        try:
+            return driver.read_raw_inputs(device_id, count)
+        except Exception:
+            return []
+
     def is_streaming(self, device_id: str) -> bool:
         return self.get_status(device_id) == DeviceStatus.ACQUIRING
 
@@ -200,6 +210,27 @@ class DeviceDriverManager:
     def get_loaded_driver_types(self) -> List[str]:
         with self._lock:
             return list(self._drivers.keys())
+
+    def get_driver_infos(self) -> List[Dict[str, Any]]:
+        """返回所有已加载驱动的元信息。"""
+        with self._lock:
+            drivers = list(self._drivers.items())
+        infos: List[Dict[str, Any]] = []
+        for dtype, instance in drivers:
+            cls = type(instance)
+            try:
+                device_count = len(instance.discover())
+            except Exception:
+                device_count = -1
+            infos.append({
+                'driver_type': dtype,
+                'driver_name': cls.driver_name(),
+                'driver_description': cls.driver_description(),
+                'device_count': device_count,
+                'module': cls.__module__,
+                'class_name': cls.__name__,
+            })
+        return infos
 
 
 # ---------------------------------------------------------------------- #

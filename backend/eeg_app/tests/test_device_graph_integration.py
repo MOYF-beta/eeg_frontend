@@ -99,6 +99,18 @@ class TestDeviceManagerIntegration:
         beta_frames = manager.read_data('sim_beta', count=5)
         assert len(alpha_frames) > 0 and len(beta_frames) > 0
 
+    def test_get_driver_infos(self, manager):
+        infos = manager.get_driver_infos()
+        assert len(infos) >= 1
+        sim = next(i for i in infos if i['driver_type'] == 'simulated')
+        assert sim['class_name'] == 'SimulatorDriver'
+        assert sim['device_count'] == 5
+        assert 'driver_name' in sim and 'driver_description' in sim
+
+    def test_read_raw_inputs_simulator_returns_empty(self, manager):
+        """HTTP 模拟器驱动无原始字节流，read_raw_inputs 返回空。"""
+        assert manager.read_raw_inputs('sim_alpha', count=5) == []
+
 
 # ═══════════════════════════════════════════════════════════════ #
 #  GraphStore 运行时状态（不依赖虚拟设备服务器）
