@@ -55,6 +55,10 @@ class DeviceDriver(ABC):
     将含此基类子类的 .py 文件放入 drivers/ 目录即自动注册。
     """
 
+    def __init__(self) -> None:
+        # device_id → 最近一次错误消息（由 handle_error 维护）
+        self._last_errors: Dict[str, str] = {}
+
     # ------------------------------------------------------------------ #
     #  驱动级元信息
     # ------------------------------------------------------------------ #
@@ -73,6 +77,29 @@ class DeviceDriver(ABC):
     def driver_description(cls) -> str:
         """驱动描述文本。"""
         return ''
+
+    @classmethod
+    def driver_icon(cls) -> str:
+        """MDI 图标名，前端展示用。"""
+        return 'mdi-chip'
+
+    @classmethod
+    def connect_config_schema(cls) -> List[Dict[str, Any]]:
+        """连接时可配置参数的 JSON Schema 列表，前端据此动态渲染表单。
+
+        每项格式：
+            {
+                'key': str,           # config 字典中的键
+                'label': str,         # 前端显示标签
+                'type': 'int'|'float'|'str'|'select',
+                'default': Any,
+                'options': List[int|str],  # type='select' 时必填
+                'required': bool,
+            }
+
+        默认空列表 = 无需额外配置即可连接。
+        """
+        return []
 
     # ------------------------------------------------------------------ #
     #  设备发现与元信息
@@ -142,5 +169,18 @@ class DeviceDriver(ABC):
     # ------------------------------------------------------------------ #
 
     def handle_error(self, device_id: str, error: Exception) -> None:
-        """异常处理钩子，默认记录日志，子类可覆写。"""
+        """异常处理钩子，默认记录日志并缓存到 last_error，子类可覆写。"""
         logger.error('[%s] Device %s error: %s', self.driver_type(), device_id, error)
+        self._last_errors[device_id] = str(error)
+
+    def get_last_error(self, device_id: str) -> Optional[str]:
+        """返回设备最近一次错误消息（供前端反馈），无错误返回 None。
+
+        默认读取 handle_error() 维护的缓存；驱动内部自行记录错误的
+        （如 CH340 的 conn.last_error）可覆写此方法提供实时值。
+        """
+        return self._last_errors.get(device_id)
+
+    def clear_last_error(self, device_id: str) -> None:
+        """清除缓存的错误消息（如连接成功后调用）。"""
+        self._last_errors.pop(device_id, None)

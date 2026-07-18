@@ -280,6 +280,8 @@ class TestEegDataConsumerConnection(TransactionTestCase):
         assert connected
 
         await communicator.send_json_to({'type': 'ping'})
+        # ws/eeg consumer 收到 ping 必须回 pong（graph_consumer_v2.py L241-242），
+        # 期间可能夹杂 data 推送（若图在运行），需跳过。
         msg = await communicator.receive_json_from(timeout=5)
         attempts = 0
         while msg.get('type') != 'pong' and attempts < 10:
@@ -288,7 +290,8 @@ class TestEegDataConsumerConnection(TransactionTestCase):
             except Exception:
                 break
             attempts += 1
-        # pong 或无数据（如果未运行图）
-        assert msg.get('type') in ('pong', 'data') or attempts >= 10 or True
+        assert msg.get('type') == 'pong', (
+            f'Expected pong after ping, got {msg.get("type")} after {attempts} retries'
+        )
 
         await communicator.disconnect()

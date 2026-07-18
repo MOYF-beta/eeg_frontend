@@ -25,6 +25,7 @@ urlpatterns = [
     path('real-devices/simulator/stop/', real_device_views.simulator_stop),
     path('real-devices/simulator/status/', real_device_views.simulator_status),
     path('real-devices/simulator/<path:port>/stop/', real_device_views.simulator_stop),
+    path('real-devices/test-hook/faulty-driver/', real_device_views.test_hook_faulty_driver),
     path('real-devices/<path:port>/status/', real_device_views.device_status),
     path('real-devices/<path:port>/start-acquisition/', real_device_views.start_acquisition),
     path('real-devices/<path:port>/stop-acquisition/', real_device_views.stop_acquisition),

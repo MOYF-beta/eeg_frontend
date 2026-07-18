@@ -300,15 +300,18 @@ class TestVirtualDeviceDataQuality:
         assert all(c == 8 for c in ch_counts), f'Inconsistent channel counts: {set(ch_counts)}'
 
     def test_sample_rate_accuracy(self, vdev_server):
-        """采样率应准确（250Hz 设备在 1 秒内生成约 250 帧，允许 ±50% 偏差）"""
+        """采样率应准确（250Hz 设备在 1.2 秒内应生成约 300 帧）。"""
         _http('POST', '/devices/sim_alpha/connect')
         _http('POST', '/devices/sim_alpha/start')
         time.sleep(1.2)
         resp = _http('GET', '/devices/sim_alpha/data?count=500')
         frames = resp['data']['frames']
-        # 1.2 秒内应生成约 300 帧，但 catch-up 循环可能在起跑时加速
-        # 放宽判定：至少有 100 帧
-        assert len(frames) >= 50, f'Expected at least 50 frames in 1.2s, got {len(frames)}'
+        # 250Hz × 1.2s = 300 帧预期。catch-up 循环可防止漂移，
+        # 但启动瞬间线程调度抖动可能损失少量帧，放宽到 ≥150（-50% 容差）。
+        # 此前断言 >= 50（-83% 偏差）形同虚设，无法发现采样率错误。
+        assert len(frames) >= 150, (
+            f'250Hz in 1.2s should yield ~300 frames, got {len(frames)} (<50% suggests sample-rate bug)'
+        )
 
     def test_data_deque_maxlen(self, vdev_server):
         """数据队列不应无限增长（maxlen=4000）"""
@@ -361,24 +364,15 @@ class TestVirtualDeviceCrossOriginAndCORS:
     def test_cors_headers_on_options(self, vdev_server):
         from urllib.request import Request, urlopen
         req = Request(f'{TEST_BASE}/devices', method='OPTIONS')
-        # OPTIONS 可能返回 405，但仍应有 CORS 头
-        try:
-            with urlopen(req, timeout=5) as resp:
-                cors = resp.headers.get('Access-Control-Allow-Origin', '')
-        except Exception:
-            cors = ''
-        # 如果服务器没处理 OPTIONS 也不算错，但 GET/POST 必须有
-        pass
+        # 服务器实现了 do_OPTIONS（virtual_device_server.py L261）返回 204 + CORS 头
+        with urlopen(req, timeout=5) as resp:
+            assert resp.status == 204, f'OPTIONS should return 204, got {resp.status}'
+            assert resp.headers.get('Access-Control-Allow-Origin') == '*'
+            assert 'GET' in resp.headers.get('Access-Control-Allow-Methods', '')
 
 
 class TestRealDeviceViewsSimulatorEndpoints:
     """通过 Django real_device_views 测试模拟设备集成（需要Django运行）。"""
-
-    def test_discover_devices(self, vdev_server):
-        """/api/real-devices/scan-ports/ 发现虚拟设备"""
-        # 此测试需要 Django 后端运行，仅作接口契约验证
-        # 实际执行需要在 Django test client 中用 httpretty mock
-        pass
 
     def test_device_manager_routes_to_simulator(self, vdev_server):
         """DeviceDriverManager 应将 sim_alpha 路由到 SimulatorDriver"""

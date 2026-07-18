@@ -18,11 +18,23 @@ export interface SerialPort {
   sample_rate?: number
 }
 
+// 连接配置 schema 项（由驱动声明）
+export interface ConnectConfigField {
+  key: string
+  label: string
+  type: 'int' | 'float' | 'str' | 'select'
+  default: any
+  options?: Array<number | string>
+  required: boolean
+}
+
 // 驱动信息
 export interface DriverInfo {
   driver_type: string
   driver_name: string
   driver_description: string
+  driver_icon: string
+  connect_config_schema: ConnectConfigField[]
   device_count: number
   module: string
   class_name: string
@@ -151,12 +163,14 @@ class RealDeviceApi {
   }
 
   /**
-   * 连接真实设备
+   * 连接设备
+   * @param deviceId 驱动层 device_id
+   * @param config  连接配置（键值由驱动 connect_config_schema 声明）
    */
-  async connectDevice(port: string, baudrate: number = 460800, deviceId?: string): Promise<DeviceConnectionStatus | null> {
+  async connectDevice(deviceId: string, config: Record<string, any> = {}): Promise<DeviceConnectionStatus | null> {
     this.isLoading.value = true
     this.error.value = null
-    
+
     try {
       const response = await fetch(`${this.baseUrl}/connect/`, {
         method: 'POST',
@@ -164,9 +178,9 @@ class RealDeviceApi {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          port,
-          baudrate,
-          device_id: deviceId
+          port: deviceId,
+          device_id: deviceId,
+          config,
         })
       })
 
@@ -333,10 +347,11 @@ class RealDeviceApi {
 
   /**
    * 获取所有设备（统一设备列表，直接从 /api/real-devices/ 获取）
+   *
+   * 注意：失败时保留已有 error（避免覆盖刚才操作失败的具体原因）。
    */
   async getDevices(): Promise<DeviceInfo[]> {
     this.isLoading.value = true
-    this.error.value = null
 
     try {
       const response = await fetch(`${this.baseUrl}/`)
@@ -348,10 +363,14 @@ class RealDeviceApi {
         throw new Error(result.error || 'Failed to fetch devices')
       }
       this.devices.value = result.data!.devices
+      this.error.value = null
       return this.devices.value
 
     } catch (err) {
-      this.error.value = err instanceof Error ? err.message : 'Unknown error'
+      // 仅在还没有错误时写入；若刚有操作失败的具体原因则保留
+      if (!this.error.value) {
+        this.error.value = err instanceof Error ? err.message : 'Unknown error'
+      }
       console.error('Failed to get devices:', err)
       return []
     } finally {
@@ -475,34 +494,6 @@ class RealDeviceApi {
       'error': 'mdi-alert'
     }
     return iconMap[status] || 'mdi-help'
-  }
-
-  /**
-   * 检查设备是否支持
-   */
-  isDeviceSupported(port: SerialPort): boolean {
-    // 支持CH340/CH341芯片的设备
-    return port.is_ch340 || port.is_available
-  }
-
-  /**
-   * 获取推荐的波特率选项
-   */
-  getBaudrateOptions(): number[] {
-    return [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600]
-  }
-
-  /**
-   * 自动检测最佳波特率
-   */
-  detectBestBaudrate(port: SerialPort): number {
-    // CH340设备通常使用460800波特率
-    if (port.is_ch340) {
-      return 460800
-    }
-    
-    // 其他设备默认使用115200
-    return 115200
   }
 }
 

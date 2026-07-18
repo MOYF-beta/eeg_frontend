@@ -69,6 +69,7 @@ class SimulatorDriver(DeviceDriver):
     """
 
     def __init__(self, server_url: str = DEFAULT_SERVER_URL):
+        super().__init__()
         self._server_url = server_url
         self._meta_cache: Dict[str, DeviceMeta] = {}
         self._available: bool = False
@@ -87,6 +88,10 @@ class SimulatorDriver(DeviceDriver):
     @classmethod
     def driver_description(cls) -> str:
         return '通过 HTTP 与 7777 端口虚拟设备服务器通信，提供 5 个虚拟 EEG 设备（α/β/θ/γ/多频混合）'
+
+    @classmethod
+    def driver_icon(cls) -> str:
+        return 'mdi-ghost'
 
     # ------------------------------------------------------------------ #
     #  内部辅助

@@ -144,4 +144,52 @@ describe('realDeviceApi', () => {
       );
     });
   });
+
+  describe('驱动故障反馈（last_error / error）', () => {
+    beforeEach(() => { realDeviceApi.error.value = null; });
+
+    it('connectDevice 失败时 error.value 包含后端返回的具体原因', async () => {
+      (globalThis.fetch as any).mockResolvedValue({
+        ok: false,
+        json: () => Promise.resolve({
+          ok: false,
+          error: '模拟连接失败：握手超时',
+          data: { last_error: '模拟连接失败：握手超时' },
+        }),
+      });
+      const result = await realDeviceApi.connectDevice('flt_conn_err');
+      expect(result).toBeNull();
+      expect(realDeviceApi.error.value).toContain('握手超时');
+    });
+
+    it('connectDevice 失败后 getDevices 不清除错误消息', async () => {
+      // 第一次调用：connect 返回 500
+      (globalThis.fetch as any).mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ ok: false, error: '驱动连接失败原因X' }),
+      });
+      // 第二次调用（connectDevice 内部调 getDevices）：返回设备列表成功
+      (globalThis.fetch as any).mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ ok: true, data: { devices: [], count: 0 } }),
+      });
+      await realDeviceApi.connectDevice('flt_x');
+      // 即使 getDevices 成功，刚才的连接失败原因仍保留（不被覆盖）
+      expect(realDeviceApi.error.value).toBe('驱动连接失败原因X');
+    });
+
+    it('getDevices 成功时清除旧的 error', async () => {
+      realDeviceApi.error.value = '旧错误';
+      mockOk({ devices: [], count: 0 });
+      await realDeviceApi.getDevices();
+      expect(realDeviceApi.error.value).toBeNull();
+    });
+
+    it('getDevices 失败时保留已有的更具体错误', async () => {
+      realDeviceApi.error.value = '具体驱动错误';
+      (globalThis.fetch as any).mockRejectedValue(new Error('network'));
+      await realDeviceApi.getDevices();
+      expect(realDeviceApi.error.value).toBe('具体驱动错误');
+    });
+  });
 });

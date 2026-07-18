@@ -89,8 +89,8 @@
         >
           <v-expansion-panel-title class="py-2">
             <div class="d-flex align-center ga-2">
-              <v-icon size="small" :color="groupColor(group.driverType)">
-                {{ groupIcon(group.driverType) }}
+              <v-icon size="small">
+                {{ group.driverIcon }}
               </v-icon>
               <span class="text-body-2 font-weight-medium">{{ group.driverName }}</span>
               <v-chip size="x-small" color="primary">{{ group.devices.length }}</v-chip>
@@ -122,9 +122,19 @@
                 <v-list-item-title class="d-flex align-center ga-2">
                   <span>{{ device.name }}</span>
                   <code class="text-caption text-grey">{{ device.device_id }}</code>
-                  <v-chip size="x-small" :color="statusColor(device)">
-                    {{ statusText(device) }}
-                  </v-chip>
+                  <v-tooltip :disabled="!deviceLastError(device)" location="top">
+                    <template #activator="{ props: tipProps }">
+                      <v-chip
+                        v-bind="tipProps"
+                        size="x-small"
+                        :color="statusColor(device)"
+                        :class="{ 'cursor-help': !!deviceLastError(device) }"
+                      >
+                        {{ statusText(device) }}
+                      </v-chip>
+                    </template>
+                    <span>{{ deviceLastError(device) }}</span>
+                  </v-tooltip>
                 </v-list-item-title>
 
                 <v-list-item-subtitle class="text-caption">
@@ -133,6 +143,13 @@
                     · 缓冲 {{ device.connection_status.pending_count }} 帧
                   </span>
                 </v-list-item-subtitle>
+                <div
+                  v-if="deviceLastError(device)"
+                  class="text-caption text-error d-flex align-start mt-1 device-error-line"
+                >
+                  <v-icon size="x-small" class="mr-1 mt-1px">mdi-alert-circle</v-icon>
+                  <span>{{ deviceLastError(device) }}</span>
+                </div>
 
                 <template v-slot:append>
                   <div class="d-flex ga-1">
@@ -168,6 +185,13 @@
                       icon="mdi-link-off"
                       @click="disconnectDevice(device)"
                     />
+                    <v-btn
+                      size="x-small"
+                      variant="tonal"
+                      icon="mdi-binary"
+                      title="查看原始输入"
+                      @click="viewRawInputs(device)"
+                    />
                   </div>
                 </template>
               </v-list-item>
@@ -197,20 +221,29 @@
       </v-alert>
     </v-card-text>
 
-    <!-- 连接参数对话框（仅串口类驱动需要波特率） -->
+    <!-- 连接参数对话框（按驱动 connect_config_schema 动态渲染） -->
     <v-dialog v-model="showConnectDialog" max-width="400">
       <v-card>
         <v-card-title>连接设备</v-card-title>
         <v-card-text>
           <p>设备: <strong>{{ selectedDevice?.name }}</strong></p>
           <p class="text-caption text-grey">{{ selectedDevice?.device_id }}</p>
-          <v-select
-            v-if="isSerialDriver(selectedDevice?.type)"
-            v-model="connectBaudrate"
-            :items="baudrateOptions"
-            label="波特率"
-            class="mt-3"
-          />
+          <template v-for="field in connectSchema" :key="field.key">
+            <v-select
+              v-if="field.type === 'select'"
+              v-model="connectConfig[field.key]"
+              :items="field.options"
+              :label="field.label"
+              class="mt-3"
+            />
+            <v-text-field
+              v-else
+              v-model="connectConfig[field.key]"
+              :label="field.label"
+              :type="field.type === 'int' || field.type === 'float' ? 'number' : 'text'"
+              class="mt-3"
+            />
+          </template>
         </v-card-text>
         <v-card-actions>
           <v-spacer />
@@ -225,16 +258,49 @@
         </v-card-actions>
       </v-card>
     </v-dialog>
+
+    <!-- 原始输入查看对话框 -->
+    <v-dialog v-model="showRawDialog" max-width="800" scrollable>
+      <v-card>
+        <v-card-title class="d-flex align-center">
+          <v-icon class="mr-2">mdi-binary</v-icon>
+          原始输入 — {{ rawDevice?.name }}
+          <v-spacer />
+          <v-btn icon="mdi-refresh" size="small" variant="text" @click="fetchRawInputs" :loading="rawLoading" />
+        </v-card-title>
+        <v-card-subtitle>{{ rawDevice?.device_id }}</v-card-subtitle>
+        <v-divider />
+        <v-card-text style="max-height: 500px">
+          <div v-if="rawInputs.length === 0" class="text-center text-grey py-4">
+            该设备暂无原始输入数据
+          </div>
+          <div v-for="(chunk, idx) in rawInputs" :key="idx" class="raw-chunk mb-2">
+            <div class="text-caption text-grey">{{ formatTs(chunk.timestamp) }}</div>
+            <div class="raw-hex mono">{{ chunk.raw_hex || '(empty)' }}</div>
+          </div>
+        </v-card-text>
+        <v-divider />
+        <v-card-actions>
+          <v-spacer />
+          <v-btn @click="showRawDialog = false">关闭</v-btn>
+        </v-card-actions>
+      </v-card>
+    </v-dialog>
   </v-card>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { realDeviceApi, type DeviceInfo, type DriverInfo } from '../services/realDeviceApi'
+import { realDeviceApi, type DeviceInfo, type DriverInfo, type ConnectConfigField, type SerialRawInput } from '../services/realDeviceApi'
 
 const showConnectDialog = ref(false)
 const selectedDevice = ref<DeviceInfo | null>(null)
-const connectBaudrate = ref(460800)
+const connectConfig = ref<Record<string, any>>({})
+
+const showRawDialog = ref(false)
+const rawDevice = ref<DeviceInfo | null>(null)
+const rawInputs = ref<SerialRawInput[]>([])
+const rawLoading = ref(false)
 
 // 面板展开状态：驱动详情默认收起，设备组默认全部展开
 const driverPanelOpen = ref<number[]>([])
@@ -244,8 +310,14 @@ interface DriverGroup {
   driverType: string
   driverName: string
   driverDescription: string
+  driverIcon: string
   devices: DeviceInfo[]
 }
+
+// 驱动元信息映射
+const driverMetaMap = computed(() =>
+  new Map<string, DriverInfo>(realDeviceApi.drivers.value.map(d => [d.driver_type, d]))
+)
 
 // 按驱动分组
 const devicesByDriver = computed<DriverGroup[]>(() => {
@@ -255,37 +327,35 @@ const devicesByDriver = computed<DriverGroup[]>(() => {
     if (!map.has(t)) map.set(t, [])
     map.get(t)!.push(d)
   }
-  const driverMeta = new Map<string, DriverInfo>(
-    realDeviceApi.drivers.value.map(d => [d.driver_type, d])
-  )
   const groups: DriverGroup[] = []
   for (const [driverType, devices] of map) {
-    const meta = driverMeta.get(driverType)
+    const meta = driverMetaMap.value.get(driverType)
     groups.push({
       driverType,
       driverName: meta?.driver_name || driverType,
       driverDescription: meta?.driver_description || '',
+      driverIcon: meta?.driver_icon || 'mdi-chip',
       devices,
     })
   }
   groups.sort((a, b) => a.driverType.localeCompare(b.driverType))
-  // 初始化时全部展开
   if (openGroups.value.length === 0) {
     openGroups.value = groups.map(g => g.driverType)
   }
   return groups
 })
 
-const baudrateOptions = computed(() =>
-  realDeviceApi.getBaudrateOptions().map(rate => ({ title: String(rate), value: rate }))
-)
+// 当前选中设备的连接 schema
+const connectSchema = computed<ConnectConfigField[]>(() => {
+  if (!selectedDevice.value) return []
+  return driverMetaMap.value.get(selectedDevice.value.type)?.connect_config_schema || []
+})
 
 // ---- 状态判断 ----
 const deviceStatus = (d: DeviceInfo) => d.connection_status?.status || 'disconnected'
 const isConnected = (d: DeviceInfo) => ['connected', 'acquiring'].includes(deviceStatus(d))
 const isAcquiring = (d: DeviceInfo) => deviceStatus(d) === 'acquiring'
 const isDisconnected = (d: DeviceInfo) => deviceStatus(d) === 'disconnected'
-const isSerialDriver = (driverType?: string) => driverType === 'wearable_eeg'
 
 const canConnect = (d: DeviceInfo) => isDisconnected(d) || deviceStatus(d) === 'error'
 const canStart = (d: DeviceInfo) => deviceStatus(d) === 'connected'
@@ -296,20 +366,13 @@ const canDisconnect = (d: DeviceInfo) => isConnected(d)
 const statusColor = (d: DeviceInfo) => realDeviceApi.getStatusColor(deviceStatus(d))
 const statusIcon = (d: DeviceInfo) => realDeviceApi.getStatusIcon(deviceStatus(d))
 const statusText = (d: DeviceInfo) => realDeviceApi.getStatusText(deviceStatus(d))
+const deviceLastError = (d: DeviceInfo): string | null =>
+  d.connection_status?.last_error || null
 
 const groupActiveCount = (g: DriverGroup) =>
   g.devices.filter(d => isAcquiring(d)).length
 
-const groupIcon = (driverType: string) => {
-  if (driverType === 'simulated') return 'mdi-ghost'
-  if (driverType === 'wearable_eeg') return 'mdi-serial-port'
-  return 'mdi-chip'
-}
-const groupColor = (driverType: string) => {
-  if (driverType === 'simulated') return 'purple'
-  if (driverType === 'wearable_eeg') return 'blue'
-  return 'grey'
-}
+const formatTs = (ts: number) => new Date(ts * 1000).toLocaleTimeString()
 
 // ---- 操作 ----
 const refreshAll = async () => {
@@ -322,21 +385,26 @@ const refreshAll = async () => {
 
 const connectDevice = (device: DeviceInfo) => {
   selectedDevice.value = device
-  if (isSerialDriver(device.type)) {
+  const schema = driverMetaMap.value.get(device.type)?.connect_config_schema || []
+  if (schema.length > 0) {
+    // 用驱动的默认值初始化表单
+    const cfg: Record<string, any> = {}
+    for (const f of schema) cfg[f.key] = f.default
+    connectConfig.value = cfg
     showConnectDialog.value = true
   } else {
-    doConnect(device)
+    doConnect(device, {})
   }
 }
 
 const confirmConnect = () => {
   if (!selectedDevice.value) return
-  doConnect(selectedDevice.value, connectBaudrate.value)
+  doConnect(selectedDevice.value, connectConfig.value)
   showConnectDialog.value = false
 }
 
-const doConnect = async (device: DeviceInfo, baudrate?: number) => {
-  await realDeviceApi.connectDevice(device.device_id, baudrate ?? 460800)
+const doConnect = async (device: DeviceInfo, config: Record<string, any>) => {
+  await realDeviceApi.connectDevice(device.device_id, config)
 }
 
 const startAcquisition = (device: DeviceInfo) =>
@@ -345,6 +413,25 @@ const stopAcquisition = (device: DeviceInfo) =>
   realDeviceApi.stopAcquisition(device.device_id)
 const disconnectDevice = (device: DeviceInfo) =>
   realDeviceApi.disconnectDevice(device.device_id)
+
+// ---- 原始输入查看 ----
+const viewRawInputs = async (device: DeviceInfo) => {
+  rawDevice.value = device
+  showRawDialog.value = true
+  await fetchRawInputs()
+}
+
+const fetchRawInputs = async () => {
+  if (!rawDevice.value) return
+  rawLoading.value = true
+  try {
+    const data = await realDeviceApi.getDebugOutput(rawDevice.value.device_id, 50)
+    const port = data.ports.find(p => p.port === rawDevice.value!.device_id)
+    rawInputs.value = port?.raw_inputs || []
+  } finally {
+    rawLoading.value = false
+  }
+}
 
 onMounted(refreshAll)
 </script>
@@ -358,8 +445,28 @@ onMounted(refreshAll)
   border-left: 3px solid transparent;
   min-height: 48px !important;
 }
+.cursor-help {
+  cursor: help;
+}
+.device-error-line {
+  line-height: 1.3;
+  word-break: break-all;
+}
+.mt-1px {
+  margin-top: 1px;
+}
 .device-active {
   border-left-color: rgb(var(--v-theme-success));
   background: rgba(var(--v-theme-success), 0.06);
+}
+.raw-chunk {
+  border-left: 2px solid rgba(var(--v-theme-primary), 0.4);
+  padding-left: 8px;
+}
+.raw-hex {
+  word-break: break-all;
+  font-size: 11px;
+  line-height: 1.5;
+  color: rgb(var(--v-theme-on-surface));
 }
 </style>

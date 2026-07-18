@@ -82,7 +82,10 @@ def connect_device(request):
     try:
         data = json.loads(request.body)
         port = data.get('port') or data.get('device_id')
-        baudrate = data.get('baudrate', 460800)
+        config = data.get('config') or {}
+        # 向后兼容：顶层 baudrate 放入 config
+        if 'baudrate' in data and 'baudrate' not in config:
+            config['baudrate'] = data['baudrate']
 
         if not port:
             return JsonResponse({'ok': False, 'error': 'Port or device_id is required'}, status=400)
@@ -92,11 +95,12 @@ def connect_device(request):
         if ':' in port:
             raw_device_id = _extract_device_id(port)
 
-        ok = manager.connect(raw_device_id, {'baudrate': baudrate})
+        fb = manager.connect_with_feedback(raw_device_id, config)
         status = manager.get_status(raw_device_id)
         meta = manager.get_device_meta(raw_device_id)
+        last_err = manager.get_last_error(raw_device_id)
 
-        if ok:
+        if fb['ok']:
             return JsonResponse({
                 'ok': True,
                 'data': {
@@ -104,10 +108,21 @@ def connect_device(request):
                     'port': raw_device_id,
                     'status': status.value,
                     'driver_type': meta.driver_type if meta else '',
+                    'last_error': last_err,
                 }
             })
         else:
-            return JsonResponse({'ok': False, 'error': 'Failed to connect device'}, status=500)
+            return JsonResponse({
+                'ok': False,
+                'error': fb['error'] or 'Failed to connect device',
+                'data': {
+                    'device_id': raw_device_id,
+                    'port': raw_device_id,
+                    'status': status.value,
+                    'driver_type': meta.driver_type if meta else '',
+                    'last_error': last_err,
+                },
+            }, status=500)
 
     except json.JSONDecodeError:
         return JsonResponse({'ok': False, 'error': 'Invalid JSON data'}, status=400)
@@ -217,6 +232,7 @@ def device_status(request, port=None):
                     'status': status.value,
                     'driver_type': meta.driver_type if meta else '',
                     'pending_count': manager.pending_count(device_id),
+                    'last_error': manager.get_last_error(device_id),
                 }
             })
         else:
@@ -230,6 +246,7 @@ def device_status(request, port=None):
                     'status': status.value,
                     'driver_type': meta.driver_type,
                     'pending_count': manager.pending_count(meta.device_id),
+                    'last_error': manager.get_last_error(meta.device_id),
                 })
             return JsonResponse({'ok': True, 'data': {'devices': device_list, 'count': len(device_list)}})
     except Exception as e:
@@ -278,6 +295,7 @@ def _get_devices(request, device_id=None):
                     'port': meta.device_id,
                     'status': status.value,
                     'pending_count': manager.pending_count(meta.device_id),
+                    'last_error': manager.get_last_error(meta.device_id),
                 },
                 'config': {
                     'device_id': meta.device_id,
@@ -453,6 +471,42 @@ def list_drivers(request):
         return JsonResponse({'ok': True, 'data': {'drivers': infos, 'count': len(infos)}})
     except Exception as e:
         return JsonResponse({'ok': False, 'error': f'Failed to list drivers: {str(e)}'}, status=500)
+
+
+# ====================================================================== #
+#  测试钩子（仅 DEBUG 模式可用，用于 E2E 故障注入）
+# ====================================================================== #
+
+@csrf_exempt
+def test_hook_faulty_driver(request):
+    """注册/卸载故障注入测试驱动（仅供自动化测试，非 DEBUG 模式返回 404）。
+
+    POST   /api/real-devices/test-hook/faulty-driver/  → 注册 FaultyDriver
+    DELETE /api/real-devices/test-hook/faulty-driver/  → 卸载
+    """
+    from django.conf import settings
+    if not settings.DEBUG:
+        return JsonResponse({'ok': False, 'error': 'Not found'}, status=404)
+
+    from .drivers._faulty_driver import FaultyDriver
+
+    manager = get_device_manager()
+    dtype = FaultyDriver.driver_type()
+
+    if request.method == 'POST':
+        manager.register_driver(FaultyDriver())
+        manager.discover_all()
+        return JsonResponse({'ok': True, 'data': {'driver_type': dtype, 'registered': True}})
+
+    if request.method == 'DELETE':
+        with manager._lock:
+            manager._drivers.pop(dtype, None)
+            for dev_id in list(manager._device_index.keys()):
+                if dev_id.startswith('flt_'):
+                    manager._device_index.pop(dev_id, None)
+        return JsonResponse({'ok': True, 'data': {'driver_type': dtype, 'registered': False}})
+
+    return JsonResponse({'ok': False, 'error': 'Method not allowed'}, status=405)
 
 
 # ====================================================================== #

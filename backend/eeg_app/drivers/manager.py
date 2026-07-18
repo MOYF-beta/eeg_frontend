@@ -126,10 +126,29 @@ class DeviceDriverManager:
             logger.warning('[DriverManager] No driver for device %s', device_id)
             return False
         try:
-            return driver.connect(device_id, config)
+            ok = driver.connect(device_id, config)
+            if ok:
+                driver.clear_last_error(device_id)
+            return ok
         except Exception as exc:
             driver.handle_error(device_id, exc)
             return False
+
+    def connect_with_feedback(self, device_id: str, config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """连接并返回结构化反馈 {ok, error}，供 HTTP 层向前端传递失败原因。"""
+        driver = self._route(device_id)
+        if not driver:
+            return {'ok': False, 'error': f'没有可用于设备 {device_id} 的驱动'}
+        try:
+            ok = driver.connect(device_id, config)
+            if ok:
+                driver.clear_last_error(device_id)
+                return {'ok': True, 'error': None}
+            err = driver.get_last_error(device_id) or '连接失败'
+            return {'ok': False, 'error': err}
+        except Exception as exc:
+            driver.handle_error(device_id, exc)
+            return {'ok': False, 'error': str(exc)}
 
     def disconnect(self, device_id: str) -> bool:
         driver = self._route(device_id)
@@ -190,6 +209,16 @@ class DeviceDriverManager:
         except Exception:
             return 0
 
+    def get_last_error(self, device_id: str) -> Optional[str]:
+        """查询设备最近一次错误消息（驱动故障反馈）。"""
+        driver = self._route(device_id)
+        if not driver:
+            return None
+        try:
+            return driver.get_last_error(device_id)
+        except Exception:
+            return None
+
     def read_raw_inputs(self, device_id: str, count: int = 100) -> List[Dict[str, Any]]:
         """读取设备最近的原始输入块（若驱动支持）。"""
         driver = self._route(device_id)
@@ -226,6 +255,8 @@ class DeviceDriverManager:
                 'driver_type': dtype,
                 'driver_name': cls.driver_name(),
                 'driver_description': cls.driver_description(),
+                'driver_icon': cls.driver_icon(),
+                'connect_config_schema': cls.connect_config_schema(),
                 'device_count': device_count,
                 'module': cls.__module__,
                 'class_name': cls.__name__,

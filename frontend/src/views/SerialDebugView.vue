@@ -58,7 +58,7 @@
           <v-expansion-panel v-for="portOutput in outputs" :key="portOutput.port">
             <v-expansion-panel-title>
               <div class="d-flex align-center ga-2">
-                <v-icon :color="driverColor(portOutput.port)">{{ driverIcon(portOutput.port) }}</v-icon>
+                <v-icon>{{ driverIcon(portOutput.port) }}</v-icon>
                 <strong>{{ portOutput.port }}</strong>
                 <v-chip size="small" color="secondary">{{ driverLabel(portOutput.port) }}</v-chip>
                 <v-chip size="small" color="primary">{{ portOutput.count }} 帧</v-chip>
@@ -147,6 +147,21 @@ const deviceDriverMap = computed(() => {
   return m
 })
 
+// driver_type → icon 映射（从驱动元信息获取）
+const driverIconMap = computed(() => {
+  const m = new Map<string, string>()
+  realDeviceApi.drivers.value.forEach(d => {
+    m.set(d.driver_type, d.driver_icon)
+  })
+  return m
+})
+
+const driverLabel = (port: string) => deviceDriverMap.value.get(port) || 'unknown'
+const driverIcon = (port: string) => {
+  const t = deviceDriverMap.value.get(port)
+  return (t && driverIconMap.value.get(t)) || 'mdi-chip'
+}
+
 const portOptions = computed(() => {
   const ports = new Set<string>()
   realDeviceApi.devices.value.forEach(device => {
@@ -157,20 +172,6 @@ const portOptions = computed(() => {
   outputs.value.forEach(p => ports.add(p.port))
   return [{ title: '全部设备', value: null as unknown as string }, ...Array.from(ports).map(p => ({ title: p, value: p }))]
 })
-
-const driverLabel = (port: string) => deviceDriverMap.value.get(port) || 'unknown'
-const driverIcon = (port: string) => {
-  const t = deviceDriverMap.value.get(port)
-  if (t === 'simulated') return 'mdi-ghost'
-  if (t === 'wearable_eeg') return 'mdi-serial-port'
-  return 'mdi-chip'
-}
-const driverColor = (port: string) => {
-  const t = deviceDriverMap.value.get(port)
-  if (t === 'simulated') return 'purple'
-  if (t === 'wearable_eeg') return 'blue'
-  return 'grey'
-}
 
 const formatTs = (ts: number) => new Date(ts * 1000).toLocaleTimeString()
 
@@ -192,7 +193,7 @@ const fetchData = async () => {
 }
 
 const refreshNow = async () => {
-  await realDeviceApi.getDevices()
+  await Promise.all([realDeviceApi.getDevices(), realDeviceApi.getDrivers()])
   await fetchData()
 }
 

@@ -163,6 +163,7 @@ class Ch340EegDriver(DeviceDriver):
     """CH340 EEG 串口设备驱动。"""
 
     def __init__(self):
+        super().__init__()
         self._connections: Dict[str, _Connection] = {}
         self._lock = threading.RLock()
         self._async_loop: Optional[asyncio.AbstractEventLoop] = None
@@ -179,6 +180,25 @@ class Ch340EegDriver(DeviceDriver):
     @classmethod
     def driver_name(cls) -> str:
         return 'CH340 EEG 串口设备'
+
+    @classmethod
+    def driver_description(cls) -> str:
+        return '通过 CH340/CH341 USB 串口连接的 8 通道 EEG 设备，帧协议 0xA5 0x5A 0x01 + 8×int32-LE + CRLF'
+
+    @classmethod
+    def driver_icon(cls) -> str:
+        return 'mdi-serial-port'
+
+    @classmethod
+    def connect_config_schema(cls) -> List[Dict[str, Any]]:
+        return [{
+            'key': 'baudrate',
+            'label': '波特率',
+            'type': 'select',
+            'default': DEFAULT_BAUDRATE,
+            'options': [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600],
+            'required': True,
+        }]
 
     # ------------------------------------------------------------------ #
     #  设备发现
@@ -371,6 +391,15 @@ class Ch340EegDriver(DeviceDriver):
             conn = self._connections.get(device_id)
             if conn:
                 conn.last_error = str(error)
+        super().handle_error(device_id, error)
+
+    def get_last_error(self, device_id: str) -> Optional[str]:
+        """优先返回连接对象的实时错误，其次返回缓存。"""
+        with self._lock:
+            conn = self._connections.get(device_id)
+            if conn and conn.last_error:
+                return conn.last_error
+        return super().get_last_error(device_id)
 
     # ================================================================== #
     #  内部实现

@@ -200,21 +200,32 @@ class TestGraphSyncConflictE2E(TransactionTestCase):
                 msg = await comm1.receive_json_from(timeout=5)
             assert msg['ok'] is True
             rev1 = msg.get('revision')
+            assert isinstance(rev1, int), f'cmd_result should carry integer revision, got {rev1}'
 
-            # 客户端 2 用过期的 baseRevision sync
+            # 情况 A：客户端 2 用【过期】的 baseRevision（rev1 - 1）sync → 必须冲突
             await comm2.send_json_to({
                 'type': 'sync_graph',
                 'graph': graph2,
-                'baseRevision': rev1,  # 这应该导致冲突，因为 revision 已经变了
+                'baseRevision': rev1 - 1,
             })
             msg2 = await comm2.receive_json_from(timeout=5)
             while msg2.get('type') != 'cmd_result':
                 msg2 = await comm2.receive_json_from(timeout=5)
-            # 如果 baseRevision 恰好匹配则 ok=True；不匹配则冲突
-            # 第二次 sync 同一 revision 应该成功（baseRevision 匹配）
-            assert msg2['ok'] in (True, False)
-            if not msg2['ok']:
-                assert msg2.get('conflict') is True
+            assert msg2['ok'] is False, f'Stale baseRevision should be rejected, got ok={msg2.get("ok")}'
+            assert msg2.get('conflict') is True, 'Stale sync must set conflict=True'
+            assert 'graph' in msg2, 'Conflict response should include authoritative graph'
+
+            # 情况 B：客户端 2 用【当前】的 baseRevision（rev1）sync → 必须成功
+            await comm2.send_json_to({
+                'type': 'sync_graph',
+                'graph': graph2,
+                'baseRevision': rev1,
+            })
+            msg3 = await comm2.receive_json_from(timeout=5)
+            while msg3.get('type') != 'cmd_result':
+                msg3 = await comm2.receive_json_from(timeout=5)
+            assert msg3['ok'] is True, f'Up-to-date baseRevision should succeed, got {msg3}'
+            assert msg3.get('conflict') is False
         finally:
             await comm1.disconnect()
             await comm2.disconnect()
@@ -256,8 +267,9 @@ class TestRuntimeStatePropagation(TransactionTestCase):
                     if msg2.get('type') == 'state':
                         got_state = True
                         graph = msg2.get('graph', {})
-                        if 'frozen' in graph:
-                            assert graph['frozen'] in (True, 1, 'true')
+                        # state 推送必须包含 frozen 字段（graph_store.set_frozen 会 bump revision 触发推送）
+                        assert 'frozen' in graph, f'state push missing frozen field: {list(graph.keys())}'
+                        assert graph['frozen'] is True, f'Expected frozen=True in state push, got {graph["frozen"]}'
                         break
                 except asyncio.TimeoutError:
                     continue
