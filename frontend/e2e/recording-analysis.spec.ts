@@ -230,12 +230,6 @@ test.describe('录制产物 — 单 OUTPUT 结构验证', () => {
 //  2. 复杂图录制 — FILTER 前后数据对比
 // ========================================================================== //
 test.describe('录制产物 — FILTER 前后对比', () => {
-  let filesBefore: Array<{ filename: string }> = [];
-
-  test.beforeAll(async ({ request }) => {
-    filesBefore = await getSavedFiles(request);
-  });
-
   test.afterEach(async ({ page, request }) => { await cleanup(page, request); });
 
   test('SOURCE 和 FILTER 后同时录制，滤波后高频衰减', async ({ page, request }) => {
@@ -279,35 +273,31 @@ test.describe('录制产物 — FILTER 前后对比', () => {
     await page.waitForTimeout(500);
 
     const filesAfter = await getSavedFiles(request);
-    const newFiles = findNewFiles(filesBefore, filesAfter);
-    // 应产生 2 个新 CSV
-    const csvFiles = newFiles.filter((f) => f.filename.endsWith('.csv'));
-    expect(csvFiles.length).toBeGreaterThanOrEqual(2);
-
-    // 按修改时间排序（新的在后）
-    const sorted = csvFiles.sort((a, b) => a.filename.localeCompare(b.filename));
+    // 按精确文件名取 raw / filtered（固定文件名幂等覆盖，不依赖 findNewFiles 对比）
+    const rawFile = filesAfter.find((f) => f.filename === 'e2e_filter_raw.csv');
+    const filteredFile = filesAfter.find((f) => f.filename === 'e2e_filter_filtered.csv');
+    expect(rawFile, '应生成 e2e_filter_raw.csv').toBeDefined();
+    expect(filteredFile, '应生成 e2e_filter_filtered.csv').toBeDefined();
+    expect(rawFile!.size).toBeGreaterThan(0);
+    expect(filteredFile!.size).toBeGreaterThan(0);
 
     // 解析两个文件
-    const data1 = parseCsvData(await fetchCsvRows(request, sorted[0].filename));
-    const data2 = parseCsvData(await fetchCsvRows(request, sorted[1].filename));
+    const rawData = parseCsvData(await fetchCsvRows(request, 'e2e_filter_raw.csv'));
+    const filteredData = parseCsvData(await fetchCsvRows(request, 'e2e_filter_filtered.csv'));
 
     // 两个文件都应有数据
-    expect(data1.dataRows.length).toBeGreaterThan(100);
-    expect(data2.dataRows.length).toBeGreaterThan(100);
+    expect(rawData.dataRows.length).toBeGreaterThan(100);
+    expect(filteredData.dataRows.length).toBeGreaterThan(100);
 
     // 两个文件通道数相同（都是 2 通道）
-    expect(data1.channelCount).toBe(data2.channelCount);
+    expect(filteredData.channelCount).toBe(rawData.channelCount);
 
-    // 滤波后的信号 RMS 应 ≤ 原始信号 RMS（低通滤波衰减高频）
-    // 注意：具体哪个文件是 raw / filtered 取决于 start_recording 顺序和文件名
-    // 但我们只验证两个文件的 RMS 不同（一个经过了低通 5Hz 滤波）
-    const rms1 = rms(data1.channelData[0]);
-    const rms2 = rms(data2.channelData[0]);
-    console.log(
-      `[FILTER对比] 文件1 RMS=${rms1.toFixed(4)}, 文件2 RMS=${rms2.toFixed(4)}`,
-    );
-    // 至少一个文件的 RMS > 0（有信号）
-    expect(Math.max(rms1, rms2)).toBeGreaterThan(0);
+    // 低通 5Hz 滤波衰减高频 → 滤波后 RMS 必须严格小于原始 RMS
+    const rmsRaw = rms(rawData.channelData[0]);
+    const rmsFiltered = rms(filteredData.channelData[0]);
+    console.log(`[FILTER对比] raw RMS=${rmsRaw.toFixed(4)}, filtered RMS=${rmsFiltered.toFixed(4)}`);
+    expect(rmsRaw).toBeGreaterThan(0);
+    expect(rmsFiltered).toBeLessThan(rmsRaw);
   });
 });
 

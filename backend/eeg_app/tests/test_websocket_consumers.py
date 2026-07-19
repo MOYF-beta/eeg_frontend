@@ -76,6 +76,17 @@ class TestControlConsumerCommands(TransactionTestCase):
             attempts += 1
         raise AssertionError(f'No cmd_result received after {attempts} messages')
 
+    async def _get_state(self, communicator):
+        """发送 get_state 并等待 type=state 消息。"""
+        await communicator.send_json_to({'type': 'get_state'})
+        attempts = 0
+        while attempts < 10:
+            msg = await communicator.receive_json_from(timeout=5)
+            if msg.get('type') == 'state':
+                return msg
+            attempts += 1
+        raise AssertionError(f'No state message received after {attempts} messages')
+
     async def test_freeze_command(self):
         comm = await self._connect_and_skip_state()
         try:
@@ -85,6 +96,12 @@ class TestControlConsumerCommands(TransactionTestCase):
             result = await self._send_cmd_and_get_result(comm, {'type': 'freeze', 'frozen': True})
             assert result['command'] == 'freeze'
             assert result['ok'] is True
+
+            # 核验最终状态：get_state 中 graph.frozen 必须为 True
+            state = await self._get_state(comm)
+            assert state['graph']['frozen'] is True, (
+                f'freeze 后 graph.frozen 应为 True，实际 {state["graph"].get("frozen")}'
+            )
         finally:
             await self._send_cmd_and_get_result(comm, {'type': 'freeze', 'frozen': False})
             await comm.disconnect()
@@ -125,6 +142,16 @@ class TestControlConsumerCommands(TransactionTestCase):
             assert result['ok'] is True
             assert 'revision' in result
             assert result.get('conflict') is not True
+
+            # 核验图真的落库：get_state 应返回 2 节点 1 边，id 集合一致
+            state = await self._get_state(comm)
+            nodes = state['graph']['nodes']
+            edges = state['graph']['edges']
+            assert len(nodes) == 2, f'期望 2 节点，实际 {len(nodes)}'
+            assert {n['id'] for n in nodes} == {'ws-test-src', 'ws-test-out'}
+            assert len(edges) == 1, f'期望 1 边，实际 {len(edges)}'
+            assert edges[0]['source'] == 'ws-test-src'
+            assert edges[0]['target'] == 'ws-test-out'
         finally:
             await comm.disconnect()
 
@@ -199,9 +226,22 @@ class TestControlConsumerCommands(TransactionTestCase):
             run_result = await self._send_cmd_and_get_result(comm, {'type': 'run', 'mode': 'live'})
             assert run_result['ok'] is True
 
+            # 核验运行状态：runtime.running 必须为 True 且 mode=live
+            state = await self._get_state(comm)
+            assert state['runtime']['running'] is True, (
+                f'run 后 running 应为 True，实际 {state["runtime"].get("running")}'
+            )
+            assert state['runtime']['mode'] == 'live'
+
             # 停止
             stop_result = await self._send_cmd_and_get_result(comm, {'type': 'stop'})
             assert stop_result['ok'] is True
+
+            # 核验停止状态：runtime.running 必须为 False
+            state = await self._get_state(comm)
+            assert state['runtime']['running'] is False, (
+                f'stop 后 running 应为 False，实际 {state["runtime"].get("running")}'
+            )
 
             # 解冻
             await self._send_cmd_and_get_result(comm, {'type': 'freeze', 'frozen': False})
@@ -226,7 +266,9 @@ class TestControlConsumerCommands(TransactionTestCase):
                 attempts += 1
             assert msg is not None
             if msg.get('type') == 'error':
-                assert 'error' in msg
+                # 错误消息必须指出未知命令名
+                assert 'Unknown command' in msg['error'], f'错误消息应含 Unknown command: {msg["error"]}'
+                assert 'nonexistent_command' in msg['error']
             else:
                 assert msg.get('ok') is False
         finally:
@@ -271,6 +313,15 @@ class TestEegDataConsumerConnection(TransactionTestCase):
 
         # unsubscribe
         await communicator.send_json_to({'type': 'unsubscribe', 'nodeIds': ['test-node-1']})
+
+        # subscribe/unsubscribe 无 ack，用 ping→pong 验证 consumer 处理完上述消息后仍存活
+        await communicator.send_json_to({'type': 'ping'})
+        msg = await communicator.receive_json_from(timeout=5)
+        attempts = 0
+        while msg.get('type') != 'pong' and attempts < 10:
+            msg = await communicator.receive_json_from(timeout=2)
+            attempts += 1
+        assert msg.get('type') == 'pong', 'subscribe/unsubscribe 后 consumer 不再响应'
 
         await communicator.disconnect()
 

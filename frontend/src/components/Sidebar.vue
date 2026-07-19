@@ -67,14 +67,15 @@
                 v-bind="tooltipProps"
                 :title="isRecording ? '停止录制' : '录制'"
                 :prepend-icon="isRecording ? 'mdi-stop-circle' : 'mdi-record-circle'"
-                :disabled="!isRunning"
+                :disabled="!isRunning && (!canRunGraph || recordBusy)"
                 link
                 class="nav-item record-item"
                 :class="{ 'record-item-active': isRecording }"
+                data-testid="sidebar-record-btn"
                 @click="toggleRecording"
               />
             </template>
-            <span>{{ isRecording ? '停止录制' : '录制输出节点数据' }}</span>
+            <span>{{ isRecording ? '停止录制' : (isRunning ? '录制输出节点数据' : '开始运行并录制') }}</span>
           </v-tooltip>
         </div>
       </div>
@@ -104,9 +105,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { ref, computed } from 'vue';
 import { onMounted, onUnmounted } from 'vue';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
+import { recordingStore } from '../services/recordingStore';
 import { useToast } from '../composables/useToast';
 import { useAppTheme } from '../composables/useAppTheme';
 
@@ -122,8 +124,17 @@ const {
 
 const toast = useToast();
 
-// 录制状态
-const isRecording = ref(false);
+// 录制状态（全局共享，与后端轮询同步）
+const isRecording = computed(() => recordingStore.state.recording);
+const recordBusy = ref(false);
+let unsubRecording: (() => void) | null = null;
+
+onMounted(() => {
+  unsubRecording = recordingStore.subscribe();
+});
+onUnmounted(() => {
+  unsubRecording?.();
+});
 
 // 导航项配置
 const navItems = [
@@ -146,34 +157,35 @@ async function handleRunClick(mode: 'live' | 'offline') {
   }
 }
 
-// 切换录制
+// 切换录制：未运行时先启动运行再开始录制
 async function toggleRecording() {
-  if (isRecording.value) {
-    // 停止录制
-    try {
-      const resp = await fetch('/api/graph/record/', { method: 'DELETE' });
-      const data = await resp.json();
-      if (data.ok) {
-        isRecording.value = false;
+  if (recordBusy.value) return;
+  recordBusy.value = true;
+  try {
+    if (isRecording.value) {
+      const ok = await recordingStore.stop();
+      if (!ok) toast.show('停止录制失败', 'error');
+    } else {
+      if (!isRunning.value) {
+        await runByMode('live');
+        // 等待后端进入运行态，确保 ws/eeg/ 数据流已建立
+        const deadline = Date.now() + 8000;
+        while (!isRunning.value && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        if (!isRunning.value) {
+          toast.show('启动运行超时，无法开始录制', 'error');
+          return;
+        }
       }
-    } catch (e) {
-      console.error('[Sidebar] Failed to stop recording:', e);
+      const ok = await recordingStore.start();
+      if (!ok) toast.show('开始录制失败', 'error');
     }
-  } else {
-    // 开始录制
-    try {
-      const resp = await fetch('/api/graph/record/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      });
-      const data = await resp.json();
-      if (data.ok) {
-        isRecording.value = true;
-      }
-    } catch (e) {
-      console.error('[Sidebar] Failed to start recording:', e);
-    }
+  } catch (e) {
+    console.error('[Sidebar] Failed to toggle recording:', e);
+    toast.show(`录制操作失败: ${e instanceof Error ? e.message : '未知错误'}`, 'error');
+  } finally {
+    recordBusy.value = false;
   }
 }
 

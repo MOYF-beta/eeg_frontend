@@ -53,21 +53,20 @@ const statusDescription = computed(() => state.value.statusDescription);
 
 // 更新状态
 function updateState(newState: Partial<GraphRuntimeState>) {
-  const frozen = newState.frozen !== undefined ? newState.frozen : state.value.frozen;
   const isRunning = newState.isRunning !== undefined ? newState.isRunning : state.value.isRunning;
-  
+
   state.value = {
     ...state.value,
     ...newState,
     // 重新计算依赖状态
     canEditGraph: !isRunning,  // 未运行时可以编辑
     canRunGraph: !isRunning,   // 未运行时可以运行
-    statusDescription: getStatusDescription(isRunning, frozen)
+    statusDescription: getStatusDescription(isRunning)
   };
 }
 
 // 获取状态描述
-function getStatusDescription(isRunning: boolean, frozen: boolean): string {
+function getStatusDescription(isRunning: boolean): string {
   if (isRunning) {
     return '运行中 - 禁止修改设备和计算图';
   } else {
@@ -97,25 +96,18 @@ function applyControlState(cs: ControlState) {
   }
 }
 
-// 运行计算图（通过控制 WS）
+// 运行计算图（通过控制 WS）。运行时后端自动锁定图（running 标志拒绝 set_graph），
+// 不再需要先冻结——冻结是已退出 UI 的历史遗留概念。
 function runByMode(mode: 'live' | 'offline') {
-  // 自动冻结
-  if (!state.value.frozen) {
-    controlWebSocket.freeze(true);
-  }
   controlWebSocket.run(mode);
 }
 
-// 停止运行（通过控制 WS）
+// 停止运行（通过控制 WS）。停止后画布自动恢复可编辑。
 function stopRun() {
   controlWebSocket.stop();
-  // 停止时自动解冻
-  if (state.value.frozen) {
-    controlWebSocket.freeze(false);
-  }
 }
 
-// 设置冻结状态（通过控制 WS）
+// 兼容旧接口：冻结已退出 UI，保留为透传以免破坏旧调用方/e2e，新代码不应使用。
 function setFreeze(frozenVal: boolean) {
   controlWebSocket.freeze(frozenVal);
 }
@@ -167,11 +159,6 @@ function subscribeData(callback: (packet: EegPacket) => void) {
   };
 }
 
-// 发送 Mock 数据包（用于测试）
-function emitPacket(packet: EegPacket) {
-  packetSubscribers.forEach((cb) => cb(packet));
-}
-
 // 导出
 export const graphRuntimeStore = {
   // 状态
@@ -202,7 +189,6 @@ export const graphRuntimeStore = {
 
   // 数据流
   subscribeData,
-  emitPacket,
 };
 
 // 默认导出

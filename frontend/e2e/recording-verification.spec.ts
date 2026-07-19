@@ -183,36 +183,35 @@ function bandEnergyRatio(mags: number[], sampleRate: number, lowHz: number, high
 }
 
 // ========================================================================== //
-//  1. REPLAY 回放录制 — 数据一致性验证
+//  1. REPLAY 回放录制 — 数值级一致性验证（自检源文件，逐样本比对）
 // ========================================================================== //
 test.describe('录制验收 — REPLAY 回放录制一致性', () => {
-  let filesBefore: Array<{ filename: string }> = [];
-
-  test.beforeAll(async ({ request }) => {
-    filesBefore = await getSavedFiles(request);
-  });
+  const SOURCE_CSV = 'e2e_replay_source.csv';
 
   test.afterEach(async ({ page, request }) => { await cleanup(page, request); });
 
-  test('REPLAY 回放已有 CSV → OUTPUT 录制 → 产物行数与源文件接近', async ({ page, request }) => {
-    // 使用一个已有的 CSV 文件作为回放源
-    const sourceCsv = 'e2e_filter_raw.csv';
-    const sourcePath = path.join(SAVED_DATA_DIR, sourceCsv);
-    if (!fs.existsSync(sourcePath)) {
-      test.skip(true, `回放源文件 ${sourceCsv} 不存在，跳过`);
-      return;
+  test('REPLAY 回放 → OUTPUT 录制 → 回放产物与源文件数值逐样本一致', async ({ page, request }) => {
+    // 1) 自检源文件：生成数值唯一、4 通道的 CSV，避免依赖残留文件
+    const CHANNELS = 4;
+    const ROWS = 250; // 1s @ 250Hz
+    const srcPath = path.join(SAVED_DATA_DIR, SOURCE_CSV);
+    const srcHeader = ['timestamp', 'sample_idx', ...Array.from({ length: CHANNELS }, (_, i) => `ch${i + 1}`)];
+    const srcLines: string[] = [srcHeader.join(',')];
+    // 通道 c、样本 i 的值为 (i*10 + c)，保证逐样本唯一、可逐样本核验
+    for (let i = 0; i < ROWS; i++) {
+      const chVals = Array.from({ length: CHANNELS }, (_, c) => (i * 10 + c).toFixed(4));
+      srcLines.push([String(1_700_000_000_000 + i * 4), String(i), ...chVals].join(','));
     }
-
-    // 读取源文件行数
-    const sourceRows = readCsvFromDisk(sourceCsv);
-    const sourceDataCount = sourceRows.length - 1; // 减表头
-    expect(sourceDataCount).toBeGreaterThan(10);
+    fs.writeFileSync(srcPath, srcLines.join('\n') + '\n');
+    const srcRows = readCsvFromDisk(SOURCE_CSV);
+    const srcData = parseCsvData(srcRows);
+    expect(srcData.dataRows.length).toBe(ROWS);
 
     const graph = {
       nodes: [
         {
-          id: 'rp-node', type: 'REPLAY', name: '回放慢放', x: 100, y: 200,
-          params: { file: sourceCsv, loop: false },
+          id: 'rp-node', type: 'REPLAY', name: '回放源', x: 100, y: 200,
+          params: { file: SOURCE_CSV, loop: false },
         },
         {
           id: 'rp-out', type: 'OUTPUT', name: '回放录制', x: 400, y: 200,
@@ -230,31 +229,38 @@ test.describe('录制验收 — REPLAY 回放录制一致性', () => {
     await fullSetup(page, graph);
     await page.waitForTimeout(500);
 
-    // 驱动录制足够长时间让回放完成
-    const recordDuration = Math.min(Math.max(sourceDataCount / 250 * 1000 + 2000, 5000), 15000);
-    await driveRecording(page, ['rp-out'], recordDuration);
+    // 回放 250 行 @250Hz 约 1s，给足缓冲让其放完
+    await driveRecording(page, ['rp-out'], 4000);
     await request.delete(`${API_BASE}/api/graph/record/`);
     await page.waitForTimeout(500);
 
-    const filesAfter = await getSavedFiles(request);
-    const newFiles = findNewFiles(filesBefore, filesAfter);
-    const csvFiles = newFiles.filter((f) => f.filename.endsWith('.csv'));
-    expect(csvFiles.length).toBeGreaterThanOrEqual(1);
+    const verifyPath = path.join(SAVED_DATA_DIR, 'e2e_replay_verify.csv');
+    expect(fs.existsSync(verifyPath)).toBeTruthy();
+    const outData = parseCsvData(readCsvFromDisk('e2e_replay_verify.csv'));
 
-    // 验证回放产物
-    const replayCsv = csvFiles.find((f) => f.filename.includes('replay_verify'))
-      || csvFiles[csvFiles.length - 1];
-    const data = parseCsvData(readCsvFromDisk(replayCsv.filename));
+    // 2) 行数应接近源（loop:false 放完即停；允许 worker tick 时序造成的轻微差异）
+    expect(outData.dataRows.length).toBeGreaterThanOrEqual(Math.floor(ROWS * 0.85));
+    expect(outData.dataRows.length).toBeLessThanOrEqual(Math.ceil(ROWS * 1.1));
 
-    // 回放产物应有一定行数
-    expect(data.dataRows.length).toBeGreaterThan(5);
+    // 3) 通道数与源一致
+    expect(outData.channelCount).toBe(CHANNELS);
 
-    // 通道数应与源文件一致
-    expect(data.channelCount).toBe(sourceRows[0].length - 2);
+    // 4) 数值级一致性：在共同长度内，回放产物逐样本 ≈ 源（容差 1e-6）
+    //    data_recorder 与回放按同一行序推进，因此前 minLen 行应一一对应
+    const minLen = Math.min(outData.dataRows.length, srcData.dataRows.length);
+    const TOL = 1e-6;
+    let maxErr = 0;
+    for (let ch = 0; ch < CHANNELS; ch++) {
+      for (let i = 0; i < minLen; i++) {
+        const err = Math.abs(outData.channelData[ch][i] - srcData.channelData[ch][i]);
+        if (err > maxErr) maxErr = err;
+      }
+    }
+    expect(maxErr).toBeLessThan(TOL);
 
     console.log(
-      `[REPLAY验收] 源 ${sourceDataCount} 行 → 回放录制 ${data.dataRows.length} 行, ` +
-      `${data.channelCount} 通道`,
+      `[REPLAY数值验收] 源 ${srcData.dataRows.length} 行 → 回放 ${outData.dataRows.length} 行, ` +
+      `${CHANNELS} 通道, 共同长度 ${minLen} 行逐样本一致, maxErr=${maxErr.toExponential(2)}`,
     );
   });
 });
@@ -309,14 +315,11 @@ test.describe('录制验收 — DOWNSAMPLE 产物行数比', () => {
     await page.waitForTimeout(500);
 
     const filesAfter = await getSavedFiles(request);
-    const newFiles = findNewFiles(filesBefore, filesAfter);
-    const csvFiles = newFiles.filter((f) => f.filename.endsWith('.csv'));
-    expect(csvFiles.length).toBeGreaterThanOrEqual(2);
-
-    const rawFile = csvFiles.find((f) => f.filename.includes('ds_raw'));
-    const downFile = csvFiles.find((f) => f.filename.includes('ds_down'));
-    expect(rawFile).toBeTruthy();
-    expect(downFile).toBeTruthy();
+    // 固定文件名幂等覆盖，直接在 filesAfter 按文件名取（不依赖 findNewFiles 对比）
+    const rawFile = filesAfter.find((f) => f.filename.includes('ds_raw'));
+    const downFile = filesAfter.find((f) => f.filename.includes('ds_down'));
+    expect(rawFile, '应生成 ds_raw 文件').toBeTruthy();
+    expect(downFile, '应生成 ds_down 文件').toBeTruthy();
 
     const rawData = parseCsvData(readCsvFromDisk(rawFile!.filename));
     const downData = parseCsvData(readCsvFromDisk(downFile!.filename));
@@ -332,8 +335,10 @@ test.describe('录制验收 — DOWNSAMPLE 产物行数比', () => {
     expect(rawData.dataRows.length).toBeGreaterThan(100);
     // 降采样产物应有数据但少于原始
     expect(downData.dataRows.length).toBeGreaterThan(0);
-    // 行数比应 > 1（原始更多）
-    expect(rawData.dataRows.length).toBeGreaterThan(downData.dataRows.length);
+    // 兑现测试名承诺的行数比 ≈ 5:1（录制受推送节奏影响，容差 [3,7]）
+    const ratio = rawData.dataRows.length / Math.max(downData.dataRows.length, 1);
+    expect(ratio).toBeGreaterThanOrEqual(3);
+    expect(ratio).toBeLessThanOrEqual(7);
   });
 });
 
@@ -357,6 +362,10 @@ test.describe('录制验收 — UPSAMPLE 产物采样率', () => {
           params: { sourceMode: 'live', sampleRate: 250, channels: 2, deviceId: null },
         },
         {
+          id: 'us-out-raw', type: 'OUTPUT', name: '原始录制', x: 400, y: 100,
+          params: { saveEnabled: true, filename: 'e2e_us_raw.csv' },
+        },
+        {
           id: 'us-up', type: 'UPSAMPLE', name: '升采×2', x: 300, y: 200,
           params: { mode: 'factor', factor: 2 },
         },
@@ -368,6 +377,7 @@ test.describe('录制验收 — UPSAMPLE 产物采样率', () => {
       edges: [
         { id: 'e1', source: 'us-src', sourcePort: 'out', target: 'us-up', targetPort: 'in' },
         { id: 'e2', source: 'us-up', sourcePort: 'out', target: 'us-out', targetPort: 'in' },
+        { id: 'e3', source: 'us-src', sourcePort: 'out', target: 'us-out-raw', targetPort: 'in' },
       ],
       frozen: false,
     };
@@ -377,17 +387,15 @@ test.describe('录制验收 — UPSAMPLE 产物采样率', () => {
     await fullSetup(page, graph);
     await page.waitForTimeout(500);
 
-    await driveRecording(page, ['us-out'], 5000);
+    await driveRecording(page, ['us-out', 'us-out-raw'], 5000);
     await request.delete(`${API_BASE}/api/graph/record/`);
     await page.waitForTimeout(500);
 
     const filesAfter = await getSavedFiles(request);
-    const newFiles = findNewFiles(filesBefore, filesAfter);
-    const csvFiles = newFiles.filter((f) => f.filename.endsWith('.csv'));
-    expect(csvFiles.length).toBeGreaterThanOrEqual(1);
-
-    const usFile = csvFiles.find((f) => f.filename.includes('us_verify')) || csvFiles[0];
-    const data = parseCsvData(readCsvFromDisk(usFile.filename));
+    // 固定文件名幂等覆盖，直接在 filesAfter 按文件名取
+    const usFile = filesAfter.find((f) => f.filename.includes('us_verify'));
+    expect(usFile, '应生成 e2e_us_verify.csv').toBeTruthy();
+    const data = parseCsvData(readCsvFromDisk(usFile!.filename));
 
     expect(data.dataRows.length).toBeGreaterThan(50);
     expect(data.channelCount).toBe(2);
@@ -397,6 +405,20 @@ test.describe('录制验收 — UPSAMPLE 产物采样率', () => {
       const maxAbs = Math.max(...chData.map(Math.abs));
       expect(maxAbs).toBeGreaterThan(0);
     }
+
+    // 与 raw 对照。注意：OUTPUT 录制产物行数由 ws/eeg/ 统一推送节奏决定，
+    // UPSAMPLE 仅改变 signal 内部 sampleRate，不增加输出行数（worker 事件推送用全局 sample_rate）。
+    // 因此两文件行数应近似相等（比值 ≈ 1），而非 ×2——这是该节点的真实产物语义。
+    const rawFile = filesAfter.find((f) => f.filename.includes('us_raw'));
+    expect(rawFile, '应生成 e2e_us_raw.csv 对照文件').toBeTruthy();
+    const rawData = parseCsvData(readCsvFromDisk(rawFile!.filename));
+    expect(rawData.dataRows.length).toBeGreaterThan(50);
+    const ratio = data.dataRows.length / Math.max(rawData.dataRows.length, 1);
+    console.log(
+      `[UPSAMPLE比] 升采=${data.dataRows.length} 行, 原始=${rawData.dataRows.length} 行, 比值=${ratio.toFixed(2)}`,
+    );
+    expect(ratio).toBeGreaterThanOrEqual(0.8);
+    expect(ratio).toBeLessThanOrEqual(1.2);
 
     console.log(`[UPSAMPLE验收] ${usFile.filename}: ${data.dataRows.length} 行, ${data.channelCount} 通道`);
   });

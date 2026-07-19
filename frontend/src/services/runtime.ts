@@ -36,11 +36,6 @@ export const graphRuntime = {
     graphRuntimeStore.stopRun();
   },
 
-  /** 发送 Mock 数据包 */
-  emitPacket(packet: EegPacket) {
-    graphRuntimeStore.emitPacket(packet);
-  },
-
   /** 订阅数据流 */
   subscribe(callback: (packet: EegPacket) => void) {
     return graphRuntimeStore.subscribeData(callback);

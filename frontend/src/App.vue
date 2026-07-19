@@ -80,14 +80,18 @@ html, body {
   flex-direction: column;
 }
 
-.v-application--wrap {
+.v-application__wrap {
+  /* 占满视口高度，内部 flex 子项（v-main / bottom-navigation）沿纵向排列 */
   height: 100vh;
-  min-height: 100vh;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 主内容区域样式 */
 .main-content {
   flex: 1;
+  min-height: 0; /* 允许收缩，使全高页面内部可裁剪 */
   display: flex;
   flex-direction: column;
   overflow: auto; /* 普通页面启用滚动 */
@@ -103,6 +107,8 @@ html, body {
 .full-height-content .content-wrapper {
   height: 100%;
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 /* 通用视图容器 */
@@ -112,6 +118,12 @@ html, body {
   flex-direction: column;
   min-height: 0;
   width: 100%;
+}
+
+/* 全高页面的直接子组件需填满 view-container（如 GraphEditor 根节点） */
+.full-height-content .view-container > * {
+  flex: 1;
+  min-height: 0;
 }
 
 /* 全局 Toast 通知样式 */

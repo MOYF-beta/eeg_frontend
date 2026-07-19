@@ -3,41 +3,21 @@
     <v-toolbar-title class="d-flex align-center">
       <span>计算图编辑器</span>
       <v-chip
-        v-if="isRunning || frozen"
+        v-if="isRunning"
         size="small"
         class="ml-3"
-        :color="isRunning ? 'warning' : 'info'"
+        color="warning"
       >
-        <v-icon size="small" class="mr-1">
-          {{ isRunning ? 'mdi-play' : 'mdi-lock' }}
-        </v-icon>
-        {{ isRunning ? '运行中' : '已冻结' }}
+        <v-icon size="small" class="mr-1">mdi-play</v-icon>
+        运行中
       </v-chip>
     </v-toolbar-title>
 
     <v-spacer />
 
     <div class="d-flex align-center ga-2">
-      <!-- 冻结/编辑开关 -->
-      <v-tooltip location="bottom">
-        <template #activator="{ props }">
-          <v-switch
-            v-bind="props"
-            :model-value="frozen"
-            :disabled="isRunning"
-            hide-details
-            density="compact"
-            color="primary"
-            :label="frozen ? '已冻结' : '编辑中'"
-            class="freeze-switch"
-            @update:model-value="onFreezeChange"
-          />
-        </template>
-        <span>{{ frozen ? '解冻后可编辑计算图' : '冻结后启用运行/可视化' }}</span>
-      </v-tooltip>
-
       <!-- 同步状态 -->
-      <v-tooltip location="bottom">
+      <v-tooltip v-if="showSyncChip" location="bottom">
         <template #activator="{ props }">
           <v-chip
             v-bind="props"
@@ -117,19 +97,18 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
+import { shouldShowSyncChip } from '../services/uiLogic';
 
 type SyncStatus = 'idle' | 'saving' | 'ok' | 'error';
 
 const props = defineProps<{
   isRunning: boolean;
-  frozen: boolean;
   canEdit: boolean;
   syncStatus: SyncStatus;
   syncError?: string;
 }>();
 
 const emit = defineEmits<{
-  (e: 'freeze', value: boolean): void;
   (e: 'save'): void;
   (e: 'export'): void;
   (e: 'load'): void;
@@ -137,10 +116,6 @@ const emit = defineEmits<{
   (e: 'openDeviceManager'): void;
   (e: 'retrySync'): void;
 }>();
-
-function onFreezeChange(value: boolean | null) {
-  emit('freeze', Boolean(value));
-}
 
 const syncChip = computed(() => {
   switch (props.syncStatus) {
@@ -154,6 +129,9 @@ const syncChip = computed(() => {
       return { icon: 'mdi-pencil', text: '编辑中', color: 'default' };
   }
 });
+
+// 运行时隐藏 idle 状态的「编辑中」chip（标题栏已有「运行中」标识）
+const showSyncChip = computed(() => shouldShowSyncChip(props.isRunning, props.syncStatus));
 </script>
 
 <style scoped>

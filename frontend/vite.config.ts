@@ -28,6 +28,5 @@ export default defineConfig({
     environment: 'jsdom',
     globals: true,
     include: ['src/**/*.test.ts'],
-    exclude: ['src/services/__tests__/services.test.ts'],
   },
 });

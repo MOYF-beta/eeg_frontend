@@ -2,15 +2,15 @@
  * 系统鲁棒性与边界情况端到端测试
  *
  * 测试范围（轻量级，不含压力/性能测试）：
- *   1. 运行时操作守卫 — 运行中尝试改图/冻结/解冻
+ *   1. 运行时操作守卫 — 运行中尝试改图被拒绝
  *   2. 图同步冲突 — 过期 revision 被拒绝
  *   3. 无效输入处理 — 空 JSON / 未知命令 / 无效图结构
  *   4. offline 模式校验 — 缺少 REPLAY 节点
  *   5. 设备 API 错误处理 — 不存在设备 / 缺参数 / 错误方法
  *   6. 录制幂等性 — 重复开始 / 未录制停止
- *   7. 页面刷新后状态恢复 — 图状态 + 冻结态持久化
+ *   7. 页面刷新后状态恢复 — 图状态 + 运行态持久化
  *   8. WS 消息鲁棒性 — 非 JSON / 缺字段
- *   9. 数据流守卫 — 未冻结时不产生数据
+ *   9. 数据流守卫 — 未运行时不产生数据
  *
  * 前提：Django 后端（8000）+ 前端 dev server（5173）运行中。
  */
@@ -81,9 +81,8 @@ test.describe('运行时操作守卫', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
 
-    // 准备并运行图
+    // 准备并运行图（冻结已退出，运行即锁定）
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
     await sendControlCmd(page, 'run', { mode: 'live' });
 
     // 运行中尝试改图 → 应收到 error
@@ -103,22 +102,6 @@ test.describe('运行时操作守卫', () => {
     await sendControlCmdSafe(page, 'stop');
   });
 
-  test('运行中 freeze 应被拒绝', async ({ page }) => {
-    await page.goto('/cpgraph?_t=robust_runtime_freeze');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(500);
-
-    await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
-    await sendControlCmd(page, 'run', { mode: 'live' });
-
-    // 运行中尝试解冻 → 应失败
-    const result = await sendControlCmd(page, 'freeze', { frozen: false });
-    expect(result.ok).toBe(false);
-
-    await sendControlCmdSafe(page, 'stop');
-  });
-
   test('停止后可以正常修改图', async ({ page }) => {
     await page.goto('/cpgraph?_t=robust_stop_edit');
     await page.waitForLoadState('networkidle');
@@ -126,7 +109,6 @@ test.describe('运行时操作守卫', () => {
 
     // 运行然后停止
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
     await sendControlCmd(page, 'run', { mode: 'live' });
     await sendControlCmd(page, 'stop');
 
@@ -285,7 +267,6 @@ test.describe('offline 模式校验', () => {
     // 同步一张只有 SOURCE 的图
     const graph = buildMinimalGraph(); // SOURCE + OUTPUT，无 REPLAY
     await sendControlCmd(page, 'sync_graph', { graph });
-    await sendControlCmd(page, 'freeze', { frozen: true });
 
     // 尝试 offline 运行 → 应失败
     const result = await sendControlCmd(page, 'run', { mode: 'offline' });
@@ -314,7 +295,6 @@ test.describe('offline 模式校验', () => {
       frozen: false,
     };
     await sendControlCmd(page, 'sync_graph', { graph });
-    await sendControlCmd(page, 'freeze', { frozen: true });
 
     const result = await sendControlCmd(page, 'run', { mode: 'offline' });
     expect(result.ok).toBe(false);
@@ -326,7 +306,6 @@ test.describe('offline 模式校验', () => {
     await page.waitForTimeout(500);
 
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
 
     // 用无效 mode 运行
     const result = await sendControlCmd(page, 'run', { mode: 'totally_invalid_mode' });
@@ -449,14 +428,14 @@ test.describe('页面刷新后状态恢复', () => {
     await expect(page.locator('text=节点库')).toBeVisible();
   });
 
-  test('冻结后刷新页面冻结状态恢复', async ({ page }) => {
-    await page.goto('/cpgraph?_t=robust_freeze_refresh');
+  test('运行后刷新页面运行状态恢复', async ({ page }) => {
+    await page.goto('/cpgraph?_t=robust_run_refresh');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1000);
 
-    // 冻结
-    await sendControlCmdSafe(page, 'freeze', { frozen: false });
-    await sendControlCmd(page, 'freeze', { frozen: true });
+    // 运行
+    await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
+    await sendControlCmd(page, 'run', { mode: 'live' });
     await page.waitForTimeout(1000);
 
     // 刷新
@@ -464,11 +443,12 @@ test.describe('页面刷新后状态恢复', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1500);
 
-    // 冻结状态应恢复（状态 chip 或按钮状态）
-    // 后端图仍为 frozen
+    // 运行状态应恢复（后端 runtime.running）
     const statusResp = await page.request.get(`${API_BASE}/api/status/`);
     const statusBody = await statusResp.json();
-    expect(statusBody.runtime.frozen).toBe(true);
+    expect(statusBody.runtime.running).toBe(true);
+
+    await sendControlCmdSafe(page, 'stop');
   });
 });
 
@@ -480,13 +460,12 @@ test.describe('数据流守卫', () => {
     await teardownGraph(page).catch(() => null);
   });
 
-  test('未冻结时 ws/eeg/ 不产生数据', async ({ page }) => {
+  test('未运行时 ws/eeg/ 不产生数据', async ({ page }) => {
     await page.goto('/cpgraph?_t=robust_no_data_unfrozen');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
 
-    // 同步图但不冻结
-    await sendControlCmdSafe(page, 'freeze', { frozen: false });
+    // 同步图但不运行
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
 
     // 订阅 ws/eeg/ 等待 2 秒
@@ -507,17 +486,16 @@ test.describe('数据流守卫', () => {
       });
     });
 
-    // 未冻结时不应收到数据
+    // 未运行时不应收到数据
     expect(gotData).toBe(false);
   });
 
-  test('冻结但未运行时不产生数据', async ({ page }) => {
+  test('图准备好但未运行时不产生数据', async ({ page }) => {
     await page.goto('/cpgraph?_t=robust_no_data_notrunning');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(500);
 
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
     // 注意：不 run
 
     const gotData = await page.evaluate(async () => {
@@ -556,7 +534,6 @@ test.describe('前端 UI 运行时守卫', () => {
 
     // 运行图
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
     await sendControlCmd(page, 'run', { mode: 'live' });
 
     // 等待前端状态同步

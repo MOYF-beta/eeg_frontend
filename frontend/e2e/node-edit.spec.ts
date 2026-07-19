@@ -100,18 +100,18 @@ test.describe('计算图节点编辑', () => {
   });
 });
 
-test.describe('计算图 - 冻结态只读', () => {
+test.describe('计算图 - 运行态只读', () => {
   test.afterEach(async ({ page }) => {
     await teardownGraph(page);
   });
 
-  test('冻结状态下编辑对话框为只读', async ({ page }) => {
+  test('运行状态下编辑对话框为只读', async ({ page }) => {
     await page.goto('/cpgraph?_t=node_readonly');
     await page.waitForLoadState('networkidle');
 
-    // 设置图并冻结
+    // 设置图并运行（运行即锁定）
     await sendControlCmd(page, 'sync_graph', { graph: buildMinimalGraph() });
-    await sendControlCmd(page, 'freeze', { frozen: true });
+    await sendControlCmd(page, 'run', { mode: 'live' });
 
     await page.waitForTimeout(1000);
     await page.reload();
@@ -124,10 +124,12 @@ test.describe('计算图 - 冻结态只读', () => {
       await node.dblclick();
       await page.waitForTimeout(800);
 
-      // 冻结时应显示"查看节点"而非"编辑节点"
+      // 运行时应显示"查看节点"而非"编辑节点"
       await expect(page.locator('text=/查看节点|编辑节点/').first()).toBeVisible({ timeout: 3000 });
       await page.screenshot({ path: 'e2e/screenshots/node-readonly.png', fullPage: true });
     }
+
+    await sendControlCmdSafe(page, 'stop');
   });
 });
 

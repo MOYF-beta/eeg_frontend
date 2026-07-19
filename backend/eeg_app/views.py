@@ -131,12 +131,21 @@ def graph_python_library(request):
 @csrf_exempt
 def graph_record(request):
     """全局录制控制 - 录制所有输出节点的数据
-    
+
+    GET: 查询当前活跃录制（节点/文件/时长）
     POST: 开始录制所有输出节点
     DELETE: 停止所有录制
     """
     from .data_recorder import start_recording, stop_recording, get_active_recordings
     from .graph_store import get_output_nodes_for_recording
+
+    if request.method == 'GET':
+        active = get_active_recordings()
+        return JsonResponse({
+            'ok': True,
+            'recording': len(active) > 0,
+            'recordings': active,
+        })
 
     if request.method == 'POST':
         output_nodes = get_output_nodes_for_recording()

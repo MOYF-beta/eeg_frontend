@@ -14,22 +14,21 @@
  */
 
 import { test, expect, Page } from '@playwright/test';
+import {
+  API_BASE,
+  sendControlCmd,
+  teardownGraph,
+  buildMinimalGraph,
+  findVirtualDeviceId,
+  getPacketCount,
+  prepareGraphViaBrowser,
+} from './helpers';
+
+const VDEV_BASE = 'http://localhost:7777';
 
 // ================================================================== //
 //  辅助函数
 // ================================================================== //
-
-/** 等待并获取数据包计数文本 */
-async function getPacketCount(page: Page): Promise<number> {
-  try {
-    const text = await page.locator('text=/接收.*\\d+.*包/').textContent({ timeout: 5000 });
-    if (!text) return 0;
-    const match = text.match(/(\d+)/);
-    return match ? parseInt(match[1], 10) : 0;
-  } catch {
-    return 0;
-  }
-}
 
 /** 通过侧边栏图标导航到页面 */
 async function navigateTo(page: Page, iconTitle: string) {
@@ -49,7 +48,7 @@ test.describe('虚拟设备发现 - 5 个设备', () => {
   });
 
   test('开发目录页面加载', async ({ page }) => {
-    await expect(page.locator('text=开发目录').or(page.locator('text=DevHub'))).toBeVisible();
+    await expect(page.locator('text=开发工具目录').first()).toBeVisible();
   });
 
   test('扫描端口显示虚拟设备', async ({ page }) => {
@@ -78,8 +77,8 @@ test.describe('设备管理 - 虚拟设备生命周期', () => {
   });
 
   test('设备管理页面基本结构', async ({ page }) => {
-    // 验证页面标题
-    await expect(page.locator('text=设备管理').or(page.locator('text=设备列表'))).toBeVisible();
+    // 验证页面标题（页面多处出现「设备管理」，取首个可见项）
+    await expect(page.locator('text=设备管理').first()).toBeVisible();
     await expect(page.locator('body')).toBeVisible();
   });
 });
@@ -96,11 +95,11 @@ test.describe('计算图 - 虚拟设备集成', () => {
   });
 
   test('计算图页面加载', async ({ page }) => {
-    await expect(page.locator('text=计算图编辑器').or(page.locator('text=节点库'))).toBeVisible();
+    await expect(page.locator('text=计算图编辑器').first()).toBeVisible();
   });
 
   test('设备集合区域存在', async ({ page }) => {
-    await expect(page.locator('text=设备集合')).toBeVisible();
+    await expect(page.locator('text=设备集合').first()).toBeVisible();
   });
 });
 
@@ -109,28 +108,66 @@ test.describe('计算图 - 虚拟设备集成', () => {
 // ================================================================== //
 
 test.describe('完整数据流：虚拟设备 → 计算图 → 示波器', () => {
-  test('端到端数据流: 冻结 → 运行 → 数据包验证', async ({ page }) => {
-    // 1. 加载计算图页面
-    await page.goto('/cpgraph?_t=test_vdev_flow');
-    await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
-
-    // 验证页面已加载
-    await expect(page.locator('text=计算图编辑器').or(page.locator('text=节点库'))).toBeVisible();
-
-    // 2. 切换到可视化页面查看示波器
-    await navigateTo(page, '可视化');
-
-    // 3. 验证可视化页面加载
-    await expect(page.locator('text=波形可视化').or(page.locator('text=示波器'))).toBeVisible();
+  test.afterEach(async ({ page }) => {
+    await teardownGraph(page);
   });
 
-  test('解冻后数据流停止', async ({ page }) => {
-    // 1. 加载计算图
+  test('端到端数据流: 冻结 → 运行 → 数据包验证', async ({ page, request }) => {
+    const deviceId = await findVirtualDeviceId(request);
+    test.skip(!deviceId, '虚拟设备服务器未运行');
+    const id = deviceId!;
+
+    // 0. 设备为跨测试共享资源：重置并确保 connected+acquiring，SOURCE 才有数据
+    await request.post(`${VDEV_BASE}/devices/${id}/stop`).catch(() => null);
+    await request.post(`${VDEV_BASE}/devices/${id}/disconnect`).catch(() => null);
+    await request.post(`${VDEV_BASE}/devices/${id}/connect`);
+    await request.post(`${VDEV_BASE}/devices/${id}/start`);
+
+    // 1. 在计算图页面准备运行中的图（绑定虚拟设备）
+    await page.goto('/cpgraph?_t=test_vdev_flow');
+    await page.waitForLoadState('networkidle');
+    await prepareGraphViaBrowser(page, buildMinimalGraph(id));
+
+    // 后端必须处于 running
+    const statusResp = await request.get(`${API_BASE}/api/status/`);
+    expect((await statusResp.json()).runtime.running).toBe(true);
+
+    // 2. 切到可视化页面（onMounted 自动为 OUTPUT 节点创建并绑定示波器）
+    await page.goto('/visualization?_t=test_vdev_flow_view');
+    await page.waitForLoadState('networkidle');
+
+    // 等待自动创建的示波器绑定 E2E 输出节点
+    await expect(page.locator('text=/信号源[:：]/').first()).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=/E2E 示波器/').first()).toBeVisible({ timeout: 10000 });
+
+    // 3. 数据包计数必须 >0 且持续增长（示波器确实在收数据）
+    await expect
+      .poll(async () => getPacketCount(page), { timeout: 15000 })
+      .toBeGreaterThan(0);
+    const first = await getPacketCount(page);
+    await page.waitForTimeout(1500);
+    const second = await getPacketCount(page);
+    expect(second).toBeGreaterThan(first);
+  });
+
+  test('解冻后数据流停止', async ({ page, request }) => {
+    const deviceId = await findVirtualDeviceId(request);
+    test.skip(!deviceId, '虚拟设备服务器未运行');
+
     await page.goto('/cpgraph?_t=test_vdev_stop');
     await page.waitForLoadState('networkidle');
-    await page.waitForTimeout(2000);
-    await expect(page.locator('text=计算图编辑器').or(page.locator('text=节点库'))).toBeVisible();
+    await prepareGraphViaBrowser(page, buildMinimalGraph(deviceId!));
+
+    // 确认运行中
+    expect((await (await request.get(`${API_BASE}/api/status/`)).json()).runtime.running).toBe(true);
+
+    // 停止并核验最终状态
+    await sendControlCmd(page, 'stop');
+    await sendControlCmd(page, 'freeze', { frozen: false });
+
+    const statusResp = await request.get(`${API_BASE}/api/status/`);
+    const runtime = (await statusResp.json()).runtime;
+    expect(runtime.running).toBe(false);
   });
 });
 

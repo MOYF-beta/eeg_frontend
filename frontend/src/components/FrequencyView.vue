@@ -20,9 +20,9 @@
         </router-link>
       </v-alert>
 
-      <!-- 计算图未冻结提示 -->
-      <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
-        计算图未冻结。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"冻结"按钮启动数据流。
+      <!-- 计算图未运行提示 -->
+      <v-alert v-else-if="!isRunning" type="warning" class="mb-4">
+        计算图未运行。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"运行"按钮启动数据流。
       </v-alert>
 
       <div class="osc-root">
@@ -278,6 +278,7 @@ import { useRouter } from 'vue-router';
 import { useTheme } from 'vuetify';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { sessionStore } from '../services/sessionStore';
+import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import type { GraphNode } from '../services/graph';
 
 const emit = defineEmits<{
@@ -349,8 +350,8 @@ let delayHistoryTimer: number | null = null;
 
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
-const isGraphFrozen = ref(false);
-// ========== 图状态：通过 sessionStore 全局订阅 — 无需组件轮询。 ==========
+// 图运行状态统一以 graphRuntimeStore 为准（编辑中/运行中两态，冻结已退出 UI）
+const isRunning = graphRuntimeStore.isRunning;
 const channelCount = ref(8);
 const channelNames = ref<string[]>(Array.from({ length: 8 }, (_, i) => `CH${i + 1}`));
 
@@ -393,11 +394,11 @@ const channelItems = computed(() => {
   }));
 });
 
-const canDisplay = computed(() => Boolean(selectedNodeId.value && isGraphFrozen.value && wsStatus.value === 'connected'));
+const canDisplay = computed(() => Boolean(selectedNodeId.value && isRunning.value && wsStatus.value === 'connected'));
 
 const statusText = computed(() => {
   if (!selectedNodeId.value) return '未选择';
-  if (!isGraphFrozen.value) return '未冻结';
+  if (!isRunning.value) return '未运行';
   if (wsStatus.value === 'connected') return packetCount.value > 0 ? '接收中' : '等待数据';
   if (wsStatus.value === 'connecting') return '连接中';
   if (wsStatus.value === 'error') return '错误';
@@ -406,7 +407,7 @@ const statusText = computed(() => {
 
 const statusColor = computed(() => {
   if (!selectedNodeId.value) return 'grey';
-  if (!isGraphFrozen.value) return 'warning';
+  if (!isRunning.value) return 'warning';
   if (wsStatus.value === 'connected') return packetCount.value > 0 ? 'success' : 'info';
   if (wsStatus.value === 'connecting') return 'info';
   if (wsStatus.value === 'error') return 'error';
@@ -429,7 +430,7 @@ const signalSourceButtonText = computed(() => {
 
 const noDataText = computed(() => {
   if (!selectedNodeId.value) return '请配置信号源';
-  if (!isGraphFrozen.value) return '计算图未冻结';
+  if (!isRunning.value) return '计算图未运行';
   if (wsStatus.value !== 'connected') return '等待服务连接';
   return '等待实时数据';
 });
@@ -594,7 +595,7 @@ const onNodeSelected = (nodeId: string | null) => {
 
   resetData();
   loadFreqSettings();
-  if (isGraphFrozen.value) {
+  if (isRunning.value) {
     eegWebSocket.subscribe([nodeId]);
   }
   settingsDialogOpen.value = false;
@@ -1200,9 +1201,6 @@ const handleDataPacket = (packet: EegDataPacket) => {
       return;
     }
 
-
-  isGraphFrozen.value = true;
-
   const inferredCount = Math.max(
     Array.isArray(packet.channelNames) ? packet.channelNames.length : 0,
     Array.isArray(packet.spectra) ? packet.spectra.length : 0,
@@ -1419,23 +1417,21 @@ onMounted(async () => {
   // 从 sessionStore 获取初始图状态
   const graph = sessionStore.getGraph();
   graphNodes.value = graph.nodes || [];
-  isGraphFrozen.value = graph.frozen || false;
 
   // 订阅 sessionStore 全局状态
   unsubStore = sessionStore.subscribe((state) => {
     graphNodes.value = state.graph.nodes || [];
-    isGraphFrozen.value = state.graph.frozen || false;
   });
 
   unsubData = eegWebSocket.onData(handleDataPacket);
   unsubStatus = eegWebSocket.onStatusChange((status) => {
     wsStatus.value = status;
-    if (status === 'connected' && isGraphFrozen.value && selectedNodeId.value) {
+    if (status === 'connected' && isRunning.value && selectedNodeId.value) {
       eegWebSocket.subscribe([selectedNodeId.value]);
     }
   });
 
-  if (eegWebSocket.isConnected() && isGraphFrozen.value && selectedNodeId.value) {
+  if (eegWebSocket.isConnected() && isRunning.value && selectedNodeId.value) {
     eegWebSocket.subscribe([selectedNodeId.value]);
   }
   wsStatus.value = eegWebSocket.getStatus();
@@ -1525,9 +1521,9 @@ watch(displayMode, () => {
   requestRender();
 });
 
-watch(isGraphFrozen, (frozen) => {
+watch(isRunning, (running) => {
   if (!selectedNodeId.value) return;
-  if (frozen) eegWebSocket.subscribe([selectedNodeId.value]);
+  if (running) eegWebSocket.subscribe([selectedNodeId.value]);
   else eegWebSocket.unsubscribe([selectedNodeId.value]);
 });
 </script>
@@ -1553,8 +1549,8 @@ watch(isGraphFrozen, (frozen) => {
   display: flex;
   align-items: center;
   gap: 6px;
-  background: rgba(255, 255, 255, 0.6);
-  border: 1px solid #e6e6e6;
+  background: rgba(var(--v-theme-on-surface), 0.04);
+  border: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
   border-radius: 6px;
   padding: 4px 6px;
 }
@@ -1572,13 +1568,13 @@ watch(isGraphFrozen, (frozen) => {
 
 .osc-status-label {
   font-size: 11px;
-  color: #666;
+  color: rgba(var(--v-theme-on-surface), 0.6);
   white-space: nowrap;
 }
 
 .osc-status-text {
   font-size: 11px;
-  color: #444;
+  color: rgba(var(--v-theme-on-surface), 0.75);
   white-space: nowrap;
 }
 
@@ -1602,7 +1598,7 @@ watch(isGraphFrozen, (frozen) => {
   padding: 0 6px;
   font-weight: 700;
   font-size: 14px;
-  color: #777;
+  color: rgba(var(--v-theme-on-surface), 0.55);
   line-height: 1;
   height: 20px;
   display: inline-flex;
@@ -1612,7 +1608,7 @@ watch(isGraphFrozen, (frozen) => {
 
 .osc-time-btn:hover:not(.disabled) {
   background: rgba(0, 0, 0, 0.1);
-  color: #333;
+  color: rgba(var(--v-theme-on-surface), 0.87);
   border-radius: 2px;
 }
 
@@ -1626,7 +1622,7 @@ watch(isGraphFrozen, (frozen) => {
   text-align: center;
   font-size: 11px;
   font-weight: 600;
-  color: #444;
+  color: rgba(var(--v-theme-on-surface), 0.75);
   padding: 0 4px;
 }
 
@@ -1749,8 +1745,8 @@ watch(isGraphFrozen, (frozen) => {
   top: 0;
   bottom: 0;
   width: 8px;
-  background-color: #fff;
-  border: 1px solid #999;
+  background-color: rgb(var(--v-theme-surface));
+  border: 1px solid rgba(var(--v-theme-on-surface), 0.4);
   display: flex;
   align-items: center;
   justify-content: center;

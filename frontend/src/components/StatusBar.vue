@@ -77,6 +77,13 @@
 
     <v-divider vertical class="mx-1" />
 
+    <!-- 录制状态 -->
+    <div v-if="recordingActive" class="status-section" data-testid="statusbar-recording">
+      <v-icon size="x-small" color="error" class="mr-1 recording-dot">mdi-record-circle</v-icon>
+      <span class="status-value text-error">{{ recordingDurationText }}</span>
+      <span class="status-unit recording-file" :title="recordingFilepath">{{ recordingFilename }}</span>
+    </div>
+
     <div class="status-section">
       <v-icon size="x-small" :color="graphRunning ? 'success' : 'grey'" class="mr-1">mdi-graph-outline</v-icon>
       <span class="status-value" :style="{ color: graphProcDelay > 10000 ? '#E53935' : undefined }">{{ procDelayText }}</span>
@@ -104,6 +111,8 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue';
 import { eegWebSocket } from '../services/websocket';
 import { controlWebSocket } from '../services/controlWebSocket';
+import { recordingStore } from '../services/recordingStore';
+import { formatRecordingDuration } from '../services/uiLogic';
 
 interface PipelineAvg {
   sourceGenUs: number;
@@ -156,6 +165,27 @@ const threadCount = ref('0');
 const processMemMb = ref('0');
 const graphRunning = ref(false);
 const graphProcDelay = ref(0);
+
+// 录制状态（全局 recordingStore 轮询）
+let unsubRecording: (() => void) | null = null;
+const recordingActive = computed(() => recordingStore.state.recording);
+const recordingDurationText = computed(() => {
+  const recs = recordingStore.state.recordings;
+  if (recs.length === 0) return '';
+  const secs = Math.max(...recs.map((r) => Number(r.duration) || 0));
+  return formatRecordingDuration(secs);
+});
+const recordingFilename = computed(() => {
+  const recs = recordingStore.state.recordings;
+  if (recs.length === 0) return '';
+  const fp = String(recs[0].filepath || '');
+  const name = fp.split(/[\\/]/).pop() || fp;
+  return recs.length > 1 ? `${name} +${recs.length - 1}` : name;
+});
+const recordingFilepath = computed(() =>
+  recordingStore.state.recordings.map((r) => r.filepath).join('\n')
+);
+
 const procDelayText = computed(() => {
   const ms = graphProcDelay.value;
   if (ms <= 0) return '—';
@@ -256,6 +286,8 @@ function formatUs(us: number): { value: string; unit: string } {
 }
 
 onMounted(() => {
+  unsubRecording = recordingStore.subscribe();
+
   // 运行时状态通过控制 WS 订阅（替代轮询 graph/run/）
   unsubState = controlWebSocket.onState((cs) => {
     const rt = cs.runtime;
@@ -269,6 +301,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  unsubRecording?.();
   if (unsubState) {
     unsubState();
     unsubState = null;
@@ -321,6 +354,21 @@ onUnmounted(() => {
 .status-unit {
   color: rgba(var(--v-theme-on-surface), 0.35);
   font-size: 10px;
+}
+
+.recording-file {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.recording-dot {
+  animation: recording-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes recording-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
 }
 
 .v-divider {

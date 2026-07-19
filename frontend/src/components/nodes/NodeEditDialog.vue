@@ -36,7 +36,6 @@
             :form="form"
             :is-read-only="isReadOnly"
             :selected-device-id="selectedDeviceId"
-            :bound-oscilloscope-id="boundOscilloscopeId"
             :channel-names="channelNames"
             :sum-inputs="sumInputs"
             :split-outputs="splitOutputs"
@@ -50,7 +49,6 @@
             :python-header-code="pythonHeaderCode"
             :python-footer-code="pythonFooterCode"
             @update:selected-device-id="selectedDeviceId = $event"
-            @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
             @update:channel-names="channelNames = $event"
             @update:sum-inputs="sumInputs = $event"
             @update:split-outputs="splitOutputs = $event"
@@ -107,7 +105,6 @@
           :form="form"
           :is-read-only="isReadOnly"
           :selected-device-id="selectedDeviceId"
-          :bound-oscilloscope-id="boundOscilloscopeId"
           :channel-names="channelNames"
           :sum-inputs="sumInputs"
           :split-outputs="splitOutputs"
@@ -121,7 +118,6 @@
           :python-header-code="pythonHeaderCode"
           :python-footer-code="pythonFooterCode"
           @update:selected-device-id="selectedDeviceId = $event"
-          @update:bound-oscilloscope-id="boundOscilloscopeId = $event"
           @update:channel-names="channelNames = $event"
           @update:sum-inputs="sumInputs = $event"
           @update:split-outputs="splitOutputs = $event"
@@ -195,7 +191,6 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:modelValue', value: boolean): void;
   (e: 'save', data: { name: string; params: Record<string, any>; deviceId?: string | null }): void;
-  (e: 'bindOscilloscope', data: { nodeId: string; oscId: string | null }): void;
 }>();
 
 // 模式检测
@@ -232,6 +227,8 @@ const iconColor = computed(() => typeInfo[nodeType.value]?.color || 'grey');
 const form = ref({
   name: '',
   params: {} as Record<string, any>,
+  // 上游采样率（沿入边追溯到 SOURCE 的 sampleRate），仅展示用，不持久化
+  upstreamSampleRate: null as number | null,
 });
 
 const paramsJson = ref('{}');
@@ -271,14 +268,17 @@ const channelNames = ref<string[]>(['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'C
 const selectedChannels = ref<number[]>([0, 1, 2, 3, 4, 5, 6, 7]);
 const availableChannels = ref<string[]>(['CH1', 'CH2', 'CH3', 'CH4', 'CH5', 'CH6', 'CH7', 'CH8']);
 
-// 示波器绑定
-const boundOscilloscopeId = ref<string | null>(null);
-const availableOscilloscopes = computed(() => {
-  return sessionStore.getOscilloscopes();
-});
-
 // 设备选择
 const selectedDeviceId = ref<string | null>(null);
+
+// 绑定设备后，采样率/通道数属于硬件定义：自动填入且不允许手填
+watch(selectedDeviceId, (id) => {
+  if (!id) return;
+  const d = sessionStore.getDevices().find((dev) => dev.id === id);
+  if (!d) return;
+  form.value.params.sampleRate = Number(d.samplingRate) || form.value.params.sampleRate;
+  form.value.params.channels = Number(d.channelCount) || form.value.params.channels;
+});
 
 // 可用设备列表
 const availableDevices = computed(() => {
@@ -329,6 +329,43 @@ function getUpstreamSource(nodeId: string): GraphNode | null {
 function getNodeById(nodeId: string): GraphNode | null {
   if (!props.allNodes) return null;
   return props.allNodes.find((n) => n.id === nodeId) || null;
+}
+
+/**
+ * 追溯上游节点的输出采样率（沿入边递归）。
+ * SOURCE/REPLAY 取自身 sampleRate；DOWNSAMPLE/UPSAMPLE 按 mode/factor 换算；
+ * 其他节点与上游一致。追溯不到时返回 null。
+ */
+function resolveUpstreamSampleRate(nodeId: string, visited = new Set<string>()): number | null {
+  if (visited.has(nodeId)) return null;
+  visited.add(nodeId);
+
+  const incoming = getIncomingEdge(nodeId);
+  if (!incoming) {
+    // 无入边：SOURCE/REPLAY 自身即源头
+    const self = getNodeById(nodeId);
+    if (self && (self.type === 'SOURCE' || self.type === 'REPLAY')) {
+      return Number(self.params?.sampleRate) || null;
+    }
+    return null;
+  }
+
+  const upstream = getNodeById(incoming.source);
+  if (!upstream) return null;
+  const base = resolveUpstreamSampleRate(upstream.id, visited)
+    ?? (upstream.type === 'SOURCE' || upstream.type === 'REPLAY' ? Number(upstream.params?.sampleRate) || null : null);
+  if (base == null) return null;
+
+  if (upstream.type === 'DOWNSAMPLE' || upstream.type === 'UPSAMPLE') {
+    const p = upstream.params || {};
+    if (p.mode === 'factor') {
+      const factor = Math.max(1, Number(p.factor) || 1);
+      return upstream.type === 'DOWNSAMPLE' ? base / factor : base * factor;
+    }
+    const target = Number(p.targetRate);
+    return Number.isFinite(target) && target > 0 ? target : base;
+  }
+  return base;
 }
 
 function getIncomingEdge(nodeId: string): GraphEdge | null {
@@ -408,6 +445,9 @@ function resolveNodeOutputChannels(nodeId: string, sourcePort?: string, visited 
 // 从上游节点获取通道信息
 function updateChannelInfo() {
   if (!props.nodeData) return;
+
+  // 沿入边追溯上游采样率（FILTER 的奈奎斯特校验等用）
+  form.value.upstreamSampleRate = resolveUpstreamSampleRate(props.nodeData.id);
 
   const incoming = getIncomingEdge(props.nodeData.id);
   if (incoming) {
@@ -776,10 +816,6 @@ watch(() => props.nodeData, (data) => {
       const kernel = Array.isArray(form.value.params.kernel) ? form.value.params.kernel : [0.25, 0.5, 0.25];
       kernelText.value = kernel.join(',');
     }
-    
-    // 检查是否已绑定示波器
-    const osc = sessionStore.getOutputNodeOscilloscope(data.id);
-    boundOscilloscopeId.value = osc?.id || null;
   }
 }, { immediate: true });
 
@@ -996,14 +1032,6 @@ const save = async () => {
     params: form.value.params,
     deviceId: nodeType.value === 'SOURCE' ? selectedDeviceId.value : undefined,
   });
-  
-  // 处理输出节点绑定（示波器）
-  if (nodeType.value === 'OUTPUT' && props.nodeData) {
-    emit('bindOscilloscope', {
-      nodeId: props.nodeData.id,
-      oscId: boundOscilloscopeId.value,
-    });
-  }
   
   close();
 };

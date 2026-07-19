@@ -133,6 +133,7 @@ class TestRuntimeIntegration:
         set_graph({'nodes': [], 'edges': [], 'frozen': True})
         set_frozen(True)
         result = run_graph('live')
+        assert result.get('status') != 'error', f'run_graph 失败: {result}'
         state = get_runtime_state()
         assert state['running'] is True
         assert state['mode'] == 'live'
@@ -143,6 +144,8 @@ class TestRuntimeIntegration:
         run_graph('live')
         result = stop_graph()
         assert result['status'] == 'stopped'
+        # stop 的核心语义：最终运行时状态 running 必须为 False
+        assert get_runtime_state()['running'] is False, 'stop 后 running 应为 False'
 
     def test_cannot_modify_graph_while_running(self):
         set_graph({'nodes': [], 'edges': [], 'frozen': True})
@@ -169,6 +172,8 @@ class TestRuntimeIntegration:
         result = run_graph('offline')
         assert result.get('status') == 'error'
         assert 'offline' in result.get('error', '').lower()
+        # 拒绝运行后 running 必须保持 False
+        assert get_runtime_state()['running'] is False, 'offline 拒绝后 running 应为 False'
 
 
 # ═══════════════════════════════════════════════════════════════ #
@@ -198,6 +203,8 @@ class TestGraphEngineSyntheticFlow:
         assert event['nodeType'] == 'OUTPUT'
         assert 'channels' in event
         assert len(event['channels']) == 8
+        # 合成源是方波+噪声，数据不允许全零
+        assert any(abs(v) > 1e-9 for v in event['channels']), '合成源事件数据全零'
 
     def test_event_queue_fields(self):
         """验证事件队列中的字段与 graph_consumer_v2.py 期望一致"""

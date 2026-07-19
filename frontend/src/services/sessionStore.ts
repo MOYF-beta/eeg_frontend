@@ -544,17 +544,15 @@ class SessionStore {
     return true;
   }
 
-  // 检查是否允许运行计算图
+  // 检查是否允许运行计算图（冻结已退出 UI，运行不再要求冻结，由 isRunning 在外层判定）
   canRunGraph(): boolean {
-    return this.state.graph.frozen;
+    return true;
   }
 
   // 获取当前状态描述
   getStatusDescription(isRunning: boolean = false): string {
     if (isRunning) {
       return '运行中 - 禁止修改设备和计算图';
-    } else if (this.state.graph.frozen) {
-      return '已冻结 - 可编辑设备，不可编辑计算图';
     } else {
       return '编辑中 - 可编辑设备和计算图';
     }

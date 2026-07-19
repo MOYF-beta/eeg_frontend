@@ -50,6 +50,15 @@
             </v-list-item>
           </template>
         </v-select>
+        <v-alert
+          v-if="!selectedDeviceId"
+          type="warning"
+          variant="tonal"
+          density="compact"
+          class="mt-2"
+        >
+          未绑定设备：运行时将输出后端合成的测试方波而非真实数据。请绑定采集设备，或使用 REPLAY 节点回放数据。
+        </v-alert>
         <v-btn
           v-if="!isReadOnly && selectedDevice"
           size="x-small"
@@ -67,6 +76,9 @@
           <v-icon size="small">mdi-tune</v-icon>
           <span>采样参数</span>
         </div>
+        <div v-if="selectedDevice" class="field-hint-block mb-2">
+          采样率与通道数由硬件定义，已随绑定设备自动填入，不可修改。
+        </div>
         <div class="field-row">
           <div class="field-block">
             <div class="field-caption">采样率 (Hz)</div>
@@ -77,8 +89,10 @@
               density="compact"
               variant="outlined"
               hide-details
-              :readonly="isReadOnly"
-              :disabled="isReadOnly"
+              :readonly="isReadOnly || !!selectedDevice"
+              :disabled="isReadOnly || !!selectedDevice"
+              :hint="selectedDevice ? '由硬件定义' : undefined"
+              :persistent-hint="!!selectedDevice"
             />
           </div>
           <div class="field-block">
@@ -90,8 +104,10 @@
               density="compact"
               variant="outlined"
               hide-details
-              :readonly="isReadOnly"
-              :disabled="isReadOnly"
+              :readonly="isReadOnly || !!selectedDevice"
+              :disabled="isReadOnly || !!selectedDevice"
+              :hint="selectedDevice ? '由硬件定义' : undefined"
+              :persistent-hint="!!selectedDevice"
             />
           </div>
         </div>
@@ -219,8 +235,9 @@
             type="number"
             density="compact"
             variant="outlined"
-            :hint="cutoffHint"
+            :hint="cutoffError || cutoffHint"
             persistent-hint
+            :error="!!cutoffError"
             :readonly="isReadOnly"
             :disabled="isReadOnly"
           />
@@ -530,25 +547,14 @@
           <v-icon size="small">mdi-monitor</v-icon>
           <span>显示</span>
         </div>
-        <div class="field-block">
-          <div class="field-caption">绑定到示波器实例</div>
-          <v-select
-            :model-value="boundOscilloscopeId"
-            :items="availableOscilloscopes"
-            item-title="name"
-            item-value="id"
-            label="绑定到示波器实例"
-            placeholder="选择示波器"
-            density="compact"
-            variant="outlined"
-            clearable
-            hint="该节点的波形将显示在所选示波器卡片中"
-            persistent-hint
-            :readonly="isReadOnly"
-            :disabled="isReadOnly"
-            @update:model-value="$emit('update:boundOscilloscopeId', $event)"
-          />
-        </div>
+        <v-alert
+          type="info"
+          variant="tonal"
+          density="compact"
+          class="mb-2"
+        >
+          在「可视化」页面为示波器/频谱卡片选择该节点作为信号源。
+        </v-alert>
         <div class="field-block">
           <div class="field-caption">频谱分析 (FFT 点数)</div>
           <v-select
@@ -1054,7 +1060,6 @@ const props = defineProps<{
   form: any;
   isReadOnly: boolean;
   selectedDeviceId: string | null;
-  boundOscilloscopeId: string | null;
   channelNames: string[];
   sumInputs: any[];
   splitOutputs: any[];
@@ -1072,7 +1077,6 @@ const props = defineProps<{
 // 从父组件传递的方法
 const emit = defineEmits<{
   (e: 'update:selectedDeviceId', value: string | null): void;
-  (e: 'update:boundOscilloscopeId', value: string | null): void;
   (e: 'update:channelNames', value: string[]): void;
   (e: 'update:sumInputs', value: any[]): void;
   (e: 'update:splitOutputs', value: any[]): void;
@@ -1141,13 +1145,6 @@ const applyDeviceParams = () => {
   props.form.params.channels = Number(d.channelCount) || props.form.params.channels;
 };
 
-const availableOscilloscopes = computed(() => {
-  return sessionStore.getOscilloscopes().map(osc => ({
-    ...osc,
-    displayName: osc.name || osc.id
-  }));
-});
-
 /** 滤波器预设（后端仅支持单一截止/中心频率） */
 interface FilterPreset { label: string; type: string; cutoff: number }
 const filterPresets: FilterPreset[] = [
@@ -1185,6 +1182,16 @@ const cutoffHint = computed(() => {
     case 'notch': return '衰减该频率附近的成分（如 50Hz 工频干扰）';
     default: return '保留低于该频率的成分（如 30Hz 平滑）';
   }
+});
+
+/** 奈奎斯特校验：截止频率不可超过上游采样率的一半，否则是无意义的滤波 */
+const cutoffError = computed(() => {
+  const sr = Number(props.form.upstreamSampleRate || 0);
+  const cutoff = Number(props.form.params.cutoffFreq || 0);
+  if (sr > 0 && cutoff > 0 && cutoff >= sr / 2) {
+    return `截止频率 ${cutoff}Hz 已达到/超过奈奎斯特频率 ${sr / 2}Hz（上游采样率 ${sr}Hz 的一半），滤波无效`;
+  }
+  return '';
 });
 
 /** 卷积核预设 */

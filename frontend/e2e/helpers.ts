@@ -110,23 +110,18 @@ export async function sendControlCmdSafe(
 }
 
 /**
- * 通过浏览器页面 WS 准备一张图：sync_graph → freeze → run。
+ * 通过浏览器页面 WS 准备一张图：sync_graph → run。
+ * 冻结已退出 UI：运行时后端以 running 标志锁定图，无需先 freeze。
  */
 export async function prepareGraphViaBrowser(
   page: Page,
   graph: Record<string, unknown>,
 ) {
   await sendControlCmdSafe(page, 'stop');
-  await sendControlCmdSafe(page, 'freeze', { frozen: false });
 
   const syncResult = await sendControlCmd(page, 'sync_graph', { graph });
   if (!syncResult.ok) {
     throw new Error(`sync_graph 失败: ${JSON.stringify(syncResult)}`);
-  }
-
-  const freezeResult = await sendControlCmd(page, 'freeze', { frozen: true });
-  if (!freezeResult.ok) {
-    throw new Error(`freeze 失败: ${JSON.stringify(freezeResult)}`);
   }
 
   const runResult = await sendControlCmd(page, 'run', { mode: 'live' });
@@ -135,10 +130,9 @@ export async function prepareGraphViaBrowser(
   }
 }
 
-/** 停止运行并解冻，清理后端状态 */
+/** 停止运行，清理后端状态 */
 export async function teardownGraph(page: Page) {
   await sendControlCmdSafe(page, 'stop');
-  await sendControlCmdSafe(page, 'freeze', { frozen: false });
 }
 
 /** 等待数据包计数（正则匹配 `接收: N 包` / `接收 N 包` 等） */

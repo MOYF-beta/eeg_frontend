@@ -2,11 +2,9 @@
   <div class="fullscreen-graph-editor">
     <GraphToolbar
       :is-running="isRunning"
-      :frozen="frozen"
       :can-edit="canEditGraphLocal"
       :sync-status="syncStatus"
       :sync-error="syncError"
-      @freeze="onFreeze"
       @save="saveGraph"
       @export="exportGraph"
       @load="triggerFileLoad"
@@ -92,7 +90,6 @@
               mode="sidebar"
               :is-read-only="!canEditGraphLocal"
               @save="handleNodeSave"
-              @bindOscilloscope="handleBindOscilloscope"
               class="sidebar-node-edit"
             />
           </div>
@@ -231,6 +228,8 @@ import { eegWebSocket } from '../services/websocket';
 import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import { controlWebSocket } from '../services/controlWebSocket';
 import { graphSyncWebSocket } from '../services/graphSyncWebSocket';
+import { hasCycle, validateGraph, formatIssues } from '../services/graphValidation';
+import { truncateLabel } from '../services/uiLogic';
 import { useTheme } from 'vuetify';
 import GraphToolbar from './GraphToolbar.vue';
 import GraphPalette from './GraphPalette.vue';
@@ -268,6 +267,51 @@ function gridDotColor() {
   return vTheme.global.current.value.dark
     ? 'rgba(228, 233, 244, 0.22)'
     : 'rgba(26, 34, 51, 0.20)';
+}
+
+// 节点配色跟随亮/暗主题（节点为 SVG attrs，需显式取值）
+function nodeThemeColors() {
+  const dark = vTheme.global.current.value.dark;
+  return dark
+    ? {
+        bodyFill: '#232B3E',
+        labelFill: '#E4E9F4',
+        typeLabelFill: '#8A93A8',
+        waveBg: '#0d1b2a',
+        waveBgStroke: '#1b3a52',
+        waveZero: '#1b3a52',
+        waveStatusFill: '#9AA6C0',
+      }
+    : {
+        bodyFill: '#ffffff',
+        labelFill: '#333333',
+        typeLabelFill: '#90A4AE',
+        waveBg: '#F5F8FA',
+        waveBgStroke: '#CFD8DC',
+        waveZero: '#CFD8DC',
+        waveStatusFill: '#78909C',
+      };
+}
+
+// 重建所有节点的标签文本与主题色（主题切换/绑定状态变化时调用）
+function refreshAllNodeLabels() {
+  const graph = graphRef.value;
+  if (!graph) return;
+  const theme = nodeThemeColors();
+  graph.getNodes().forEach((n) => {
+    const data = n.getData() as GraphNode;
+    if (!data) return;
+    n.attr('label/text', buildNodeLabelText(data.type, data.name, data.params || {}, n.id));
+    n.attr('body/fill', theme.bodyFill);
+    n.attr('label/fill', theme.labelFill);
+    n.attr('typeLabel/fill', theme.typeLabelFill);
+    if (data.type === 'OUTPUT') {
+      n.attr('waveBg/fill', theme.waveBg);
+      n.attr('waveBg/stroke', theme.waveBgStroke);
+      n.attr('waveZero/fill', theme.waveZero);
+      n.attr('waveStatus/fill', theme.waveStatusFill);
+    }
+  });
 }
 
 // ======== 双图同步状态模型 ========
@@ -629,18 +673,14 @@ const {
   canRunGraph
 } = graphRuntimeStore;
 
-function onFreeze(value: boolean) {
-  graphRuntimeStore.setFreeze(value);
-}
-
 function saveGraph() {
   controlWebSocket.saveGraph();
   useToast().show('计算图已保存', 'success');
 }
 
-// 监听冻结状态变化，启动/停止自动扫描
-watch(frozen, (isFrozen) => {
-  if (isFrozen) {
+// 运行状态下停止设备自动扫描（编辑态持续扫描以便拖入新设备）
+watch(isRunning, (running) => {
+  if (running) {
     stopAutoScan();
   } else {
     startAutoScan();
@@ -694,7 +734,6 @@ const sidebarTitle = computed(() => {
 });
 
 const sidebarSubtitle = computed(() => {
-  if (frozen.value) return '查看节点（计算图已锁定）';
   if (isRunning.value) return '查看节点（运行中）';
   return '编辑节点 · 自动保存';
 });
@@ -1075,13 +1114,13 @@ const editingNode = ref<GraphNode | null>(null);
 const allNodes = ref<GraphNode[]>([]);
 const allEdges = ref<Array<{id: string; source: string; target: string; sourcePort?: string; targetPort?: string}>>([]);
 
-// 监听冻结状态变化
+// 运行状态切换画布可编辑性（运行锁定、停止解锁）
 let isInitializing = true;
-watch(frozen, (newVal, oldVal) => {
+watch(isRunning, (newVal, oldVal) => {
   if (newVal !== oldVal) {
-    // 初始化时不自动触发冻结操作
+    // 初始化时不自动触发
     if (!isInitializing) {
-      applyFrozen();
+      applyEditLock();
     }
   }
 });
@@ -1261,10 +1300,6 @@ function openNodeEditDialog(nodeId: string) {
 
   // 更新编辑节点数据
   editingNode.value = { ...data, id: nodeId, x, y };
-  // 传递冻结状态给对话框
-  editingNode.value.frozen = frozen.value;
-  // 在右侧边栏中显示节点编辑内容
-  // nodeEditDialogOpen.value = true; // 不再需要，因为内容直接显示在边栏中
 }
 
 // 处理节点保存
@@ -1301,20 +1336,6 @@ async function handleNodeSave({ name, params, deviceId }: { name: string; params
   node.attr('label/text', labelText);
 
   syncUnsavedState();
-}
-
-// 处理示波器绑定
-function handleBindOscilloscope({ nodeId, oscId }: { nodeId: string; oscId: string | null }) {
-  // 冻结状态下禁止绑定/解绑
-  if (frozen.value) {
-    return;
-  }
-  
-  if (oscId) {
-    sessionStore.bindOutputNode(nodeId, oscId);
-  } else {
-    sessionStore.unbindOutputNode(nodeId);
-  }
 }
 
 function parseLegacyNumberList(raw: unknown): number[] {
@@ -1878,6 +1899,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
 
   const dims = getNodeDims(type);
   const labelText = buildNodeLabelText(type, name || config.name, nodeParams, nodeId);
+  const theme = nodeThemeColors();
 
   const node = graph.addNode({
     id: nodeId,
@@ -1888,7 +1910,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
     height: dims.height,
     attrs: {
       body: {
-        fill: '#fff',
+        fill: theme.bodyFill,
         stroke: config.color,
         strokeWidth: 2,
         rx: 8,
@@ -1928,7 +1950,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
       // 名称 + 属性（多行）
       label: {
         text: labelText,
-        fill: '#333',
+        fill: theme.labelFill,
         fontSize: 12,
         fontWeight: 500,
         refX: 44,
@@ -1941,7 +1963,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
       typeLabel: {
         text: config.name,
         fontSize: 9,
-        fill: '#90A4AE',
+        fill: theme.typeLabelFill,
         refX: type === 'OUTPUT' ? 192 : 192,
         refY: type === 'OUTPUT' ? 40 : 76,
         textAnchor: 'end',
@@ -1956,8 +1978,8 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
           height: 56,
           rx: 4,
           ry: 4,
-          fill: '#0d1b2a',
-          stroke: '#1b3a52',
+          fill: theme.waveBg,
+          stroke: theme.waveBgStroke,
           strokeWidth: 1,
         },
         waveZero: {
@@ -1965,7 +1987,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
           y: 78,
           width: 184,
           height: 1,
-          fill: '#1b3a52',
+          fill: theme.waveZero,
           stroke: 'none',
         },
         wavePath: {
@@ -1981,7 +2003,7 @@ function addNode(type: GraphNodeType, x: number, y: number, name?: string, param
           refY: 118,
           text: '',
           fontSize: 9,
-          fill: '#78909C',
+          fill: theme.waveStatusFill,
           textAnchor: 'middle',
           textVerticalAnchor: 'middle',
         },
@@ -2103,8 +2125,8 @@ function buildNodeLabelText(type: GraphNodeType, name: string, params: Record<st
   const isBound = nodeId ? sessionStore.isNodeBoundByView(nodeId) : false;
   const boundMark = isBound ? '🔗 ' : '';
   const badges = getNodeBadges(type, params);
-  const lines = [boundMark + name];
-  if (badges.length > 0) lines.push(badges.join('  '));
+  const lines = [truncateLabel(boundMark + name, 20)];
+  if (badges.length > 0) lines.push(truncateLabel(badges.join('  '), 26));
   return lines.join('\n');
 }
 
@@ -2150,7 +2172,8 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
       if (!node.id) {
         node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       }
-      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
+      // deviceId 在节点顶层（GraphNode.deviceId），恢复时必须回传，否则 SOURCE 静默退化为方波
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id, node.deviceId);
     });
 
     safePayload.edges.forEach((edge) => {
@@ -2167,7 +2190,7 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
 
     hasNodes.value = graph.getNodes().length > 0;
     updateAllEdgeLabels();
-    setGraphInteracting(graph, !frozen.value);
+    setGraphInteracting(graph, !isRunning.value);
 
     if (options?.fromBackend) {
       editorSignature.value = payloadSignature(safePayload);
@@ -2180,37 +2203,28 @@ function applyPayloadToCanvas(payload: GraphPayload, options?: { fromBackend?: b
 
 function setGraphInteracting(graph: Graph, enabled: boolean) {
   // X6 2.x: 使用 options 配置交互状态
-  if (graph) {
-    // 简化逻辑：直接使用传入的enabled参数
-    // 不再额外检查canEditGraphLocal，因为调用者已经考虑了状态
-    graph.options.interacting = enabled ? {
-      nodeMovable: true,
-      edgeMovable: true,
-      edgeLabelMovable: true,
-      arrowheadMovable: true,
-      vertexMovable: true,
-      vertexAddable: true,
-      vertexDeletable: true,
-    } : false;
-    
-    // 更新界面提示
-    if (!enabled) {
-    } else {
-    }
-  }
+  // 简化逻辑：直接使用传入的enabled参数
+  // 不再额外检查canEditGraphLocal，因为调用者已经考虑了状态
+  graph.options.interacting = enabled ? {
+    nodeMovable: true,
+    edgeMovable: true,
+    edgeLabelMovable: true,
+    arrowheadMovable: true,
+    vertexMovable: true,
+    vertexAddable: true,
+    vertexDeletable: true,
+  } : false;
 }
 
-async function applyFrozen() {
+async function applyEditLock() {
   const graph = graphRef.value;
   if (!graph) {
-    console.warn('[GraphEditor] applyFrozen: graph ref is null');
+    console.warn('[GraphEditor] applyEditLock: graph ref is null');
     return;
   }
 
-  // 更新图形编辑权限：只有在未冻结且未运行时才允许编辑
-  // WebSocket 生命周期已由 graphRuntimeStore 统一管理，此处只处理画布交互
-  const canEdit = !frozen.value && !isRunning.value;
-  setGraphInteracting(graph, canEdit);
+  // 画布只在非运行时允许编辑（WebSocket 生命周期由 graphRuntimeStore 统一管理）
+  setGraphInteracting(graph, !isRunning.value);
 }
 
 function buildPayload(): GraphPayload {
@@ -2284,7 +2298,7 @@ function restoreStateFromSessionStorage(): boolean {
         console.warn('Node without id:', node);
         node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       }
-      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id, node.deviceId);
     });
 
     // 恢复边
@@ -2315,10 +2329,10 @@ function restoreStateFromSessionStorage(): boolean {
     const finalNodeCount = graph.getNodes().length;
     const finalEdgeCount = graph.getEdges().length;
     hasNodes.value = finalNodeCount > 0;
-    
+
     updateAllEdgeLabels();
-    setGraphInteracting(graph, !frozen.value);
-    
+    setGraphInteracting(graph, !isRunning.value);
+
     return true;
   } catch (err) {
     console.error('[GraphEditor] Failed to restore state from session storage:', err);
@@ -2396,11 +2410,21 @@ async function loadGraphFromFile(event: Event) {
   try {
     const text = await file.text();
     const payload = JSON.parse(text) as GraphPayload;
-    
+
     // 验证数据结构
     if (!payload.nodes || !Array.isArray(payload.nodes) || !payload.edges || !Array.isArray(payload.edges)) {
       alert('无效的计算图文件格式');
       return;
+    }
+
+    // 加载前整图校验：阻止注入 OUTPUT 作为源、环路、悬空端口等非法结构
+    const check = validateGraph(payload.nodes, payload.edges, (n) => n.name || n.id);
+    if (check.errors.length > 0) {
+      useToast().show(`导入被拒绝：${formatIssues(check.errors)}`, 'error');
+      return;
+    }
+    if (check.warnings.length > 0) {
+      useToast().show(formatIssues(check.warnings), 'warning');
     }
 
     const graph = graphRef.value;
@@ -2415,7 +2439,7 @@ async function loadGraphFromFile(event: Event) {
         console.warn('Node without id:', node);
         node.id = `node-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
       }
-      addNode(node.type, node.x, node.y, node.name, node.params, node.id);
+      addNode(node.type, node.x, node.y, node.name, node.params, node.id, node.deviceId);
     });
 
     // 加载边
@@ -2450,13 +2474,27 @@ async function loadGraphFromFile(event: Event) {
 }
 
 async function run(mode: 'live' | 'offline' = 'live') {
-  
+
   // 检查计算图是否已经在运行
   if (isRunning.value) {
     return;
   }
-  
-  // 启动 runtime（会验证冻结状态并连接 WebSocket）
+
+  // 运行前做整图合法性校验（替代原冻结前校验）
+  const graph = graphRef.value;
+  if (graph) {
+    const payload = buildPayload();
+    const result = validateGraph(payload.nodes, payload.edges, (n) => n.name || n.id);
+    if (result.errors.length > 0) {
+      useToast().show(`无法运行：${formatIssues(result.errors)}`, 'error');
+      return;
+    }
+    if (result.warnings.length > 0) {
+      useToast().show(formatIssues(result.warnings), 'warning');
+    }
+  }
+
+  // 启动 runtime（连接 WebSocket）
   const success = await graphRuntime.start();
   if (!success) {
     console.error('[GraphEditor] Failed to start runtime:', graphRuntime.state.error);
@@ -2585,6 +2623,22 @@ onMounted(async () => {
           });
           if (hasIncoming) return false;
         }
+
+        // 环检测：假设此边连上后若形成环路则拒绝（后端仅打印警告，拓扑序不确定）
+        const sourceCellId = sourceMagnet.getAttribute('data-cell-id');
+        if (sourceCellId && targetCellId) {
+          const nodes = graph.getNodes().map((n) => n.getData() as GraphNode);
+          const edges = graph.getEdges().map((e) => ({
+            id: e.id,
+            source: e.getSourceCellId() || '',
+            target: e.getTargetCellId() || '',
+          }));
+          edges.push({ id: '__candidate__', source: sourceCellId, target: targetCellId });
+          if (hasCycle(nodes, edges)) {
+            useToast().show('不允许形成环路：计算图必须是有向无环图', 'warning');
+            return false;
+          }
+        }
         return true;
       },
     },
@@ -2599,10 +2653,12 @@ onMounted(async () => {
   graphRef.value = graph;
 
   // 主题切换时重绘网格点（网格颜色烘焙在 data-URI 中，需显式重绘）
+  // 同时刷新节点配色（SVG attrs 为硬编码颜色值，不随 CSS 变量更新）
   watch(() => vTheme.global.name.value, () => {
     const g = graphRef.value;
     if (!g) return;
     g.drawGrid({ args: { color: gridDotColor(), thickness: 1 } });
+    refreshAllNodeLabels();
   });
 
   unsubscribeGraphSync = graphSyncWebSocket.onGraph(({ graph: backendGraph, reason }) => {
@@ -2824,16 +2880,9 @@ onMounted(async () => {
     // 注意：保留 editingNode，以便用户重新展开边栏时仍可看到上次编辑的节点
   });
 
-  // 订阅 sessionStore 变化，更新节点绑定状态显示
-  unsubscribeSessionStore = sessionStore.subscribe((state) => {
-    // 当视图绑定变化时，更新所有 OUTPUT 节点的标签
-    graph.getNodes().forEach((node) => {
-      const data = node.getData() as GraphNode;
-      if (data && data.type === 'OUTPUT') {
-        const labelText = buildNodeLabelText(data.type, data.name, data.params, node.id);
-        node.attr('label/text', labelText);
-      }
-    });
+  // 订阅 sessionStore 变化，更新节点绑定状态显示（任意视图绑定变化即时刷新 🔗 标记）
+  unsubscribeSessionStore = sessionStore.subscribe(() => {
+    refreshAllNodeLabels();
   });
 
   // 加载数据

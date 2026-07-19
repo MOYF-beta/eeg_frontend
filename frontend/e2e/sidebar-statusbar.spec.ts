@@ -53,7 +53,7 @@ test.describe('侧边栏导航', () => {
     }
   });
 
-  test('运行按钮初始禁用，冻结后启用', async ({ page }) => {
+  test('运行按钮可见且可切换运行/停止', async ({ page }) => {
     await page.goto('/cpgraph?_t=sidebar_run');
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1000);
@@ -61,8 +61,11 @@ test.describe('侧边栏导航', () => {
     const runBtn = page.getByTestId('sidebar-run-toggle-btn');
     await expect(runBtn).toBeVisible();
 
-    // 初始 title 应为"运行"
-    await expect(runBtn).toHaveAttribute('title', /运行|停止/);
+    // rail 模式下 title 不渲染，检查图标类名（mdi-play 或 mdi-stop）
+    const icon = runBtn.locator('.v-icon');
+    await expect(icon).toBeVisible();
+    const iconClass = await icon.getAttribute('class');
+    expect(iconClass).toMatch(/mdi-(play|stop)/);
   });
 });
 
@@ -107,10 +110,8 @@ test.describe('侧边栏录制按钮（前后端联调）', () => {
     await page.waitForLoadState('networkidle');
     await page.waitForTimeout(1000);
 
-    // 录制按钮（title="录制" 或 "停止录制"）
-    const recordBtn = page
-      .locator('.v-list-item[title="录制"], .v-list-item[title="停止录制"], button[title="录制"], button[title="停止录制"]')
-      .first();
+    // 录制按钮（rail 模式用 data-testid）
+    const recordBtn = page.getByTestId('sidebar-record-btn');
     await expect(recordBtn).toBeVisible({ timeout: 3000 });
     await page.screenshot({ path: 'e2e/screenshots/sidebar-record.png', fullPage: true });
   });

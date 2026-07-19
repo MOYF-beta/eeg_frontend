@@ -12,6 +12,7 @@
     "test:e2e:robustness": "playwright test --project=robustness --reporter=list",
     "test:e2e:combo": "playwright test --project=combo-regression --reporter=list",
     "test:e2e:journey": "playwright test --project=user-journey --reporter=list",
+    "test:e2e:long-session": "playwright test --project=long-session --reporter=list",
     "test:e2e:real-debug": "playwright test e2e/real-device-debug.spec.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:debug": "playwright test --debug",

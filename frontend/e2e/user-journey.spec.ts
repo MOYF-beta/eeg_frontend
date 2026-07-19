@@ -108,10 +108,10 @@ test.describe('模拟用户完整旅程', () => {
 
     // 验证页面标题
     await expect(page.locator('h1:text("设备管理")')).toBeVisible();
-    // 验证设备列表区域
-    await expect(page.locator('text=设备列表').first()).toBeVisible();
-    // 验证真实设备管理区域
-    await expect(page.locator('text=真实设备管理')).toBeVisible();
+    // 验证驱动分组区域（原「真实设备管理」已重构为驱动分组布局）
+    await expect(page.locator('text=/已加载驱动/')).toBeVisible();
+    // 验证虚拟设备驱动分组
+    await expect(page.locator('text=/虚拟设备驱动/')).toBeVisible();
 
     await page.screenshot({ path: 'e2e/screenshots/journey-01-devices.png', fullPage: true });
   });
@@ -393,7 +393,7 @@ test.describe('模拟用户完整旅程', () => {
 });
 
 test.describe('模拟用户旅程 — UI 交互验证（补充）', () => {
-  test('录制按钮在运行时启用、停止时禁用', async ({ page, request }) => {
+  test('未运行时点击录制按钮自动启动运行并录制', async ({ page, request }) => {
     // 通过 API 运行图
     await page.goto('/cpgraph?_t=journey_record_ui');
     await page.waitForLoadState('networkidle');
@@ -406,19 +406,22 @@ test.describe('模拟用户旅程 — UI 交互验证（补充）', () => {
     await sendControlCmdSafe(page, 'stop');
     await sendControlCmdSafe(page, 'freeze', { frozen: false });
     await sendControlCmd(page, 'sync_graph', { graph: buildJourneyGraph(deviceId) });
-    await sendControlCmd(page, 'freeze', { frozen: true });
 
-    // 未运行时，录制按钮应禁用
-    const recordIcon = page.locator('.mdi-record-circle').first();
-    await expect(recordIcon).toBeVisible({ timeout: 5000 });
+    // 未运行时录制按钮应可见且可用（新行为：点击后自动运行+录制）
+    const recordBtn = page.getByTestId('sidebar-record-btn');
+    await expect(recordBtn).toBeVisible({ timeout: 5000 });
+    await expect(recordBtn).toBeEnabled({ timeout: 5000 });
 
-    // 运行后录制按钮应启用
-    await sendControlCmd(page, 'run', { mode: 'live' });
-    await page.waitForTimeout(1500);
+    // 点击录制按钮 → 自动运行 + 开始录制
+    await recordBtn.click();
 
-    // 录制按钮的父 v-list-item 不应再 disabled
-    const recordItem = page.locator('.nav-item').filter({ hasText: '录制' });
-    await expect(recordItem).not.toHaveClass(/v-list-item--disabled/);
+    // 状态栏应出现录制指示
+    const recIndicator = page.getByTestId('statusbar-recording');
+    await expect(recIndicator).toBeVisible({ timeout: 15000 });
+
+    // 停止录制
+    await recordBtn.click();
+    await expect(recIndicator).toHaveCount(0, { timeout: 10000 });
 
     // 清理
     await sendControlCmdSafe(page, 'stop');

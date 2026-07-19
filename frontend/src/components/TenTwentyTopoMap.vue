@@ -107,15 +107,15 @@
         <router-link to="/cpgraph" target="_blank">前往计算图编辑器 →</router-link>
       </v-alert>
 
-      <!-- 计算图未冻结提示 -->
+      <!-- 计算图未运行提示 -->
       <v-alert
-        v-else-if="!isGraphFrozen"
+        v-else-if="!isRunning"
         type="warning"
         variant="tonal"
         class="mb-3"
         density="compact"
       >
-        计算图未冻结，请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中冻结计算图。
+        计算图未运行，请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击运行。
       </v-alert>
 
       <!-- ECharts 可视化区域 -->
@@ -159,6 +159,7 @@ import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
 import { controlWebSocket } from '../services/controlWebSocket';
 import { sessionStore } from '../services/sessionStore';
+import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import type { GraphNode } from '../services/graph';
 import TenTwentyChannelDialog from './TenTwentyChannelDialog.vue';
 import {
@@ -196,7 +197,7 @@ const colorRangeMax = ref(50); // μV
 
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
-const isGraphFrozen = ref(false);
+const isRunning = graphRuntimeStore.isRunning;
 const packetCount = ref(0);
 const lastPacketTime = ref(0);
 let graphStateTimer: ReturnType<typeof setInterval> | null = null;
@@ -250,7 +251,7 @@ const targetNode = computed(() => {
 const canDisplay = computed(() =>
   hasElectrodeMap.value &&
   !!selectedNodeId.value &&
-  isGraphFrozen.value &&
+  isRunning.value &&
   wsStatus.value === 'connected'
 );
 
@@ -265,14 +266,14 @@ const currentSampleRate = computed(() => sampleRate);
 const noDataText = computed(() => {
   if (!hasElectrodeMap.value) return '请配置10-20导联映射';
   if (!selectedNodeId.value) return '请选择数据源';
-  if (!isGraphFrozen.value) return '计算图未冻结';
+  if (!isRunning.value) return '计算图未运行';
   if (wsStatus.value !== 'connected') return '等待连接';
   return '等待数据';
 });
 
 const statusText = computed(() => {
   if (!selectedNodeId.value) return '未选择';
-  if (!isGraphFrozen.value) return '未冻结';
+  if (!isRunning.value) return '未运行';
   switch (wsStatus.value) {
     case 'connected': return packetCount.value > 0 ? '接收中' : '等待';
     case 'connecting': return '连接中';
@@ -283,7 +284,7 @@ const statusText = computed(() => {
 
 const statusColor = computed(() => {
   if (!selectedNodeId.value) return 'grey';
-  if (!isGraphFrozen.value) return 'warning';
+  if (!isRunning.value) return 'warning';
   switch (wsStatus.value) {
     case 'connected': return packetCount.value > 0 ? 'success' : 'info';
     case 'connecting': return 'info';
@@ -777,7 +778,7 @@ function onNodeSelected(nodeId: string | null) {
 }
 
 function subscribeToNode(nodeId: string) {
-  if (isGraphFrozen.value) {
+  if (isRunning.value) {
     eegWebSocket.subscribe([nodeId]);
   }
 }
@@ -835,7 +836,6 @@ async function loadGraph() {
   try {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
-    isGraphFrozen.value = graph.frozen ?? false;
   } catch (e) {
     console.error('[TenTwentyTopoMap] Failed to load graph:', e);
   }
@@ -865,7 +865,7 @@ onMounted(async () => {
   });
 
   // 如果有初始节点，订阅
-  if (selectedNodeId.value && isGraphFrozen.value) {
+  if (selectedNodeId.value && isRunning.value) {
     subscribeToNode(selectedNodeId.value);
   }
 

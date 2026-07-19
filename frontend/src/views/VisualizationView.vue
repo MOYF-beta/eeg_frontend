@@ -241,9 +241,22 @@ const loadGraph = async () => {
   }
 };
 
+// 清理已不存在的节点绑定（图被修改后恢复的 initialNodeId 可能悬空）
+const pruneStaleBindings = () => {
+  const validIds = new Set(graphNodes.value.filter(n => n.type === 'OUTPUT').map(n => n.id));
+  const prune = (items: ViewerItem[]) => {
+    for (const item of items) {
+      if (item.initialNodeId && !validIds.has(item.initialNodeId)) {
+        item.initialNodeId = undefined;
+      }
+    }
+  };
+  prune(oscilloscopes.value);
+  prune(spectrums.value);
+  prune(topoMaps.value);
+};
+
 onMounted(() => {
-  loadGraph();
-  
   // 恢复保存的布局
   const savedLayout = loadLayout();
   if (savedLayout && (savedLayout.oscilloscopes.length > 0 || savedLayout.spectrums.length > 0 || savedLayout.topoMaps.length > 0)) {
@@ -251,18 +264,19 @@ onMounted(() => {
     oscilloscopes.value = savedLayout.oscilloscopes;
     spectrums.value = savedLayout.spectrums;
     topoMaps.value = savedLayout.topoMaps || [];
-    return;
   }
 
-  // 默认添加一个示波器和一个频谱（如果有节点）
-  setTimeout(() => {
+  loadGraph().then(() => {
+    pruneStaleBindings();
+
+    // 默认添加一个示波器和一个频谱（如果有节点）
     if (hasOscNodes.value && oscilloscopes.value.length === 0) {
       addOscilloscope();
     }
     if ((hasSpectrumNodes.value || hasOscNodes.value) && spectrums.value.length === 0) {
       addSpectrum();
     }
-  }, 500);
+  });
 });
 
 // 监听布局变化自动保存

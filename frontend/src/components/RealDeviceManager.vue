@@ -81,7 +81,7 @@
       </v-expansion-panels>
 
       <!-- 按驱动分组设备（可折叠） -->
-      <v-expansion-panels v-model="openGroups" multiple>
+      <v-expansion-panels v-model="openGroupsModel" multiple>
         <v-expansion-panel
           v-for="group in devicesByDriver"
           :key="group.driverType"
@@ -290,8 +290,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watchEffect } from 'vue'
 import { realDeviceApi, type DeviceInfo, type DriverInfo, type ConnectConfigField, type SerialRawInput } from '../services/realDeviceApi'
+import { nextOpenGroups } from '../services/uiLogic'
 
 const showConnectDialog = ref(false)
 const selectedDevice = ref<DeviceInfo | null>(null)
@@ -303,8 +304,10 @@ const rawInputs = ref<SerialRawInput[]>([])
 const rawLoading = ref(false)
 
 // 面板展开状态：驱动详情默认收起，设备组默认全部展开
+// openGroups 为 null 表示尚未初始化（首次计算时设为全部展开），
+// 之后的空数组是用户主动全部折叠的合法状态，不得再强制展开
 const driverPanelOpen = ref<number[]>([])
-const openGroups = ref<string[]>([])
+const openGroups = ref<string[] | null>(null)
 
 interface DriverGroup {
   driverType: string
@@ -339,10 +342,20 @@ const devicesByDriver = computed<DriverGroup[]>(() => {
     })
   }
   groups.sort((a, b) => a.driverType.localeCompare(b.driverType))
-  if (openGroups.value.length === 0) {
-    openGroups.value = groups.map(g => g.driverType)
-  }
   return groups
+})
+
+// openGroups 为 null 时默认全部展开（不能放 computed 里，Vue 3 惰性求值下副作用不可靠）
+watchEffect(() => {
+  if (openGroups.value === null && devicesByDriver.value.length > 0) {
+    openGroups.value = nextOpenGroups(null, devicesByDriver.value.map(g => g.driverType))
+  }
+})
+
+// v-expansion-panels 的 v-model 适配层（内部状态保持 null 语义）
+const openGroupsModel = computed<string[]>({
+  get: () => openGroups.value ?? [],
+  set: (val: string[]) => { openGroups.value = val },
 })
 
 // 当前选中设备的连接 schema

@@ -117,6 +117,14 @@ class TestPythonPrototypeEndpoint:
         assert resp.status_code == 200
         body = resp.json()
         assert body['ok'] is True
+        # 验证 spec 内容真实反映请求参数
+        assert body['functionName'] == 'test_fn'
+        assert len(body['inputNames']) == 2, f'期望 2 输入，实际 {body["inputNames"]}'
+        assert len(body['outputNames']) == 1, f'期望 1 输出，实际 {body["outputNames"]}'
+        assert body['signature'].startswith('def test_fn(')
+        assert 'params' in body['signature']
+        assert len(body['code']) > 0
+        assert 'def test_fn(' in body['code']
 
     def test_prototype_get_rejected(self, client):
         resp = client.get('/api/graph/python/prototype/')
@@ -130,6 +138,11 @@ class TestPythonLibraryEndpoint:
         body = resp.json()
         assert body['ok'] is True
         assert 'library' in body
+        # library 必须非空且含内置模板代码
+        library = body['library']
+        assert isinstance(library, dict) and len(library) > 0, 'library 不能为空'
+        for key, code in library.items():
+            assert isinstance(code, str) and len(code) > 0, f'模板 {key} 代码为空'
 
 
 class TestSavedFilesEndpoint:
@@ -139,6 +152,11 @@ class TestSavedFilesEndpoint:
         body = resp.json()
         assert body['ok'] is True
         assert 'files' in body
+        # files 必须是 list，条目含文件元数据字段
+        files = body['files']
+        assert isinstance(files, list)
+        for f in files:
+            assert 'filename' in f and 'size' in f, f'文件条目缺字段: {f}'
 
     def test_saved_files_post_rejected(self, client):
         resp = client.post('/api/saved-files/')
@@ -152,6 +170,7 @@ class TestReplayableFilesEndpoint:
         body = resp.json()
         assert body['ok'] is True
         assert 'files' in body
+        assert isinstance(body['files'], list)
 
 
 # ================================================================== //
@@ -159,12 +178,45 @@ class TestReplayableFilesEndpoint:
 # ================================================================== //
 
 class TestRecordEndpoint:
+    def test_record_get_idle(self, client):
+        resp = client.get('/api/graph/record/')
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body['ok'] is True
+        assert body['recording'] is False
+        assert body['recordings'] == []
+
+    def test_record_get_active(self, client):
+        from eeg_app.data_recorder import start_recording, stop_recording
+        start_recording(node_id='http-rec-get', filename='http_rec_get_test.csv')
+        try:
+            resp = client.get('/api/graph/record/')
+            assert resp.status_code == 200
+            body = resp.json()
+            assert body['ok'] is True
+            assert body['recording'] is True
+            rec = next(r for r in body['recordings'] if r['nodeId'] == 'http-rec-get')
+            assert rec['filepath'].endswith('http_rec_get_test.csv')
+            assert 'duration' in rec
+            assert 'sampleCount' in rec
+        finally:
+            stop_recording('http-rec-get')
+
     def test_record_delete_stops_all(self, client):
+        # 先真实启动一个录制，再 DELETE 验证录制器内部确实停止
+        from eeg_app.data_recorder import start_recording, get_active_recordings
+        start_recording(node_id='http-rec-test', filename='http_rec_delete_test.csv')
+        assert any(r['nodeId'] == 'http-rec-test' for r in get_active_recordings())
+
         resp = client.delete('/api/graph/record/')
         assert resp.status_code == 200
         body = resp.json()
         assert body['ok'] is True
         assert body['recording'] is False
+        # 录制器内部状态核验：活动录制列表必须为空
+        assert get_active_recordings() == [], 'DELETE 后仍有活动录制'
+        # stopped 列表应包含刚才停止的节点
+        assert len(body.get('stopped', [])) >= 1, 'stopped 应至少包含一个录制会话'
 
 
 # ================================================================== //

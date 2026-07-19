@@ -37,8 +37,14 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'] },
     },
     {
+      // 重度：长时间反复启停会话（默认 15 轮，数分钟），仅在显式选择时运行
+      name: 'long-session',
+      testMatch: /long-session\.spec\.ts/,
+      use: { ...devices['Desktop Chrome'] },
+    },
+    {
       name: 'other-e2e',
-      testIgnore: /(robustness|combo-regression|user-journey)\.spec\.ts/,
+      testIgnore: /(robustness|combo-regression|user-journey|long-session)\.spec\.ts/,
       use: { ...devices['Desktop Chrome'] },
     },
   ],

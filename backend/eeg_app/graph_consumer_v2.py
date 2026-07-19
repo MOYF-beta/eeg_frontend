@@ -43,16 +43,18 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
         # 追踪 stream_data task 以在 disconnect 时正确取消
         self._stream_task: Optional[asyncio.Task] = None
 
-        from .graph_store import get_graph
+        from .graph_store import get_graph, get_runtime_state
 
         graph = get_graph()
         self.graph_frozen = bool(graph.get('frozen', False))
 
         self._sync_save_replay_nodes(graph)
-        if self.graph_frozen:
+        # 冻结已退出 UI：数据流由 running 驱动。只要图已运行即启动数据流任务，
+        # 不再要求先 frozen（修复原“connect 时未 frozen 则永不启动数据流”的缺陷）。
+        if get_runtime_state().get('running'):
             self._stream_task = asyncio.create_task(self.stream_data())
 
-        logger.debug(f"[WebSocket] Client connected, graph frozen: {self.graph_frozen}")
+        logger.debug(f"[WebSocket] Client connected, graph running: {get_runtime_state().get('running')}")
 
     async def disconnect(self, code):
         self.running = False
@@ -227,6 +229,12 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 node_ids = message.get('nodeIds', [])
                 self.subscribed_nodes.update(str(node_id) for node_id in node_ids)
                 logger.debug(f"[WebSocket] Subscribed to nodes: {node_ids}")
+                # 兜底：客户端先连接、后 run 时（connect 未启动 task），subscribe 时补启动数据流
+                if self._stream_task is None or self._stream_task.done():
+                    from .graph_store import get_runtime_state
+                    if get_runtime_state().get('running'):
+                        self._stream_task = asyncio.create_task(self.stream_data())
+                        logger.debug("[WebSocket] stream_data started on subscribe (running)")
 
             elif msg_type == 'unsubscribe':
                 node_ids = message.get('nodeIds', [])
@@ -293,8 +301,8 @@ class EegGraphConsumerV2(AsyncWebsocketConsumer):
                 }
                 cached_fft_size = self._extract_fft_size(nodes)
 
-            # --- 流转条件 ---
-            if not cached_frozen or not cached_running:
+            # --- 流转条件：仅由 running 驱动（frozen 已退出 UI，不再作为流转前提） ---
+            if not cached_running:
                 self._engine.stop_all()
                 self._sample_buffer.clear()
                 self._sample_channel_names.clear()

@@ -16,6 +16,8 @@ import {
   prepareGraphViaBrowser,
   teardownGraph,
   buildMinimalGraph,
+  sendControlCmd,
+  getPacketCount,
 } from './helpers';
 
 test.describe('可视化工作台', () => {
@@ -63,11 +65,12 @@ test.describe('可视化工作台', () => {
     await page.goto('/visualization?_t=viz_add_osc');
     await page.waitForLoadState('networkidle');
 
+    // onMounted 已为 OUTPUT 节点自动创建示波器卡片，故「添加示波器」按钮禁用。
+    // 验收：按钮存在且禁用，且已有示波器卡片（信号源标签）可见。
     const addOscBtn = page.getByRole('button', { name: '添加示波器' });
-    // 按钮存在（可能因无可视化节点而禁用）
     await expect(addOscBtn).toBeVisible();
-    await addOscBtn.click().catch(() => null);
-    await page.waitForTimeout(800);
+    await expect(addOscBtn).toBeDisabled();
+    await expect(page.locator('text=/信号源[:：]/').first()).toBeVisible({ timeout: 10000 });
 
     await page.screenshot({ path: 'e2e/screenshots/viz-add-osc.png', fullPage: true });
   });
@@ -76,10 +79,10 @@ test.describe('可视化工作台', () => {
     await page.goto('/visualization?_t=viz_add_freq');
     await page.waitForLoadState('networkidle');
 
+    // 频谱卡片默认随示波器自动创建，故「添加频谱」按钮禁用。验收按钮存在。
     const addFreqBtn = page.getByRole('button', { name: '添加频谱' });
     await expect(addFreqBtn).toBeVisible();
-    await addFreqBtn.click().catch(() => null);
-    await page.waitForTimeout(800);
+    await expect(addFreqBtn).toBeDisabled();
 
     await page.screenshot({ path: 'e2e/screenshots/viz-add-freq.png', fullPage: true });
   });
@@ -131,29 +134,31 @@ test.describe('可视化 - 数据流绑定（前后端联调）', () => {
     await page.waitForLoadState('networkidle');
     await prepareGraphViaBrowser(page, buildMinimalGraph());
 
-    // 2. 跳转到可视化页面
+    // 2. 跳转到可视化页面（onMounted 会自动为 OUTPUT 节点创建并绑定示波器卡片）
     await page.goto('/visualization?_t=viz_flow_view');
     await page.waitForLoadState('networkidle');
 
-    // 3. 添加示波器卡片
-    const addOscBtn = page.getByRole('button', { name: '添加示波器' });
-    await expect(addOscBtn).toBeVisible();
-    await addOscBtn.click();
-    await page.waitForTimeout(1000);
+    // 3. 等待自动创建的示波器卡片绑定 E2E 输出节点
+    const signalSource = page.locator('text=/信号源[:：]/').first();
+    await expect(signalSource).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=/E2E 示波器/').first()).toBeVisible({ timeout: 10000 });
 
-    // 4. 点击信号源按钮打开对话框
-    const sourceBtn = page.locator('button:has-text("信号源")').first();
-    if (await sourceBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await sourceBtn.click();
-      await page.waitForTimeout(500);
+    // 4. 接收数据：包计数 >0 且持续增长（运行状态 → 示波器联动核验）
+    await expect
+      .poll(async () => getPacketCount(page), { timeout: 15000 })
+      .toBeGreaterThan(0);
+    const first = await getPacketCount(page);
+    await page.waitForTimeout(1500);
+    const second = await getPacketCount(page);
+    expect(second).toBeGreaterThan(first);
 
-      // 选择 E2E 示波器节点
-      const item = page.locator('text=E2E 示波器').first();
-      if (await item.isVisible({ timeout: 2000 }).catch(() => false)) {
-        await item.click();
-        await page.waitForTimeout(3000);
-      }
-    }
+    // 5. 停止后包计数冻结（运行状态改变 → 示波器停止的负向核验）
+    await sendControlCmd(page, 'stop');
+    await page.waitForTimeout(1500);
+    const beforeStop = await getPacketCount(page);
+    await page.waitForTimeout(1500);
+    const afterStop = await getPacketCount(page);
+    expect(afterStop).toBe(beforeStop);
 
     await page.screenshot({ path: 'e2e/screenshots/viz-flow-bound.png', fullPage: true });
   });

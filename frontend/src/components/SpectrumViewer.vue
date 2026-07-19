@@ -108,9 +108,9 @@
         <router-link to="/cpgraph" target="_blank">前往计算图编辑器 →</router-link>
       </v-alert>
 
-      <!-- 计算图未冻结提示 -->
-      <v-alert v-else-if="!isGraphFrozen" type="warning" class="mb-4">
-        计算图未冻结。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"冻结"按钮启动数据流。
+      <!-- 计算图未运行提示 -->
+      <v-alert v-else-if="!isRunning" type="warning" class="mb-4">
+        计算图未运行。请在<router-link to="/cpgraph" target="_blank">计算图编辑器</router-link>中点击"运行"按钮启动数据流。
       </v-alert>
 
       <div class="spec-wrap">
@@ -140,6 +140,7 @@ import { useTheme } from 'vuetify';
 import { sessionStore } from '../services/sessionStore';
 import { eegWebSocket, type EegDataPacket } from '../services/websocket';
 import { fetchGraph } from '../services/graph';
+import { graphRuntimeStore } from '../services/graphRuntimeStore';
 import type { GraphNode } from '../services/graph';
 
 const props = defineProps<{
@@ -197,7 +198,7 @@ const channelItems = Array.from({ length: channelCount }, (_, i) => ({
 // 数据源
 const selectedNodeId = ref<string | null>(props.initialNodeId || null);
 const graphNodes = ref<GraphNode[]>([]);
-const isGraphFrozen = ref(false);
+const isRunning = graphRuntimeStore.isRunning;
 const packetCount = ref(0);
 const lastPacketTime = ref<number>(0);
 let graphStateTimer: number | null = null;
@@ -224,7 +225,7 @@ const targetNode = computed(() => {
 });
 
 const canDisplay = computed(() => {
-  return selectedNodeId.value && isGraphFrozen.value && wsStatus.value === 'connected';
+  return selectedNodeId.value && isRunning.value && wsStatus.value === 'connected';
 });
 
 const dataSourceText = computed(() => {
@@ -235,7 +236,7 @@ const dataSourceText = computed(() => {
 
 const statusText = computed(() => {
   if (!selectedNodeId.value) return '未选择';
-  if (!isGraphFrozen.value) return '未冻结';
+  if (!isRunning.value) return '未运行';
   switch (wsStatus.value) {
     case 'connected':
       return packetCount.value > 0 ? '接收中' : '等待数据';
@@ -250,7 +251,7 @@ const statusText = computed(() => {
 
 const statusColor = computed(() => {
   if (!selectedNodeId.value) return 'grey';
-  if (!isGraphFrozen.value) return 'warning';
+  if (!isRunning.value) return 'warning';
   switch (wsStatus.value) {
     case 'connected':
       return packetCount.value > 0 ? 'success' : 'info';
@@ -280,7 +281,7 @@ const statusIcon = computed(() => {
 
 const noDataText = computed(() => {
   if (!selectedNodeId.value) return '请选择数据源';
-  if (!isGraphFrozen.value) return '计算图未冻结';
+  if (!isRunning.value) return '计算图未运行';
   if (wsStatus.value !== 'connected') return '等待连接';
   return '等待数据';
 });
@@ -306,7 +307,7 @@ const unbindNode = () => {
 };
 
 const subscribeToNode = (nodeId: string) => {
-  if (isGraphFrozen.value) {
+  if (isRunning.value) {
     eegWebSocket.subscribe([nodeId]);
   }
 };
@@ -499,8 +500,6 @@ const drawSingleSpectrum = (
 const handleDataPacket = (packet: EegDataPacket) => {
   if (packet.nodeId !== selectedNodeId.value) return;
 
-  isGraphFrozen.value = true;
-
   packetCount.value++;
   lastPacketTime.value = Date.now();
 
@@ -525,10 +524,9 @@ const updateGraphState = async () => {
   try {
     const graph = await fetchGraph();
     graphNodes.value = graph.nodes || [];
-    isGraphFrozen.value = graph.frozen || false;
 
-    // 如果已冻结且有选中节点，订阅数据
-    if (isGraphFrozen.value && selectedNodeId.value) {
+    // 运行中且有选中节点则订阅数据
+    if (isRunning.value && selectedNodeId.value) {
       subscribeToNode(selectedNodeId.value);
     }
   } catch (e) {
@@ -574,7 +572,7 @@ onMounted(async () => {
     unsubConnected = eegWebSocket.onStatusChange((status) => {
       if (status === 'connected') {
         wsStatus.value = 'connected';
-        if (selectedNodeId.value && isGraphFrozen.value) {
+        if (selectedNodeId.value && isRunning.value) {
           subscribeToNode(selectedNodeId.value);
         }
       } else if (status === 'disconnected') {
@@ -597,11 +595,11 @@ onMounted(async () => {
     if (eegWebSocket.isConnected()) {
       wsStatus.value = 'connected';
       // 如果已连接，立即订阅当前选中的节点
-      if (selectedNodeId.value && isGraphFrozen.value) {
+      if (selectedNodeId.value && isRunning.value) {
         subscribeToNode(selectedNodeId.value);
       }
-    } else if (isGraphFrozen.value) {
-      // 如果计算图已冻结但WebSocket未连接，尝试连接
+    } else if (isRunning.value) {
+      // 如果计算图运行中但WebSocket未连接，尝试连接
       eegWebSocket.connect();
     }
   } catch (err) {
@@ -629,7 +627,7 @@ watch(selectedNodeId, (newId, oldId) => {
   if (oldId) {
     eegWebSocket.unsubscribe([oldId]);
   }
-  if (newId && isGraphFrozen.value) {
+  if (newId && isRunning.value) {
     subscribeToNode(newId);
   }
 });
@@ -653,7 +651,7 @@ watch(selectedNodeId, (newId, oldId) => {
 .spec-footer {
   display: flex;
   gap: 16px;
-  color: #666;
+  color: rgba(var(--v-theme-on-surface), 0.6);
   font-size: 12px;
   margin-top: 8px;
   flex-wrap: wrap;
@@ -668,7 +666,7 @@ watch(selectedNodeId, (newId, oldId) => {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: rgba(255, 255, 255, 0.8);
+  background: rgba(var(--v-theme-surface), 0.8);
   border-radius: 8px;
 }
 </style>
